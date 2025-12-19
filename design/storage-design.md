@@ -35,9 +35,8 @@ This document outlines the design for a platform-agnostic storage abstraction la
                     ▼                               ▼
         ┌───────────────────┐           ┌───────────────────┐
         │   CRT Backend     │           │   JS SDK Backend  │
-        │   (Rust Native)   │           │   (WASM/JS)       │
-        │   + Python/PyO3   │           └───────────────────┘
-        └───────────────────┘
+        │   (Rust + PyO3)   │           │   (WASM)          │
+        └───────────────────┘           └───────────────────┘
 ```
 
 ---
@@ -81,6 +80,80 @@ rusty-attachments/
 ---
 
 ## Shared Data Structures
+
+### Constants
+
+```rust
+/// Chunk size for manifest v2 format (256MB)
+/// Files larger than this are split into chunks with individual hashes
+pub const CHUNK_SIZE_V2: u64 = 256 * 1024 * 1024; // 268435456 bytes
+
+/// No chunking (for v1 format or when chunking is disabled)
+pub const CHUNK_SIZE_NONE: u64 = 0;
+```
+
+### Storage Settings
+
+```rust
+/// Configuration settings for storage operations
+#[derive(Debug, Clone)]
+pub struct StorageSettings {
+    /// AWS region
+    pub region: String,
+    /// AWS credentials (access key, secret key, session token)
+    pub credentials: Option<AwsCredentials>,
+    /// Chunk size for large files (use CHUNK_SIZE_V2 or CHUNK_SIZE_NONE)
+    pub chunk_size: u64,
+    /// Upload retry settings
+    pub upload_retry: RetrySettings,
+    /// Download retry settings
+    pub download_retry: RetrySettings,
+}
+
+impl Default for StorageSettings {
+    fn default() -> Self {
+        Self {
+            region: "us-west-2".into(),
+            credentials: None, // Use default credential chain
+            chunk_size: CHUNK_SIZE_V2,
+            upload_retry: RetrySettings::default(),
+            download_retry: RetrySettings::default(),
+        }
+    }
+}
+
+/// AWS credentials
+#[derive(Debug, Clone)]
+pub struct AwsCredentials {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+}
+
+/// Retry settings for transfer operations
+#[derive(Debug, Clone)]
+pub struct RetrySettings {
+    /// Maximum number of retry attempts
+    pub max_attempts: u32,
+    /// Initial backoff delay in milliseconds
+    pub initial_backoff_ms: u64,
+    /// Maximum backoff delay in milliseconds
+    pub max_backoff_ms: u64,
+    /// Backoff multiplier (exponential backoff)
+    pub backoff_multiplier: f64,
+}
+
+impl Default for RetrySettings {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            initial_backoff_ms: 100,
+            max_backoff_ms: 30_000,
+            backoff_multiplier: 2.0,
+        }
+    }
+}
+```
 
 ### S3 Location Configuration
 
@@ -581,7 +654,7 @@ pub enum DownloadStrategy {
 
 ## Backend Implementations
 
-### CRT Backend (Rust Native + Python)
+### CRT Backend (Rust + Python via PyO3)
 
 ```rust
 // crates/storage-crt/src/client.rs
@@ -590,14 +663,18 @@ pub enum DownloadStrategy {
 /// Used directly by Rust applications and exposed to Python via PyO3
 pub struct CrtStorageClient {
     s3_client: aws_crt_s3::Client,
-    // ... configuration
+    settings: StorageSettings,
+}
+
+impl CrtStorageClient {
+    pub fn new(settings: StorageSettings) -> Result<Self, StorageError>;
 }
 
 impl StorageClient for CrtStorageClient {
     // Implement all trait methods using CRT APIs
     // - Uses aws-crt-s3 for high-performance transfers
     // - Automatic multipart for large objects
-    // - Connection pooling and retry logic
+    // - Connection pooling and retry logic (uses settings.upload_retry / download_retry)
 }
 ```
 
@@ -656,10 +733,17 @@ export async function js_head_object(bucket: string, key: string): Promise<numbe
 ### Rust (CRT Backend)
 
 ```rust
-use rusty_attachments_storage::{UploadOrchestrator, S3Location};
+use rusty_attachments_storage::{UploadOrchestrator, S3Location, StorageSettings, CHUNK_SIZE_V2};
 use rusty_attachments_storage_crt::CrtStorageClient;
 
-let client = CrtStorageClient::new(config)?;
+let settings = StorageSettings {
+    region: "us-west-2".into(),
+    credentials: None, // Use default credential chain
+    chunk_size: CHUNK_SIZE_V2,
+    ..Default::default()
+};
+
+let client = CrtStorageClient::new(settings)?;
 let location = S3Location {
     bucket: "my-bucket".into(),
     root_prefix: "DeadlineCloud".into(),
@@ -684,25 +768,6 @@ const client = new JsStorageClient(callbacks);
 const orchestrator = new UploadOrchestrator(client, location);
 
 const stats = await orchestrator.uploadManifest(manifest, '/local/root', progressCallback);
-```
-
-### Python (via CRT Backend)
-
-```python
-from rusty_attachments import UploadOrchestrator, S3Location, CrtStorageClient
-
-# CRT client handles credentials via standard AWS credential chain
-storage_client = CrtStorageClient(region="us-west-2")
-
-location = S3Location(
-    bucket="my-bucket",
-    root_prefix="DeadlineCloud",
-    cas_prefix="Data",
-    manifest_prefix="Manifests",
-)
-
-orchestrator = UploadOrchestrator(storage_client, location)
-stats = orchestrator.upload_manifest(manifest, "/local/root", progress_callback)
 ```
 
 ---
@@ -743,14 +808,386 @@ stats = orchestrator.upload_manifest(manifest, "/local/root", progress_callback)
 
 ---
 
+## Model Integration
+
+The storage module works with the `model` crate's manifest types. Here's how they integrate:
+
+### Manifest Types from Model Crate
+
+```rust
+// From crates/model - the unified manifest enum
+pub enum Manifest {
+    V2023_03_03(v2023_03_03::AssetManifest),
+    V2025_12_04_beta(v2025_12_04::AssetManifest),
+}
+
+// V1 file entry - always has hash
+pub struct v2023_03_03::ManifestPath {
+    pub path: String,
+    pub hash: String,
+    pub size: u64,
+    pub mtime: i64,
+}
+
+// V2 file entry - may have hash, chunkhashes, or symlink_target
+pub struct v2025_12_04::ManifestFilePath {
+    pub path: String,
+    pub hash: Option<String>,
+    pub size: Option<u64>,
+    pub mtime: Option<i64>,
+    pub runnable: bool,
+    pub chunkhashes: Option<Vec<String>>,
+    pub symlink_target: Option<String>,
+    pub deleted: bool,
+}
+```
+
+### Upload Business Logic Example
+
+```rust
+use rusty_attachments_model::{Manifest, HashAlgorithm};
+use rusty_attachments_model::v2025_12_04::ManifestFilePath;
+use rusty_attachments_storage::{
+    UploadOrchestrator, S3Location, StorageSettings, 
+    CasUploadRequest, DataSource, TransferStatistics, StorageError,
+    upload_logic::{needs_chunking, generate_chunks},
+    CHUNK_SIZE_V2,
+};
+
+impl<C: StorageClient> UploadOrchestrator<C> {
+    /// Upload all files referenced by a manifest to CAS
+    pub async fn upload_manifest(
+        &self,
+        manifest: &Manifest,
+        source_root: &str,
+        progress: Option<&dyn ProgressCallback>,
+    ) -> Result<TransferStatistics, StorageError> {
+        let mut stats = TransferStatistics::default();
+        let hash_alg = manifest.hash_alg();
+        
+        match manifest {
+            Manifest::V2023_03_03(m) => {
+                // V1: All files have single hash
+                for entry in &m.paths {
+                    let result = self.upload_v1_entry(entry, source_root, hash_alg, progress).await?;
+                    stats.merge(result);
+                }
+            }
+            Manifest::V2025_12_04_beta(m) => {
+                // V2: Files may have hash, chunkhashes, or be symlinks
+                for entry in &m.paths {
+                    let result = self.upload_v2_entry(entry, source_root, hash_alg, progress).await?;
+                    stats.merge(result);
+                }
+            }
+        }
+        
+        Ok(stats)
+    }
+    
+    /// Upload a v1 file entry (always single hash)
+    async fn upload_v1_entry(
+        &self,
+        entry: &v2023_03_03::ManifestPath,
+        source_root: &str,
+        hash_alg: HashAlgorithm,
+        progress: Option<&dyn ProgressCallback>,
+    ) -> Result<TransferStatistics, StorageError> {
+        let local_path = format!("{}/{}", source_root, entry.path);
+        let s3_key = self.location.cas_key(&entry.hash, hash_alg);
+        
+        // Check if already exists
+        if let Some(existing_size) = self.client.head_object(&self.location.bucket, &s3_key).await? {
+            if existing_size == entry.size {
+                return Ok(TransferStatistics::skipped(entry.size));
+            }
+        }
+        
+        // Upload the file
+        self.client.put_object_from_file(
+            &self.location.bucket,
+            &s3_key,
+            &local_path,
+            None,
+            None,
+            progress,
+        ).await?;
+        
+        Ok(TransferStatistics::uploaded(entry.size))
+    }
+    
+    /// Upload a v2 file entry (may be single hash, chunked, or symlink)
+    async fn upload_v2_entry(
+        &self,
+        entry: &ManifestFilePath,
+        source_root: &str,
+        hash_alg: HashAlgorithm,
+        progress: Option<&dyn ProgressCallback>,
+    ) -> Result<TransferStatistics, StorageError> {
+        // Skip deleted entries and symlinks (nothing to upload)
+        if entry.deleted || entry.symlink_target.is_some() {
+            return Ok(TransferStatistics::default());
+        }
+        
+        let local_path = format!("{}/{}", source_root, entry.path);
+        let size = entry.size.unwrap_or(0);
+        
+        if let Some(ref hash) = entry.hash {
+            // Single file upload
+            self.upload_single_file(&local_path, hash, size, hash_alg, progress).await
+        } else if let Some(ref chunkhashes) = entry.chunkhashes {
+            // Chunked file upload
+            self.upload_chunked_file(&local_path, chunkhashes, size, hash_alg, progress).await
+        } else {
+            Err(StorageError::Other { 
+                message: format!("Entry {} has no hash or chunkhashes", entry.path) 
+            })
+        }
+    }
+    
+    /// Upload a single file to CAS
+    async fn upload_single_file(
+        &self,
+        local_path: &str,
+        hash: &str,
+        size: u64,
+        hash_alg: HashAlgorithm,
+        progress: Option<&dyn ProgressCallback>,
+    ) -> Result<TransferStatistics, StorageError> {
+        let s3_key = self.location.cas_key(hash, hash_alg);
+        
+        // Check existence
+        if let Some(existing_size) = self.client.head_object(&self.location.bucket, &s3_key).await? {
+            if existing_size == size {
+                return Ok(TransferStatistics::skipped(size));
+            }
+        }
+        
+        // Upload
+        self.client.put_object_from_file(
+            &self.location.bucket,
+            &s3_key,
+            local_path,
+            None,
+            None,
+            progress,
+        ).await?;
+        
+        Ok(TransferStatistics::uploaded(size))
+    }
+    
+    /// Upload a chunked file to CAS (each chunk is a separate CAS object)
+    async fn upload_chunked_file(
+        &self,
+        local_path: &str,
+        chunkhashes: &[String],
+        total_size: u64,
+        hash_alg: HashAlgorithm,
+        progress: Option<&dyn ProgressCallback>,
+    ) -> Result<TransferStatistics, StorageError> {
+        let chunks = generate_chunks(total_size, CHUNK_SIZE_V2);
+        let mut stats = TransferStatistics::default();
+        
+        for (chunk, hash) in chunks.iter().zip(chunkhashes.iter()) {
+            let s3_key = self.location.cas_key(hash, hash_alg);
+            
+            // Check existence
+            if let Some(existing_size) = self.client.head_object(&self.location.bucket, &s3_key).await? {
+                if existing_size == chunk.length {
+                    stats.files_skipped += 1;
+                    stats.bytes_skipped += chunk.length;
+                    continue;
+                }
+            }
+            
+            // Upload chunk
+            self.client.put_object_from_file_range(
+                &self.location.bucket,
+                &s3_key,
+                local_path,
+                chunk.offset,
+                chunk.length,
+                progress,
+            ).await?;
+            
+            stats.files_transferred += 1;
+            stats.bytes_transferred += chunk.length;
+        }
+        
+        stats.files_processed = 1; // One logical file
+        Ok(stats)
+    }
+}
+```
+
+### Download Business Logic Example
+
+```rust
+impl<C: StorageClient> DownloadOrchestrator<C> {
+    /// Download all files from a manifest to local filesystem
+    pub async fn download_manifest(
+        &self,
+        manifest: &Manifest,
+        destination_root: &str,
+        conflict_resolution: ConflictResolution,
+        progress: Option<&dyn ProgressCallback>,
+    ) -> Result<TransferStatistics, StorageError> {
+        let mut stats = TransferStatistics::default();
+        let hash_alg = manifest.hash_alg();
+        
+        match manifest {
+            Manifest::V2023_03_03(m) => {
+                for entry in &m.paths {
+                    let result = self.download_v1_entry(
+                        entry, destination_root, hash_alg, conflict_resolution, progress
+                    ).await?;
+                    stats.merge(result);
+                }
+            }
+            Manifest::V2025_12_04_beta(m) => {
+                // First create directories
+                for dir in &m.dirs {
+                    if !dir.deleted {
+                        std::fs::create_dir_all(format!("{}/{}", destination_root, dir.path))?;
+                    }
+                }
+                
+                // Then download files
+                for entry in &m.paths {
+                    let result = self.download_v2_entry(
+                        entry, destination_root, hash_alg, conflict_resolution, progress
+                    ).await?;
+                    stats.merge(result);
+                }
+            }
+        }
+        
+        Ok(stats)
+    }
+    
+    /// Download a v2 file entry
+    async fn download_v2_entry(
+        &self,
+        entry: &ManifestFilePath,
+        destination_root: &str,
+        hash_alg: HashAlgorithm,
+        conflict_resolution: ConflictResolution,
+        progress: Option<&dyn ProgressCallback>,
+    ) -> Result<TransferStatistics, StorageError> {
+        // Skip deleted entries
+        if entry.deleted {
+            return Ok(TransferStatistics::default());
+        }
+        
+        let local_path = format!("{}/{}", destination_root, entry.path);
+        
+        // Handle symlinks
+        if let Some(ref target) = entry.symlink_target {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, &local_path)?;
+            return Ok(TransferStatistics::default());
+        }
+        
+        // Handle conflict resolution
+        if std::path::Path::new(&local_path).exists() {
+            match conflict_resolution {
+                ConflictResolution::Skip => return Ok(TransferStatistics::skipped(entry.size.unwrap_or(0))),
+                ConflictResolution::Overwrite => { /* continue */ }
+                ConflictResolution::CreateCopy => { /* generate new path */ }
+            }
+        }
+        
+        // Create parent directories
+        if let Some(parent) = std::path::Path::new(&local_path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        
+        let size = entry.size.unwrap_or(0);
+        
+        if let Some(ref hash) = entry.hash {
+            // Single file download
+            let s3_key = self.location.cas_key(hash, hash_alg);
+            self.client.get_object_to_file(&self.location.bucket, &s3_key, &local_path, progress).await?;
+        } else if let Some(ref chunkhashes) = entry.chunkhashes {
+            // Chunked file download - reassemble from chunks
+            let chunks = generate_chunks(size, CHUNK_SIZE_V2);
+            for (chunk, hash) in chunks.iter().zip(chunkhashes.iter()) {
+                let s3_key = self.location.cas_key(hash, hash_alg);
+                self.client.get_object_to_file_offset(
+                    &self.location.bucket,
+                    &s3_key,
+                    &local_path,
+                    chunk.offset,
+                    progress,
+                ).await?;
+            }
+        }
+        
+        // Set mtime
+        if let Some(mtime) = entry.mtime {
+            // Convert microseconds to system time and set
+            set_file_mtime(&local_path, mtime)?;
+        }
+        
+        // Set executable bit
+        #[cfg(unix)]
+        if entry.runnable {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&local_path)?.permissions();
+            perms.set_mode(perms.mode() | 0o111);
+            std::fs::set_permissions(&local_path, perms)?;
+        }
+        
+        Ok(TransferStatistics::uploaded(size))
+    }
+}
+```
+
+### Key Integration Points
+
+| Model Type | Storage Handling |
+|------------|------------------|
+| `v2023_03_03::ManifestPath` | Always single hash → single CAS object |
+| `v2025_12_04::ManifestFilePath` with `hash` | Single hash → single CAS object |
+| `v2025_12_04::ManifestFilePath` with `chunkhashes` | Multiple hashes → multiple CAS objects |
+| `v2025_12_04::ManifestFilePath` with `symlink_target` | No upload/download, create local symlink |
+| `v2025_12_04::ManifestFilePath` with `deleted: true` | Skip (nothing to transfer) |
+| `v2025_12_04::ManifestDirectoryPath` | Create directory on download, skip on upload |
+
+---
+
+## Design Decisions
+
+### Async Runtime
+
+The CRT backend uses **tokio** as the async runtime. Tokio is the de-facto standard async runtime for Rust, providing:
+- Efficient task scheduling and I/O polling
+- Work-stealing thread pool for CPU-bound tasks
+- Timers, channels, and synchronization primitives
+
+For WASM, we use `wasm-bindgen-futures` to bridge Rust futures with JavaScript Promises - no tokio needed since the browser event loop handles async execution.
+
+### Chunking Strategy
+
+Chunking is sufficient for large files - no streaming needed. The 256MB chunk size provides:
+- Resumable uploads (only re-upload failed chunks)
+- Efficient partial file updates (only changed chunks re-uploaded)
+- Reasonable memory footprint (one chunk in memory at a time)
+
+### Retry Policy
+
+Retry logic is implemented in the `StorageClient` trait implementations (not the orchestrator), with configurable settings via `StorageSettings`:
+- `upload_retry`: Settings for upload operations
+- `download_retry`: Settings for download operations
+
+This keeps the orchestrator focused on business logic while backends handle transport-level concerns.
+
+### Credential Handling
+
+AWS credentials are passed via `StorageSettings.credentials`. If `None`, the backend uses the default AWS credential chain (environment variables, config files, IAM roles, etc.).
+
+---
+
 ## Open Questions
 
-1. **Async Runtime:** Should we use `tokio` for the CRT backend and handle runtime differences in WASM/Python?
-
-2. **Streaming vs Buffering:** For very large files, should we support streaming uploads/downloads, or is chunking sufficient?
-
-3. **Retry Policy:** Should retry logic be in the trait implementation or the orchestrator?
-
-4. **Credential Handling:** How do we handle AWS credentials across different backends?
-
-5. **Cancellation:** How do we propagate cancellation from progress callbacks through async operations?
+1. **Cancellation:** How do we propagate cancellation from progress callbacks through async operations? Need to design a clean cancellation token pattern that works across Rust async, WASM/JS Promises, and Python.
