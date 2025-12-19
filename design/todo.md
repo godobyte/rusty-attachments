@@ -15,3 +15,6 @@ Add a todo in the design
 - Compatibility with python file names for manifest 
 
 - S3 object tags for manifests
+
+- Path Mapping utilities
+- Storage Profile utilities
