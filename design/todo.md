@@ -6,7 +6,7 @@ Add a todo in the design
 
 - File folder scanning snapshot folder, diff a folder (Doc, need implement)
 
-- Manifest utilities, diff manifest, merge manifest
+- Manifest utilities, diff manifest, merge manifest (Doc, need implement)
 
 - Fuzz testing with weird file paths
 
