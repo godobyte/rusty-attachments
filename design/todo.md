@@ -157,12 +157,22 @@ Features intentionally not implemented in Rust, with rationale:
 
 ### Download Summary Statistics Extensions
 
-**Python Feature:** `DownloadSummaryStatistics` with `file_counts_by_root_directory`
+**Python Feature:** `DownloadSummaryStatistics` with `file_counts_by_root_directory` and `downloaded_files`
 
 **Why Skipped:**
 - Application-level reporting concern
-- Base `TransferStatistics` in storage-design.md is sufficient
+- Base `SummaryStatistics` in storage-design.md is sufficient
 - Can be computed by caller from download results
+
+**Optional Enhancement:** If needed, extend `SummaryStatistics` with:
+```rust
+#[derive(Debug, Clone, Default)]
+pub struct DownloadSummaryStatistics {
+    pub stats: SummaryStatistics,
+    pub file_counts_by_root: HashMap<String, u64>,
+    pub downloaded_files: Vec<PathBuf>,
+}
+```
 
 ### Snapshot Mode (Local Copy)
 
