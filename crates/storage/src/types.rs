@@ -19,6 +19,9 @@ pub struct StorageSettings {
     pub region: String,
     /// AWS credentials (access key, secret key, session token).
     pub credentials: Option<AwsCredentials>,
+    /// Expected bucket owner account ID for security validation.
+    /// When set, all S3 operations will include ExpectedBucketOwner parameter.
+    pub expected_bucket_owner: Option<String>,
     /// Chunk size for large files (use CHUNK_SIZE_V2 or CHUNK_SIZE_NONE).
     pub chunk_size: u64,
     /// Upload retry settings.
@@ -32,6 +35,7 @@ impl Default for StorageSettings {
         Self {
             region: "us-west-2".into(),
             credentials: None,
+            expected_bucket_owner: None,
             chunk_size: CHUNK_SIZE_V2,
             upload_retry: RetrySettings::default(),
             download_retry: RetrySettings::default(),

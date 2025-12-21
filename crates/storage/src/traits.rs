@@ -30,8 +30,13 @@ pub struct ObjectInfo {
 /// Low-level S3 operations - implemented by each backend.
 #[async_trait]
 pub trait StorageClient: Send + Sync {
+    /// Get the expected bucket owner account ID for security validation.
+    /// When set, all S3 operations should include ExpectedBucketOwner parameter.
+    fn expected_bucket_owner(&self) -> Option<&str>;
+
     /// Check if an object exists and return its size.
     /// Returns None if object doesn't exist.
+    /// Implementations should include ExpectedBucketOwner if configured.
     async fn head_object(&self, bucket: &str, key: &str) -> Result<Option<u64>, StorageError>;
 
     /// Upload bytes to S3.
