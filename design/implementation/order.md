@@ -37,18 +37,18 @@ Shared utilities referenced by all other crates.
 
 ## Phase 3: File System Operations
 
-**Crate:** `filesystem`
+**Crate:** `filesystem` ✅ COMPLETE
 
 Directory scanning and manifest creation.
 
-- [ ] `GlobFilter` - Include/exclude pattern matching
-- [ ] `expand_input_paths()` - Directory-to-file expansion
-- [ ] `validate_input_paths()` - Path validation
-- [ ] `StatCache` - File stat caching (LRU)
-- [ ] `FileSystemScanner`
+- [x] `GlobFilter` - Include/exclude pattern matching
+- [x] `expand_input_paths()` - Directory-to-file expansion
+- [x] `validate_input_paths()` - Path validation
+- [x] `StatCache` - File stat caching (LRU)
+- [x] `FileSystemScanner`
   - `snapshot()` - Create manifest from files
   - `snapshot_structure()` - Create manifest without hashing
-- [ ] Symlink validation (security checks)
+- [x] Symlink validation (security checks)
 
 ---
 

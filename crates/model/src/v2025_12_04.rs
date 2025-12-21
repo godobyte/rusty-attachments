@@ -407,34 +407,149 @@ fn is_false(b: &bool) -> bool {
 mod tests {
     use super::*;
 
+    // ==================== Valid cases ====================
+
     #[test]
     fn test_file_entry_validation() {
-        let file = ManifestFilePath::file("test.txt", "abc123", 1024, 1234567890);
+        let file: ManifestFilePath = ManifestFilePath::file("test.txt", "abc123", 1024, 1234567890);
         assert!(file.validate().is_ok());
     }
 
     #[test]
+    fn test_file_with_runnable() {
+        let file: ManifestFilePath =
+            ManifestFilePath::file("script.sh", "abc123", 512, 1234567890).with_runnable(true);
+        assert!(file.validate().is_ok());
+        assert!(file.runnable);
+    }
+
+    #[test]
     fn test_symlink_entry_validation() {
-        let symlink = ManifestFilePath::symlink("link.txt", "target.txt");
+        let symlink: ManifestFilePath = ManifestFilePath::symlink("link.txt", "target.txt");
         assert!(symlink.validate().is_ok());
     }
 
     #[test]
-    fn test_deleted_entry_validation() {
-        let deleted = ManifestFilePath::deleted("old.txt");
-        assert!(deleted.validate().is_ok());
+    fn test_symlink_same_directory() {
+        let symlink: ManifestFilePath = ManifestFilePath::symlink("link.txt", "target.txt");
+        assert!(symlink.validate().is_ok());
+        assert_eq!(symlink.symlink_target, Some("target.txt".to_string()));
     }
+
+    #[test]
+    fn test_deleted_entry_validation() {
+        let deleted: ManifestFilePath = ManifestFilePath::deleted("old.txt");
+        assert!(deleted.validate().is_ok());
+        assert!(deleted.deleted);
+        assert!(deleted.hash.is_none());
+        assert!(deleted.size.is_none());
+        assert!(deleted.mtime.is_none());
+    }
+
+    #[test]
+    fn test_chunked_file_valid() {
+        // 300MB file = 2 chunks (256MB + 44MB)
+        let size: u64 = 300 * 1024 * 1024;
+        let chunkhashes: Vec<String> = vec!["hash1".to_string(), "hash2".to_string()];
+        let file: ManifestFilePath =
+            ManifestFilePath::chunked("large.bin", chunkhashes.clone(), size, 1234567890);
+        assert!(file.validate().is_ok());
+        assert_eq!(file.chunkhashes, Some(chunkhashes));
+        assert!(file.hash.is_none());
+    }
+
+    #[test]
+    fn test_chunked_file_exact_boundary() {
+        // File exactly at chunk boundary + 1 byte needs 2 chunks
+        let size: u64 = FILE_CHUNK_SIZE_BYTES + 1;
+        let chunkhashes: Vec<String> = vec!["hash1".to_string(), "hash2".to_string()];
+        let file: ManifestFilePath =
+            ManifestFilePath::chunked("boundary.bin", chunkhashes, size, 1234567890);
+        assert!(file.validate().is_ok());
+    }
+
+    // ==================== Deleted file validation errors ====================
 
     #[test]
     fn test_deleted_with_hash_fails() {
-        let mut entry = ManifestFilePath::deleted("old.txt");
+        let mut entry: ManifestFilePath = ManifestFilePath::deleted("old.txt");
         entry.hash = Some("abc".to_string());
-        assert!(entry.validate().is_err());
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::DeletedEntryHasField { field: "hash", .. })
+        ));
     }
 
     #[test]
+    fn test_deleted_with_chunkhashes_fails() {
+        let mut entry: ManifestFilePath = ManifestFilePath::deleted("old.txt");
+        entry.chunkhashes = Some(vec!["hash1".to_string()]);
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::DeletedEntryHasField {
+                field: "chunkhashes",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_deleted_with_symlink_target_fails() {
+        let mut entry: ManifestFilePath = ManifestFilePath::deleted("old.txt");
+        entry.symlink_target = Some("target.txt".to_string());
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::DeletedEntryHasField {
+                field: "symlink_target",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_deleted_with_runnable_fails() {
+        let mut entry: ManifestFilePath = ManifestFilePath::deleted("old.txt");
+        entry.runnable = true;
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::DeletedEntryHasField {
+                field: "runnable",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_deleted_with_size_fails() {
+        let mut entry: ManifestFilePath = ManifestFilePath::deleted("old.txt");
+        entry.size = Some(1024);
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::DeletedEntryHasField { field: "size", .. })
+        ));
+    }
+
+    #[test]
+    fn test_deleted_with_mtime_fails() {
+        let mut entry: ManifestFilePath = ManifestFilePath::deleted("old.txt");
+        entry.mtime = Some(1234567890);
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::DeletedEntryHasField { field: "mtime", .. })
+        ));
+    }
+
+    // ==================== Non-deleted file validation errors ====================
+
+    #[test]
     fn test_file_without_content_fails() {
-        let entry = ManifestFilePath {
+        let entry: ManifestFilePath = ManifestFilePath {
             path: "test.txt".to_string(),
             hash: None,
             size: Some(100),
@@ -444,24 +559,246 @@ mod tests {
             symlink_target: None,
             deleted: false,
         };
-        assert!(entry.validate().is_err());
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(result, Err(ValidationError::InvalidContentFields { .. })));
     }
 
     #[test]
+    fn test_file_with_multiple_content_fields_fails() {
+        let entry: ManifestFilePath = ManifestFilePath {
+            path: "test.txt".to_string(),
+            hash: Some("abc123".to_string()),
+            size: Some(300 * 1024 * 1024),
+            mtime: Some(1234567890),
+            runnable: false,
+            chunkhashes: Some(vec!["hash1".to_string(), "hash2".to_string()]),
+            symlink_target: None,
+            deleted: false,
+        };
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(result, Err(ValidationError::InvalidContentFields { .. })));
+    }
+
+    #[test]
+    fn test_file_with_hash_and_symlink_fails() {
+        let entry: ManifestFilePath = ManifestFilePath {
+            path: "test.txt".to_string(),
+            hash: Some("abc123".to_string()),
+            size: Some(1024),
+            mtime: Some(1234567890),
+            runnable: false,
+            chunkhashes: None,
+            symlink_target: Some("target.txt".to_string()),
+            deleted: false,
+        };
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(result, Err(ValidationError::InvalidContentFields { .. })));
+    }
+
+    #[test]
+    fn test_regular_file_without_size_fails() {
+        let entry: ManifestFilePath = ManifestFilePath {
+            path: "test.txt".to_string(),
+            hash: Some("abc123".to_string()),
+            size: None,
+            mtime: Some(1234567890),
+            runnable: false,
+            chunkhashes: None,
+            symlink_target: None,
+            deleted: false,
+        };
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(result, Err(ValidationError::MissingSize { .. })));
+    }
+
+    #[test]
+    fn test_regular_file_without_mtime_fails() {
+        let entry: ManifestFilePath = ManifestFilePath {
+            path: "test.txt".to_string(),
+            hash: Some("abc123".to_string()),
+            size: Some(1024),
+            mtime: None,
+            runnable: false,
+            chunkhashes: None,
+            symlink_target: None,
+            deleted: false,
+        };
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(result, Err(ValidationError::MissingMtime { .. })));
+    }
+
+    // ==================== Chunkhashes validation errors ====================
+
+    #[test]
+    fn test_chunked_file_without_size_fails() {
+        let entry: ManifestFilePath = ManifestFilePath {
+            path: "large.bin".to_string(),
+            hash: None,
+            size: None,
+            mtime: Some(1234567890),
+            runnable: false,
+            chunkhashes: Some(vec!["hash1".to_string(), "hash2".to_string()]),
+            symlink_target: None,
+            deleted: false,
+        };
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(result, Err(ValidationError::MissingSize { .. })));
+    }
+
+    #[test]
+    fn test_chunked_file_size_too_small_fails() {
+        let entry: ManifestFilePath = ManifestFilePath {
+            path: "small.bin".to_string(),
+            hash: None,
+            size: Some(1024), // Too small for chunking
+            mtime: Some(1234567890),
+            runnable: false,
+            chunkhashes: Some(vec!["hash1".to_string()]),
+            symlink_target: None,
+            deleted: false,
+        };
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::ChunkedFileTooSmall { .. })
+        ));
+    }
+
+    #[test]
+    fn test_chunked_file_wrong_chunk_count_fails() {
+        // 300MB = 2 chunks, but we provide 3
+        let size: u64 = 300 * 1024 * 1024;
+        let entry: ManifestFilePath = ManifestFilePath {
+            path: "large.bin".to_string(),
+            hash: None,
+            size: Some(size),
+            mtime: Some(1234567890),
+            runnable: false,
+            chunkhashes: Some(vec![
+                "hash1".to_string(),
+                "hash2".to_string(),
+                "hash3".to_string(),
+            ]),
+            symlink_target: None,
+            deleted: false,
+        };
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::ChunkCountMismatch { expected: 2, actual: 3, .. })
+        ));
+    }
+
+    #[test]
+    fn test_chunked_file_too_few_chunks_fails() {
+        // 600MB = 3 chunks, but we provide 2
+        let size: u64 = 600 * 1024 * 1024;
+        let entry: ManifestFilePath = ManifestFilePath {
+            path: "large.bin".to_string(),
+            hash: None,
+            size: Some(size),
+            mtime: Some(1234567890),
+            runnable: false,
+            chunkhashes: Some(vec!["hash1".to_string(), "hash2".to_string()]),
+            symlink_target: None,
+            deleted: false,
+        };
+        let result: Result<(), ValidationError> = entry.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::ChunkCountMismatch { expected: 3, actual: 2, .. })
+        ));
+    }
+
+    // ==================== Symlink validation ====================
+
+    #[test]
     fn test_absolute_symlink_fails() {
-        let symlink = ManifestFilePath::symlink("link.txt", "/absolute/path");
-        assert!(symlink.validate().is_err());
+        let symlink: ManifestFilePath = ManifestFilePath::symlink("link.txt", "/absolute/path");
+        let result: Result<(), ValidationError> = symlink.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::AbsoluteSymlinkTarget { .. })
+        ));
+    }
+
+    #[test]
+    fn test_windows_absolute_symlink_fails() {
+        let symlink: ManifestFilePath = ManifestFilePath::symlink("link.txt", "C:\\absolute\\path");
+        let result: Result<(), ValidationError> = symlink.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::AbsoluteSymlinkTarget { .. })
+        ));
+    }
+
+    #[test]
+    fn test_unc_path_symlink_fails() {
+        let symlink: ManifestFilePath =
+            ManifestFilePath::symlink("link.txt", "\\\\server\\share\\file");
+        let result: Result<(), ValidationError> = symlink.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::AbsoluteSymlinkTarget { .. })
+        ));
+    }
+
+    #[test]
+    fn test_unc_path_forward_slash_symlink_fails() {
+        let symlink: ManifestFilePath =
+            ManifestFilePath::symlink("link.txt", "//server/share/file");
+        let result: Result<(), ValidationError> = symlink.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::AbsoluteSymlinkTarget { .. })
+        ));
     }
 
     #[test]
     fn test_escaping_symlink_fails() {
-        let symlink = ManifestFilePath::symlink("link.txt", "../outside.txt");
-        assert!(symlink.validate().is_err());
+        let symlink: ManifestFilePath = ManifestFilePath::symlink("link.txt", "../outside.txt");
+        let result: Result<(), ValidationError> = symlink.validate();
+        assert!(matches!(
+            result,
+            Err(ValidationError::EscapingSymlinkTarget { .. })
+        ));
     }
 
     #[test]
     fn test_dotdot_within_root_ok() {
-        let symlink = ManifestFilePath::symlink("subdir/link.txt", "../target.txt");
+        let symlink: ManifestFilePath = ManifestFilePath::symlink("subdir/link.txt", "../target.txt");
         assert!(symlink.validate().is_ok());
+    }
+
+    #[test]
+    fn test_symlink_deep_nested_dotdot_ok() {
+        let symlink: ManifestFilePath =
+            ManifestFilePath::symlink("a/b/link.txt", "../../target.txt");
+        assert!(symlink.validate().is_ok());
+    }
+
+    // ==================== Manifest validation ====================
+
+    #[test]
+    fn test_snapshot_manifest_with_deletion_fails() {
+        let paths: Vec<ManifestFilePath> = vec![ManifestFilePath::deleted("old.txt")];
+        let manifest: AssetManifest = AssetManifest::snapshot(vec![], paths);
+        let result: Result<(), ValidationError> = manifest.validate();
+        assert!(matches!(result, Err(ValidationError::SnapshotWithDeletion)));
+    }
+
+    #[test]
+    fn test_diff_manifest_with_deletion_ok() {
+        let paths: Vec<ManifestFilePath> = vec![ManifestFilePath::deleted("old.txt")];
+        let manifest: AssetManifest = AssetManifest::diff(vec![], paths, "parent_hash");
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn test_snapshot_manifest_with_deleted_dir_fails() {
+        let dirs: Vec<ManifestDirectoryPath> = vec![ManifestDirectoryPath::deleted("old_dir")];
+        let manifest: AssetManifest = AssetManifest::snapshot(dirs, vec![]);
+        let result: Result<(), ValidationError> = manifest.validate();
+        assert!(matches!(result, Err(ValidationError::SnapshotWithDeletion)));
     }
 }
