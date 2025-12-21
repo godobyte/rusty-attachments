@@ -14,6 +14,7 @@ Bundle submit uploads input files to S3 CAS, creates manifests, and returns an `
 
 | Primitive | Module | Purpose |
 |-----------|--------|---------|
+| `expand_input_paths()` | `file_system` | Expand directories to individual files |
 | `group_asset_paths_validated()` | `storage-profiles` | Group paths by asset root with validation |
 | `StorageProfile` | `storage-profiles` | LOCAL/SHARED location classification |
 | `FileSystemScanner.snapshot()` | `file_system` | Create manifest from directory |
@@ -37,7 +38,7 @@ use rusty_attachments_storage::{
     StorageProfile, FileSystemLocation, FileSystemLocationType,
     group_asset_paths_validated, PathValidationMode, PathGroupingResult,
     // File system
-    FileSystemScanner, SnapshotOptions,
+    FileSystemScanner, SnapshotOptions, expand_input_paths, GlobFilter,
     // Caches
     HashCache, SqliteHashCache, S3CheckCache, SqliteS3CheckCache,
     // Upload
@@ -68,11 +69,12 @@ pub struct BundleSubmitResult {
 /// Submit a job bundle with attachments.
 ///
 /// This function:
-/// 1. Groups input/output paths by asset root
-/// 2. Filters paths based on storage profile (skip SHARED)
-/// 3. Hashes files and creates manifests
-/// 4. Uploads CAS objects and manifests to S3
-/// 5. Returns Attachments for CreateJob API
+/// 1. Expands input directories to individual files
+/// 2. Groups input/output paths by asset root
+/// 3. Filters paths based on storage profile (skip SHARED)
+/// 4. Hashes files and creates manifests
+/// 5. Uploads CAS objects and manifests to S3
+/// 6. Returns Attachments for CreateJob API
 pub async fn submit_bundle_attachments<C: StorageClient>(
     client: &C,
     s3_location: &S3Location,
@@ -80,13 +82,26 @@ pub async fn submit_bundle_attachments<C: StorageClient>(
     asset_references: &AssetReferences,
     storage_profile: Option<&StorageProfile>,
     require_paths_exist: bool,
+    expected_bucket_owner: Option<&str>,
     cache_dir: &Path,
     hashing_progress: Option<&dyn ProgressCallback<ScanProgress>>,
     upload_progress: Option<&dyn ProgressCallback<TransferProgress>>,
 ) -> Result<BundleSubmitResult, BundleSubmitError> {
-    // 1. Group paths by asset root, respecting storage profile
-    let grouping_result = group_asset_paths_validated(
+    // 1. Expand any directories in input_filenames to individual files
+    let expanded = expand_input_paths(
         &asset_references.input_filenames,
+        None, // No glob filter - include all files
+        !require_paths_exist, // allow_missing = !require_paths_exist
+    )?;
+    
+    // Log expanded directories
+    for dir in &expanded.expanded_directories {
+        log::debug!("Expanded directory: {} ({} files)", dir.display(), expanded.files.len());
+    }
+    
+    // 2. Group paths by asset root, respecting storage profile
+    let grouping_result = group_asset_paths_validated(
+        &expanded.files, // Use expanded file list
         &asset_references.output_directories,
         &asset_references.referenced_paths,
         storage_profile,
@@ -98,19 +113,25 @@ pub async fn submit_bundle_attachments<C: StorageClient>(
         log::warn!("Input path does not exist, treating as reference: {}", demoted.display());
     }
     
-    // 2. Hash files and create manifests for each asset root
+    // Also log missing paths from expansion
+    for missing in &expanded.missing {
+        log::warn!("Input path does not exist: {}", missing.display());
+    }
+    
+    // 3. Hash files and create manifests for each asset root
     let (hashing_stats, asset_root_manifests) = hash_and_create_manifests(
         &grouping_result.groups,
         cache_dir,
         hashing_progress,
     )?;
     
-    // 3. Upload to S3
+    // 4. Upload to S3
     let (upload_stats, attachments) = upload_attachments(
         client,
         s3_location,
         manifest_location,
         &asset_root_manifests,
+        expected_bucket_owner,
         cache_dir,
         upload_progress,
     ).await?;
@@ -169,10 +190,12 @@ async fn upload_attachments<C: StorageClient>(
     s3_location: &S3Location,
     manifest_location: &ManifestLocation,
     asset_root_manifests: &[AssetRootManifest],
+    expected_bucket_owner: Option<&str>,
     cache_dir: &Path,
     progress: Option<&dyn ProgressCallback<TransferProgress>>,
 ) -> Result<(SummaryStatistics, Attachments), BundleSubmitError> {
-    let orchestrator = UploadOrchestrator::new(client.clone(), s3_location.clone());
+    let orchestrator = UploadOrchestrator::new(client.clone(), s3_location.clone())
+        .with_expected_bucket_owner(expected_bucket_owner);
     
     // Initialize S3 check cache
     let s3_cache_path = cache_dir.join("s3_check_cache.db");

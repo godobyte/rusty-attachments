@@ -475,6 +475,145 @@ async fn download_manifests_parallel(
 ) -> Result<Vec<DownloadedManifest>, StorageError>;
 ```
 
+### Matching Manifests to Job Attachment Roots
+
+When discovering output manifests, each manifest S3 key contains a hash that identifies which job attachment root it belongs to. This is necessary because a job can have multiple asset roots, and each session action produces one manifest per root.
+
+```rust
+use rusty_attachments_common::hash_data;
+use crate::hash::HashAlgorithm;
+
+/// Compute the hash used to match manifest S3 keys to job attachment roots.
+/// 
+/// The hash is computed from the concatenation of the file system location name
+/// (if any) and the root path. This hash appears in the manifest S3 key filename.
+/// 
+/// # Arguments
+/// * `file_system_location_name` - Optional file system location name from storage profile
+/// * `root_path` - The root path of the job attachment
+/// 
+/// # Returns
+/// The xxh128 hash as a hex string
+/// 
+/// # Example
+/// ```rust
+/// use rusty_attachments_storage::manifest_storage::compute_root_path_hash;
+/// 
+/// // Without file system location
+/// let hash = compute_root_path_hash(None, "/mnt/projects/job1");
+/// 
+/// // With file system location
+/// let hash = compute_root_path_hash(Some("ProjectShare"), "Z:\\Projects\\Job1");
+/// 
+/// // Check if a manifest key belongs to this root
+/// let manifest_key = ".../{hash}_output";
+/// assert!(manifest_key.contains(&hash));
+/// ```
+pub fn compute_root_path_hash(
+    file_system_location_name: Option<&str>,
+    root_path: &str,
+) -> String {
+    let data = format!(
+        "{}{}",
+        file_system_location_name.unwrap_or(""),
+        root_path
+    );
+    hash_data(data.as_bytes(), HashAlgorithm::Xxh128)
+}
+
+/// Match manifest S3 keys to job attachment roots.
+/// 
+/// Given a list of manifest keys and job attachment roots, returns a mapping
+/// from session action ID to manifest keys indexed by root position.
+/// 
+/// # Arguments
+/// * `manifest_keys` - S3 keys of discovered manifests
+/// * `job_attachment_roots` - Job attachment roots from job.attachments.manifests
+/// 
+/// # Returns
+/// Map of session_action_id -> Vec<Option<String>> where the Vec is indexed
+/// by root position (same order as job_attachment_roots)
+/// 
+/// # Example
+/// ```rust
+/// let roots = vec![
+///     JobAttachmentRoot {
+///         root_path: "/mnt/assets".into(),
+///         file_system_location_name: None,
+///     },
+///     JobAttachmentRoot {
+///         root_path: "/mnt/textures".into(),
+///         file_system_location_name: Some("TextureShare".into()),
+///     },
+/// ];
+/// 
+/// let manifest_keys = discover_output_manifest_keys(&client, &location, &options).await?;
+/// let matched = match_manifests_to_roots(&manifest_keys, &roots)?;
+/// 
+/// // matched["sessionaction-abc-0"] = [Some("...key1..."), Some("...key2...")]
+/// ```
+pub fn match_manifests_to_roots(
+    manifest_keys: &[String],
+    job_attachment_roots: &[JobAttachmentRoot],
+) -> Result<HashMap<String, Vec<Option<String>>>, ManifestError> {
+    use regex::Regex;
+    
+    // Regex to extract session action ID from manifest key
+    let session_action_re = Regex::new(r"(sessionaction-[^/-]+-[^/-]+)/")
+        .expect("valid regex");
+    
+    // Compute hash for each root
+    let root_hashes: Vec<String> = job_attachment_roots
+        .iter()
+        .map(|root| compute_root_path_hash(
+            root.file_system_location_name.as_deref(),
+            &root.root_path,
+        ))
+        .collect();
+    
+    let mut result: HashMap<String, Vec<Option<String>>> = HashMap::new();
+    
+    for key in manifest_keys {
+        // Extract session action ID
+        let session_action_id = session_action_re
+            .captures(key)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+            .ok_or_else(|| ManifestError::InvalidKey {
+                key: key.clone(),
+                reason: "missing session action ID".into(),
+            })?;
+        
+        // Find which root this manifest belongs to
+        let root_index = root_hashes
+            .iter()
+            .position(|hash| key.contains(hash))
+            .ok_or_else(|| ManifestError::InvalidKey {
+                key: key.clone(),
+                reason: "no matching root path hash".into(),
+            })?;
+        
+        // Initialize entry for this session action if needed
+        let entry = result
+            .entry(session_action_id)
+            .or_insert_with(|| vec![None; job_attachment_roots.len()]);
+        
+        entry[root_index] = Some(key.clone());
+    }
+    
+    Ok(result)
+}
+
+/// Job attachment root information needed for manifest matching.
+#[derive(Debug, Clone)]
+pub struct JobAttachmentRoot {
+    /// The root path of the job attachment
+    pub root_path: String,
+    /// Optional file system location name from storage profile
+    pub file_system_location_name: Option<String>,
+}
+```
+
 ### Session Action ID Lookup
 
 ```rust

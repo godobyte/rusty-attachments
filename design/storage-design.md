@@ -650,12 +650,13 @@ impl<C: StorageClient> DownloadOrchestrator<C> {
     /// * `files` - Pre-resolved paths from `resolve_manifest_paths()`
     /// * `hash_algorithm` - Hash algorithm used by the manifest
     /// * `conflict_resolution` - How to handle existing files
+    /// * `options` - Download options (size verification, mtime setting, etc.)
     /// * `progress` - Optional progress callback
     /// 
     /// # Example
     /// ```
     /// use rusty_attachments_storage::{
-    ///     DownloadOrchestrator, ConflictResolution,
+    ///     DownloadOrchestrator, ConflictResolution, DownloadOptions,
     ///     path_mapping::{resolve_manifest_paths, PathMappingApplier, PathFormat},
     /// };
     /// 
@@ -669,11 +670,12 @@ impl<C: StorageClient> DownloadOrchestrator<C> {
     ///     Some(&applier),
     /// )?;
     /// 
-    /// // Download to resolved paths
+    /// // Download to resolved paths with default options (verification enabled)
     /// let stats = orchestrator.download_to_resolved_paths(
     ///     &resolved.resolved,
     ///     manifest.hash_alg(),
     ///     ConflictResolution::CreateCopy,
+    ///     DownloadOptions::default(),
     ///     Some(&progress_callback),
     /// ).await?;
     /// 
@@ -687,6 +689,7 @@ impl<C: StorageClient> DownloadOrchestrator<C> {
         files: &[ResolvedManifestPath],
         hash_algorithm: HashAlgorithm,
         conflict_resolution: ConflictResolution,
+        options: DownloadOptions,
         progress: Option<&dyn ProgressCallback<TransferProgress>>,
     ) -> Result<TransferStatistics, StorageError>;
     
@@ -722,6 +725,70 @@ pub enum ConflictResolution {
     Overwrite,
     /// Create copy with suffix: "file (1).ext"
     CreateCopy,
+}
+
+/// Options for download operations.
+/// 
+/// Controls post-download verification and file metadata handling.
+/// All verification options default to `true` for safety.
+#[derive(Debug, Clone)]
+pub struct DownloadOptions {
+    /// Verify downloaded file size matches manifest.
+    /// 
+    /// When enabled (default), after each file download the orchestrator
+    /// checks that the file size on disk matches the expected size from
+    /// the manifest. This catches truncated downloads or corruption.
+    /// 
+    /// Default: `true`
+    pub verify_size: bool,
+    
+    /// Set file modification time from manifest.
+    /// 
+    /// When enabled (default), after each file download the orchestrator
+    /// sets the file's mtime to match the value stored in the manifest.
+    /// This preserves the original modification time from the source.
+    /// 
+    /// The manifest stores mtime in microseconds since Unix epoch.
+    /// 
+    /// Default: `true`
+    pub set_mtime: bool,
+    
+    /// Set executable bit on runnable files (Unix only).
+    /// 
+    /// When enabled (default), files marked as `runnable: true` in the
+    /// manifest will have their executable bit set after download.
+    /// 
+    /// Default: `true`
+    pub set_executable: bool,
+}
+
+impl Default for DownloadOptions {
+    fn default() -> Self {
+        Self {
+            verify_size: true,
+            set_mtime: true,
+            set_executable: true,
+        }
+    }
+}
+
+impl DownloadOptions {
+    /// Create options with all verification enabled (default).
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    /// Create options with no post-download processing.
+    /// 
+    /// Useful for testing or when maximum download speed is needed
+    /// and verification will be done separately.
+    pub fn no_verification() -> Self {
+        Self {
+            verify_size: false,
+            set_mtime: false,
+            set_executable: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -845,6 +912,135 @@ pub enum DownloadStrategy {
     ChunkedCas,
     /// Create local symlink (no download)
     Symlink,
+}
+
+// ============================================================================
+// Post-Download Verification and Metadata
+// ============================================================================
+
+/// Verify downloaded file size matches expected size.
+/// 
+/// Called after download when `DownloadOptions::verify_size` is true.
+/// 
+/// # Errors
+/// Returns `StorageError::SizeMismatch` if sizes don't match.
+pub fn verify_file_size(path: &Path, expected_size: u64) -> Result<(), StorageError> {
+    let actual_size = std::fs::metadata(path)
+        .map_err(|e| StorageError::IoError {
+            path: path.display().to_string(),
+            message: e.to_string(),
+        })?
+        .len();
+    
+    if actual_size != expected_size {
+        return Err(StorageError::SizeMismatch {
+            key: path.display().to_string(),
+            expected: expected_size,
+            actual: actual_size,
+        });
+    }
+    
+    Ok(())
+}
+
+/// Set file modification time from manifest mtime.
+/// 
+/// Called after download when `DownloadOptions::set_mtime` is true.
+/// 
+/// # Arguments
+/// * `path` - Path to the downloaded file
+/// * `mtime_us` - Modification time in microseconds since Unix epoch
+///                (as stored in manifest)
+/// 
+/// # Example
+/// ```rust
+/// // Manifest stores mtime in microseconds
+/// let mtime_us: i64 = 1703001200_000_000; // 2023-12-19T14:00:00Z
+/// set_file_mtime(Path::new("/tmp/file.txt"), mtime_us)?;
+/// ```
+pub fn set_file_mtime(path: &Path, mtime_us: i64) -> Result<(), StorageError> {
+    use std::time::{Duration, UNIX_EPOCH};
+    
+    // Convert microseconds to seconds and nanoseconds
+    let secs = (mtime_us / 1_000_000) as u64;
+    let nanos = ((mtime_us % 1_000_000) * 1000) as u32;
+    
+    let mtime = UNIX_EPOCH + Duration::new(secs, nanos);
+    
+    // Use filetime crate for cross-platform mtime setting
+    filetime::set_file_mtime(path, filetime::FileTime::from_system_time(mtime))
+        .map_err(|e| StorageError::IoError {
+            path: path.display().to_string(),
+            message: format!("failed to set mtime: {}", e),
+        })
+}
+
+/// Set executable bit on a file (Unix only).
+/// 
+/// Called after download when `DownloadOptions::set_executable` is true
+/// and the manifest entry has `runnable: true`.
+/// 
+/// On Windows, this is a no-op.
+#[cfg(unix)]
+pub fn set_file_executable(path: &Path) -> Result<(), StorageError> {
+    use std::os::unix::fs::PermissionsExt;
+    
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| StorageError::IoError {
+            path: path.display().to_string(),
+            message: e.to_string(),
+        })?;
+    
+    let mut perms = metadata.permissions();
+    // Add execute bit for owner, group, and others (matching read bits)
+    let mode = perms.mode();
+    let new_mode = mode | ((mode & 0o444) >> 2); // Copy read bits to execute bits
+    perms.set_mode(new_mode);
+    
+    std::fs::set_permissions(path, perms)
+        .map_err(|e| StorageError::IoError {
+            path: path.display().to_string(),
+            message: format!("failed to set executable: {}", e),
+        })
+}
+
+#[cfg(not(unix))]
+pub fn set_file_executable(_path: &Path) -> Result<(), StorageError> {
+    // No-op on non-Unix platforms
+    Ok(())
+}
+
+/// Apply post-download processing based on options.
+/// 
+/// This is called after each file download to:
+/// 1. Verify file size (if `options.verify_size`)
+/// 2. Set modification time (if `options.set_mtime`)
+/// 3. Set executable bit (if `options.set_executable` and entry is runnable)
+pub fn apply_post_download_options(
+    path: &Path,
+    entry: &ManifestFilePath,
+    options: &DownloadOptions,
+) -> Result<(), StorageError> {
+    // 1. Verify size
+    if options.verify_size {
+        if let Some(expected_size) = entry.size {
+            verify_file_size(path, expected_size)?;
+        }
+    }
+    
+    // 2. Set mtime
+    if options.set_mtime {
+        if let Some(mtime_us) = entry.mtime {
+            set_file_mtime(path, mtime_us)?;
+        }
+    }
+    
+    // 3. Set executable
+    if options.set_executable && entry.runnable {
+        set_file_executable(path)?;
+    }
+    
+    Ok(())
 }
 ```
 

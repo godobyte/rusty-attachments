@@ -204,6 +204,225 @@ impl Default for SnapshotOptions {
 }
 ```
 
+---
+
+## Input Path Utilities
+
+When processing job bundle inputs, paths may be either files or directories. These utilities help expand and validate input paths before creating manifests.
+
+### Expand Input Paths
+
+```rust
+/// Result of expanding input paths.
+#[derive(Debug, Clone, Default)]
+pub struct ExpandedInputPaths {
+    /// All discovered file paths (absolute).
+    pub files: Vec<PathBuf>,
+    /// Directories that were expanded.
+    pub expanded_directories: Vec<PathBuf>,
+    /// Paths that don't exist (when allow_missing=true).
+    pub missing: Vec<PathBuf>,
+    /// Total size of all discovered files in bytes.
+    pub total_size: u64,
+}
+
+/// Expand a list of input paths to individual files.
+/// 
+/// Directories are recursively walked to discover all files within them.
+/// Files are returned as-is after validation.
+/// 
+/// This is a pure expansion operation - no hashing or manifest creation.
+/// Use the result with `SnapshotOptions::input_files` for manifest creation.
+/// 
+/// # Arguments
+/// * `input_paths` - Mix of file and directory paths to expand
+/// * `filter` - Optional glob filter to apply during directory walking
+/// * `allow_missing` - If true, missing paths are collected in `missing` instead of error
+/// 
+/// # Returns
+/// `ExpandedInputPaths` containing all discovered files
+/// 
+/// # Errors
+/// - `FileSystemError::PathNotFound` if a path doesn't exist (when allow_missing=false)
+/// - `FileSystemError::IoError` if directory walking fails
+/// 
+/// # Example
+/// ```rust
+/// use rusty_attachments_filesystem::{expand_input_paths, GlobFilter};
+/// 
+/// let inputs = vec![
+///     PathBuf::from("/project/scene.blend"),      // File
+///     PathBuf::from("/project/textures"),          // Directory
+///     PathBuf::from("/project/scripts/render.py"), // File
+/// ];
+/// 
+/// let filter = GlobFilter::exclude(vec!["**/*.tmp".into()]);
+/// let expanded = expand_input_paths(&inputs, Some(&filter), false)?;
+/// 
+/// // expanded.files contains:
+/// // - /project/scene.blend
+/// // - /project/textures/wood.png
+/// // - /project/textures/metal.png
+/// // - /project/scripts/render.py
+/// 
+/// // Use with snapshot
+/// let options = SnapshotOptions {
+///     root: PathBuf::from("/project"),
+///     input_files: Some(expanded.files),
+///     ..Default::default()
+/// };
+/// ```
+pub fn expand_input_paths(
+    input_paths: &[PathBuf],
+    filter: Option<&GlobFilter>,
+    allow_missing: bool,
+) -> Result<ExpandedInputPaths, FileSystemError> {
+    let mut result = ExpandedInputPaths::default();
+    
+    for path in input_paths {
+        let abs_path = to_absolute(path)?;
+        
+        if !abs_path.exists() {
+            if allow_missing {
+                result.missing.push(abs_path);
+                continue;
+            } else {
+                return Err(FileSystemError::PathNotFound {
+                    path: abs_path.display().to_string(),
+                });
+            }
+        }
+        
+        if abs_path.is_dir() {
+            // Expand directory recursively
+            let files = walk_directory_for_files(&abs_path, filter)?;
+            result.total_size += files.iter().map(|f| f.size).sum::<u64>();
+            result.files.extend(files.into_iter().map(|f| f.path));
+            result.expanded_directories.push(abs_path);
+        } else {
+            // Single file
+            let size = abs_path.metadata()
+                .map(|m| m.len())
+                .unwrap_or(0);
+            result.total_size += size;
+            result.files.push(abs_path);
+        }
+    }
+    
+    Ok(result)
+}
+
+/// Internal: Walk a directory and return all files (not directories).
+fn walk_directory_for_files(
+    dir: &Path,
+    filter: Option<&GlobFilter>,
+) -> Result<Vec<FileInfo>, FileSystemError> {
+    let mut files = Vec::new();
+    
+    for entry in walkdir::WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        
+        // Skip directories
+        if path.is_dir() {
+            continue;
+        }
+        
+        // Apply glob filter if provided
+        if let Some(f) = filter {
+            let relative = path.strip_prefix(dir)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            if !f.matches(&relative) {
+                continue;
+            }
+        }
+        
+        let metadata = path.metadata()
+            .map_err(|e| FileSystemError::IoError {
+                path: path.display().to_string(),
+                source: e,
+            })?;
+        
+        files.push(FileInfo {
+            path: path.to_path_buf(),
+            size: metadata.len(),
+        });
+    }
+    
+    Ok(files)
+}
+
+/// Simple file info for expansion results.
+#[derive(Debug, Clone)]
+struct FileInfo {
+    path: PathBuf,
+    size: u64,
+}
+```
+
+### Validate Input Paths
+
+```rust
+/// Result of validating input paths.
+#[derive(Debug, Clone, Default)]
+pub struct ValidatedInputPaths {
+    /// Valid file paths that exist.
+    pub valid_files: Vec<PathBuf>,
+    /// Paths that don't exist.
+    pub missing: Vec<PathBuf>,
+    /// Paths that are directories (should use expand_input_paths first).
+    pub directories: Vec<PathBuf>,
+}
+
+/// Validate a list of paths, categorizing them by type and existence.
+/// 
+/// This is a lightweight check that doesn't walk directories.
+/// Use before `expand_input_paths` to detect issues early, or use
+/// `expand_input_paths` directly which handles both validation and expansion.
+/// 
+/// # Arguments
+/// * `paths` - Paths to validate
+/// 
+/// # Returns
+/// `ValidatedInputPaths` with paths categorized by type
+/// 
+/// # Example
+/// ```rust
+/// let validated = validate_input_paths(&paths);
+/// 
+/// if !validated.missing.is_empty() {
+///     eprintln!("Warning: {} paths not found", validated.missing.len());
+/// }
+/// 
+/// if !validated.directories.is_empty() {
+///     // Need to expand directories first
+///     let expanded = expand_input_paths(&validated.directories, None, false)?;
+///     validated.valid_files.extend(expanded.files);
+/// }
+/// ```
+pub fn validate_input_paths(paths: &[PathBuf]) -> ValidatedInputPaths {
+    let mut result = ValidatedInputPaths::default();
+    
+    for path in paths {
+        let abs_path = to_absolute(path).unwrap_or_else(|_| path.clone());
+        
+        if !abs_path.exists() {
+            result.missing.push(abs_path);
+        } else if abs_path.is_dir() {
+            result.directories.push(abs_path);
+        } else {
+            result.valid_files.push(abs_path);
+        }
+    }
+    
+    result
+}
+```
+
 ### Diff Options
 
 ```rust

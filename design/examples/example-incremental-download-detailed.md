@@ -281,68 +281,27 @@ pub async fn discover_job_output_manifests<C: StorageClient>(
 ### Step 2: Match Manifests to Session Actions
 
 ```rust
-use regex::Regex;
-use rusty_attachments_common::hash_string;
+use rusty_attachments_storage::manifest_storage::{
+    compute_root_path_hash, match_manifests_to_roots, JobAttachmentRoot,
+};
 
-/// Extract session action ID from manifest S3 key
-fn extract_session_action_id(key: &str) -> Option<String> {
-    // Pattern: sessionaction-{id}-{index}
-    let re = Regex::new(r"(sessionaction-[^/-]+-\d+)").ok()?;
-    re.captures(key)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().to_string())
-}
+// Build job attachment roots from job.attachments.manifests
+let job_attachment_roots: Vec<JobAttachmentRoot> = job["attachments"]["manifests"]
+    .iter()
+    .map(|m| JobAttachmentRoot {
+        root_path: m["rootPath"].clone(),
+        file_system_location_name: m.get("fileSystemLocationName").cloned(),
+    })
+    .collect();
 
-/// Match manifest keys to job attachment roots using hash
-pub fn match_manifests_to_roots(
-    manifest_keys: &[String],
-    job_attachment_roots: &[JobAttachmentRoot],
-) -> Result<HashMap<String, Vec<Option<String>>>, ManifestError> {
-    let mut manifests_by_session_action: HashMap<String, Vec<Option<String>>> = HashMap::new();
-    
-    // Compute root path hashes
-    let root_hashes: Vec<(usize, String)> = job_attachment_roots
-        .iter()
-        .enumerate()
-        .map(|(idx, root)| {
-            let data = format!(
-                "{}{}",
-                root.file_system_location_name.as_deref().unwrap_or(""),
-                root.root_path
-            );
-            (idx, hash_string(&data, HashAlgorithm::Xxh128))
-        })
-        .collect();
-    
-    for key in manifest_keys {
-        // Extract session action ID
-        let session_action_id = extract_session_action_id(key)
-            .ok_or_else(|| ManifestError::InvalidKey { key: key.clone() })?;
-        
-        // Find which root this manifest belongs to
-        let root_index = root_hashes
-            .iter()
-            .find(|(_, hash)| key.contains(hash))
-            .map(|(idx, _)| *idx)
-            .ok_or_else(|| ManifestError::NoMatchingRoot { key: key.clone() })?;
-        
-        // Initialize entry for this session action
-        let entry = manifests_by_session_action
-            .entry(session_action_id)
-            .or_insert_with(|| vec![None; job_attachment_roots.len()]);
-        
-        entry[root_index] = Some(key.clone());
-    }
-    
-    Ok(manifests_by_session_action)
-}
+// Match discovered manifest keys to roots
+let manifests_by_session_action = match_manifests_to_roots(
+    &manifest_keys,
+    &job_attachment_roots,
+)?;
 
-#[derive(Debug, Clone)]
-pub struct JobAttachmentRoot {
-    pub root_path: String,
-    pub root_path_format: PathFormat,
-    pub file_system_location_name: Option<String>,
-}
+// manifests_by_session_action["sessionaction-abc-0"] = [Some("key1"), Some("key2"), None]
+// where the Vec is indexed by root position
 ```
 
 ### Step 3: Download and Transform Manifests
@@ -804,44 +763,13 @@ The rusty-attachments design **covers all core primitives** needed for increment
 
 ### ⚠️ Gaps and Refinements Needed
 
-#### 1. Session Action ID Matching to Manifest Roots
+#### 1. ~~Session Action ID Matching to Manifest Roots~~ ✅ DONE
 
-**Python Implementation Detail:**
-```python
-# Hash computation for matching manifests to roots
-job_indexed_root_path_hash = [
-    (index, ja_hash_data(
-        f"{manifest.get('fileSystemLocationName', '')}{manifest['rootPath']}".encode(),
-        DEFAULT_HASH_ALG,
-    ))
-    for index, manifest in enumerate(job["attachments"]["manifests"])
-]
-```
+**Status:** Added to `manifest-storage.md`
 
-The Python code matches manifest S3 keys to job attachment roots by:
-1. Computing hash of `{fileSystemLocationName}{rootPath}` for each root
-2. Checking if the hash appears in the S3 key
-
-**Rust Design Gap:**
-The `match_manifests_to_roots()` function in the example document shows this pattern, but it's not explicitly documented in `manifest-storage.md`. The design should clarify:
-- The hash algorithm used (xxh128)
-- The exact string format: `"{fileSystemLocationName}{rootPath}"` (empty string if no location name)
-
-**Recommendation:** Add a `compute_root_path_hash()` function to `manifest-storage.md`:
-```rust
-/// Compute the hash used to match manifest S3 keys to job attachment roots.
-pub fn compute_root_path_hash(
-    file_system_location_name: Option<&str>,
-    root_path: &str,
-) -> String {
-    let data = format!(
-        "{}{}",
-        file_system_location_name.unwrap_or(""),
-        root_path
-    );
-    hash_string(&data, HashAlgorithm::Xxh128)
-}
-```
+- `compute_root_path_hash()` - Computes xxh128 hash of `{fileSystemLocationName}{rootPath}`
+- `match_manifests_to_roots()` - Matches manifest S3 keys to job attachment roots
+- `JobAttachmentRoot` - Data structure for root information
 
 #### 2. Manifest Index Correspondence
 
@@ -927,63 +855,22 @@ pub trait ProgressCallback<T>: Send + Sync {
 
 **Assessment:** ✅ Complete
 
-#### 5. File Size Verification After Download
+#### 5. ~~File Size Verification After Download~~ ✅ DONE
 
-**Python Implementation:**
-```python
-# Verify that what we downloaded has the correct file size from the manifest.
-file_size_on_disk = os.path.getsize(local_file_path)
-if file_size_on_disk != file.size:
-    raise JobAttachmentsError(
-        f"File from S3 for {file.path} had incorrect size {file_size_on_disk}. Required size: {file.size}"
-    )
-```
+**Status:** Added to `storage-design.md`
 
-**Rust Design Gap:**
-The `storage-design.md` mentions size validation in `StorageError::SizeMismatch`, but doesn't explicitly show post-download verification in the download orchestrator.
+- `DownloadOptions` struct with `verify_size: bool` (default: `true`)
+- `verify_file_size()` helper function
+- `apply_post_download_options()` applies all post-download processing
 
-**Recommendation:** Ensure `download_to_resolved_paths()` verifies file size after download:
-```rust
-// After download completes
-let actual_size = std::fs::metadata(&local_path)?.len();
-if actual_size != expected_size {
-    return Err(StorageError::SizeMismatch {
-        key: hash.clone(),
-        expected: expected_size,
-        actual: actual_size,
-    });
-}
-```
+#### 6. ~~mtime Setting After Download~~ ✅ DONE
 
-#### 6. mtime Setting After Download
+**Status:** Added to `storage-design.md`
 
-**Python Implementation:**
-```python
-# The modified time in the manifest is in microseconds
-modified_time_override = (file.mtime or 0) / 1000000
-os.utime(local_file_path, (modified_time_override, modified_time_override))
-```
-
-**Rust Design Gap:**
-The design mentions setting file permissions but doesn't explicitly document mtime handling. The manifest stores mtime in microseconds, which needs conversion.
-
-**Recommendation:** Add to `storage-design.md` download logic:
-```rust
-/// Set file modification time from manifest entry.
-/// 
-/// Manifest mtime is in microseconds since epoch.
-fn set_file_mtime(path: &Path, mtime_us: i64) -> std::io::Result<()> {
-    let mtime_secs = mtime_us / 1_000_000;
-    let mtime_nanos = ((mtime_us % 1_000_000) * 1000) as u32;
-    
-    let mtime = std::time::UNIX_EPOCH + std::time::Duration::new(
-        mtime_secs as u64,
-        mtime_nanos,
-    );
-    
-    filetime::set_file_mtime(path, filetime::FileTime::from_system_time(mtime))
-}
-```
+- `DownloadOptions` struct with `set_mtime: bool` (default: `true`)
+- `set_file_mtime()` helper function that converts microseconds to system time
+- `set_file_executable()` for runnable files (also in `DownloadOptions`)
+- `apply_post_download_options()` applies all post-download processing
 
 ---
 
@@ -1027,12 +914,16 @@ The Rust `StorageError` enum covers these cases but could benefit from more deta
 
 ### Conclusions
 
-The rusty-attachments design is **well-suited for implementing incremental download**. The identified gaps are minor:
+The rusty-attachments design is **well-suited for implementing incremental download**. The previously identified gaps have been addressed:
 
-1. **Document root path hash computation** - Add `compute_root_path_hash()` to manifest-storage
-2. **Document manifest index correspondence** - Clarify the 1:1 relationship between job manifests and session action manifests
-3. **Ensure post-download size verification** - Verify in download orchestrator
-4. **Document mtime handling** - Add mtime conversion and setting to download logic
+1. ✅ **Root path hash computation** - Added `compute_root_path_hash()` and `match_manifests_to_roots()` to manifest-storage.md
+2. ⚠️ **Manifest index correspondence** - Document the 1:1 relationship between job manifests and session action manifests (orchestration-level concern)
+3. ✅ **Source path format handling** - Already covered in `resolve_manifest_paths()`
+4. ✅ **Progress callback with cancellation** - Already covered in `ProgressCallback<T>`
+5. ✅ **Post-download size verification** - Added `DownloadOptions.verify_size` and `verify_file_size()` to storage-design.md
+6. ✅ **mtime setting after download** - Added `DownloadOptions.set_mtime` and `set_file_mtime()` to storage-design.md
+
+The remaining item (#2) is an orchestration-level concern that belongs in the consuming application (worker-agent), not the core library.
 
 No fundamental design changes are required. The primitives are complete and composable.
 
