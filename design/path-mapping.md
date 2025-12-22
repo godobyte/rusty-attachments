@@ -820,3 +820,82 @@ rusty-attachments/
 - [job-submission.md](job-submission.md) - Converting manifests to job attachments format
 - [manifest-storage.md](manifest-storage.md) - Manifest upload/download operations
 - [storage-design.md](storage-design.md) - Download orchestrator with `download_to_resolved_paths()`
+
+
+---
+
+## Implementation Status
+
+### ✅ Implemented
+
+#### Path Utilities (in `common` crate)
+Location: `crates/common/src/path_utils.rs`
+
+- [x] `to_posix_path()` - Convert path to forward-slash format
+- [x] `from_posix_path()` - Convert manifest path to local path with OS separators
+- [x] `normalize_for_manifest()` - Normalize path relative to root for manifest storage
+- [x] `is_within_root()` - Security check for path containment
+- [x] `lexical_normalize()` - Normalize path without filesystem access
+- [x] `to_absolute()` - Convert to absolute path
+
+### ❌ Not Implemented
+
+#### PathFormat Enum
+- [ ] `PathFormat` enum (Windows/Posix)
+- [ ] `PathFormat::host()` - Get current platform format
+- [ ] `PathFormat::separator()` - Get path separator
+
+#### PathMappingRule
+- [ ] `PathMappingRule` struct
+- [ ] `matches()` - Check if path matches rule
+- [ ] `apply()` - Transform path using rule
+- [ ] `normalize_for_comparison()` - Normalize for matching
+- [ ] `hashed_source_path()` - Hash source path for naming
+
+#### Dynamic Path Mapping
+- [ ] `get_unique_dest_dir_name()` - Generate unique directory name using SHAKE-256
+- [ ] `generate_dynamic_path_mapping()` - Generate mappings for manifests without storage profiles
+- [ ] `get_local_destination()` - Resolve local destination for manifest
+
+#### Path Transformation Wrappers
+- [ ] `manifest_path_to_local()` - Wrapper around `from_posix_path`
+- [ ] `local_path_to_manifest()` - Wrapper around `normalize_for_manifest`
+- [ ] `convert_output_dir_path()` - Convert output directory to current platform format
+
+#### PathMappingApplier (Trie-based)
+- [ ] `PathMappingApplier` struct with trie
+- [ ] `new()` - Build trie from rules
+- [ ] `transform()` - Transform path using trie lookup
+- [ ] `strict_transform()` - Transform with error on no match
+- [ ] `split_path()` - Split path into components
+- [ ] `normalize_part()` - Normalize component for lookup
+
+#### Manifest Path Resolution
+- [ ] `ResolvedManifestPath` struct
+- [ ] `ResolvedManifestPaths` struct
+- [ ] `UnmappedPath` struct
+- [ ] `resolve_manifest_paths()` - Resolve manifest paths to local paths
+- [ ] `join_path()` - Join root with relative path
+
+#### Error Types
+- [ ] `PathMappingError` enum
+- [ ] `NoMappingFound` variant
+- [ ] `PathOutsideRoot` variant
+- [ ] `InvalidPath` variant
+- [ ] `NoRuleMatched` variant
+- [ ] `InconsistentSourceFormats` variant
+
+### Notes
+
+1. The basic path utilities (`to_posix_path`, `from_posix_path`, etc.) are implemented in the `common` crate and are used by the filesystem crate.
+
+2. The path mapping module (`storage/src/path_mapping/`) does not exist yet. This is needed for:
+   - Cross-platform path translation (Windows ↔ POSIX)
+   - Storage profile path mapping
+   - Dynamic session directory mapping
+
+3. The `PathMappingApplier` with trie-based lookup is an optimization for batch path transformation. A simpler linear implementation could be done first.
+
+4. Dependencies needed for full implementation:
+   - `sha3` crate for SHAKE-256 (unique directory naming)
+   - Or use existing `xxhash` for simpler hashing

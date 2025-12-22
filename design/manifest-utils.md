@@ -1604,3 +1604,85 @@ if !output_files.is_empty() {
     // Upload manifest and files...
 }
 ```
+
+
+---
+
+## Implementation Status
+
+### ✅ Implemented
+
+#### merge.rs (in `model` crate)
+Location: `crates/model/src/merge.rs`
+
+- [x] `merge_manifests()` - Merges multiple manifests with last-write-wins semantics
+- [x] `merge_manifests_chronologically()` - Sorts by timestamp before merging
+- [x] `merge_v2023_manifests()` - Version-specific helper for v2023
+- [x] `merge_v2025_manifests()` - Version-specific helper for v2025
+- [x] `ManifestError::MergeHashAlgorithmMismatch` - Error type
+- [x] `ManifestError::MergeVersionMismatch` - Error type
+- [x] Full test coverage (10 tests)
+
+#### Directory-to-Manifest Diff (in `filesystem` crate)
+Location: `crates/filesystem/src/diff.rs`
+
+Note: This is a different implementation than the design's manifest-to-manifest diff.
+It compares filesystem state against a manifest (useful for incremental uploads).
+
+- [x] `DiffEngine` struct with `diff()` method
+- [x] `DiffMode` enum (Fast/Hash)
+- [x] `DiffOptions` struct
+- [x] `DiffResult` struct (added/modified/deleted/unchanged)
+- [x] `DiffStats` struct
+- [x] `FileEntry` struct
+- [x] `create_diff_manifest()` - Creates diff manifest with parent hash
+
+### ❌ Not Implemented
+
+#### diff.rs (in `model` crate) - Manifest-to-Manifest Comparison
+The design specifies manifest-to-manifest comparison functions:
+
+- [ ] `FileStatus` enum (Unchanged/New/Modified/Deleted)
+- [ ] `DiffEntry` struct
+- [ ] `ManifestDiff` struct
+- [ ] `compare_manifests()` - Compare two manifests by hash
+- [ ] `to_manifest_diff()` - Convert diff entries to summary
+- [ ] `fast_diff_files()` - Fast diff using mtime/size against manifest
+- [ ] `create_diff_manifest()` - Create diff manifest from two snapshots (model version)
+- [ ] `apply_diff_manifest()` - Apply diff to base snapshot to reconstruct current
+
+#### ManifestPathGroup
+- [ ] `ManifestPathGroup` struct for download aggregation
+- [ ] `add_manifest()` method
+- [ ] `combine()` method
+- [ ] `all_paths()` method
+- [ ] `file_count()` method
+
+#### Output File Detection
+- [ ] `SyncedAssetsMtime` struct
+- [ ] `record()` method
+- [ ] `record_from_manifest()` method
+- [ ] `is_modified()` method
+- [ ] `get_mtime()` method
+
+#### Output File Discovery
+- [ ] `OutputFile` struct
+- [ ] `discover_output_files()` function
+- [ ] `generate_output_manifest()` function
+- [ ] `is_path_within_directory()` helper
+
+#### Manifest Naming (may be in storage crate)
+- [x] `compute_manifest_name_hash()` - Implemented in `storage/src/manifest_storage.rs`
+- [x] `compute_root_path_hash()` - Implemented in `storage/src/manifest_storage.rs`
+- [x] `format_input_manifest_s3_key()` - Implemented in `storage/src/manifest_storage.rs`
+- [ ] `compute_manifest_hash()` - Hash of encoded manifest bytes
+
+### Notes
+
+1. The design's `diff.rs` (manifest-to-manifest) and the implemented `filesystem/src/diff.rs` (directory-to-manifest) serve different purposes:
+   - **Design's diff.rs**: Compare two manifests to detect changes between versions
+   - **Implemented diff.rs**: Compare filesystem state against a manifest for incremental uploads
+
+2. The `ManifestPathGroup` functionality may be partially covered by the download operations in `storage/src/manifest_storage.rs` which groups manifests by asset root.
+
+3. Output file detection (`SyncedAssetsMtime`) is needed for worker-side output sync operations.
