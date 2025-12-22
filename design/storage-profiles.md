@@ -1,5 +1,7 @@
 # Rusty Attachments: Storage Profiles & File System Locations
 
+**Status: ✅ IMPLEMENTED** - See `crates/profiles/`
+
 ## Overview
 
 Storage Profiles define how files are organized and handled based on their location. File System Locations within a profile classify paths as either LOCAL (uploaded with the job) or SHARED (accessible to workers, not uploaded).

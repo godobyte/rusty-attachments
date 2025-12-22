@@ -1,5 +1,7 @@
 # Rusty Attachments: Common Module Design
 
+**Status: ✅ IMPLEMENTED** - See `crates/common/`
+
 ## Overview
 
 This document defines shared types, constants, and utilities used across all rusty-attachments crates. The `common` crate has no dependencies on other rusty-attachments crates, making it safe to import from anywhere.

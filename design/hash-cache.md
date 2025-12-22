@@ -1,5 +1,7 @@
 # Rusty Attachments: Hash Cache Design
 
+**Status: ✅ IMPLEMENTED** - See `crates/storage/src/hash_cache/` and `crates/storage/src/s3_check_cache/`
+
 ## Overview
 
 Computing XXH128 hashes for large files is expensive. This document proposes a hash cache layer with a pluggable backend interface supporting SQLite (local) and DynamoDB (distributed).

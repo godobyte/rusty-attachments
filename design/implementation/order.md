@@ -39,7 +39,7 @@ Shared utilities referenced by all other crates.
 
 **Crate:** `filesystem` ✅ COMPLETE
 
-Directory scanning and manifest creation.
+Directory scanning, manifest creation, and diff operations.
 
 - [x] `GlobFilter` - Include/exclude pattern matching
 - [x] `expand_input_paths()` - Directory-to-file expansion
@@ -49,6 +49,11 @@ Directory scanning and manifest creation.
   - `snapshot()` - Create manifest from files
   - `snapshot_structure()` - Create manifest without hashing
 - [x] Symlink validation (security checks)
+- [x] `DiffEngine`
+  - `diff()` - Compare directory against manifest
+  - `create_diff_manifest()` - Create diff manifest with parentManifestHash
+- [x] `DiffMode` - Fast (mtime/size) vs Hash comparison
+- [x] `DiffOptions`, `DiffResult`, `DiffStats`, `FileEntry` structs
 
 ---
 

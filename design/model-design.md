@@ -1,5 +1,7 @@
 # Rusty Attachments: Model Module Design
 
+**Status: ✅ IMPLEMENTED** - See `crates/model/`
+
 ## Overview
 
 This document outlines the design for a Rust implementation of the Job Attachments manifest model with Python (PyO3) and WASM (wasm-bindgen) bindings.

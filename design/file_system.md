@@ -1,5 +1,7 @@
 # Rusty Attachments: File System Module Design
 
+**Status: ✅ IMPLEMENTED** - See `crates/filesystem/`
+
 ## Overview
 
 This document outlines the design for file system operations that scan directories and create manifests. The module provides two core operations:
