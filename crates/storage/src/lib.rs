@@ -36,19 +36,26 @@ pub use hash_cache::{
     DEFAULT_HASH_CACHE_TTL_DAYS,
 };
 pub use manifest_storage::{
-    build_partial_input_manifest_prefix, compute_manifest_name_hash, compute_root_path_hash,
-    float_to_iso_datetime_string, format_input_manifest_s3_key,
-    format_step_output_manifest_s3_key, format_task_output_manifest_s3_key, generate_random_guid,
-    get_manifest_content_type, upload_input_manifest, upload_step_output_manifest,
-    upload_task_output_manifest, ManifestDownloadMetadata, ManifestLocation, ManifestS3Metadata,
-    ManifestUploadResult, StepOutputManifestPath, TaskOutputManifestPath,
-    CONTENT_TYPE_V2023_03_03, CONTENT_TYPE_V2025_12_04_BETA, CONTENT_TYPE_V2025_12_04_BETA_DIFF,
+    build_output_manifest_prefix, build_partial_input_manifest_prefix, compute_manifest_name_hash,
+    compute_root_path_hash, discover_output_manifest_keys, download_input_manifest,
+    download_manifest, download_manifest_with_metadata, download_output_manifests_by_asset_root,
+    filter_output_manifest_objects, find_manifests_by_session_action_id,
+    float_to_iso_datetime_string, format_input_manifest_s3_key, format_job_output_prefix,
+    format_step_output_manifest_s3_key, format_step_output_prefix,
+    format_task_output_manifest_s3_key, format_task_output_prefix, generate_random_guid,
+    get_manifest_content_type, group_manifests_by_task, match_manifests_to_roots,
+    parse_manifest_keys, select_latest_manifests_per_task, upload_input_manifest,
+    upload_step_output_manifest, upload_task_output_manifest, DownloadedManifest,
+    JobAttachmentRoot, ManifestDownloadMetadata, ManifestLocation, ManifestMatchError,
+    ManifestS3Metadata, ManifestUploadResult, OutputManifestDiscoveryOptions, OutputManifestScope,
+    ParsedManifestKey, StepOutputManifestPath, TaskOutputManifestPath, CONTENT_TYPE_V2023_03_03,
+    CONTENT_TYPE_V2025_12_04_BETA, CONTENT_TYPE_V2025_12_04_BETA_DIFF,
 };
 pub use s3_check_cache::{
     S3CheckCache, S3CheckCacheBackend, S3CheckCacheEntry, S3CheckCacheError, S3CheckCacheKey,
     SqliteS3CheckCache,
 };
-pub use traits::{ObjectInfo, ProgressCallback, StorageClient};
+pub use traits::{ObjectInfo, ObjectMetadata, ProgressCallback, StorageClient};
 pub use types::{
     AwsCredentials, CasDownloadRequest, CasUploadRequest, ConflictResolution, DataDestination,
     DataSource, DownloadResult, OperationType, RetrySettings, S3Location, StorageSettings,

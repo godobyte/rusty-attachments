@@ -27,6 +27,21 @@ pub struct ObjectInfo {
     pub etag: Option<String>,
 }
 
+/// Extended object metadata from HEAD operations.
+#[derive(Debug, Clone, Default)]
+pub struct ObjectMetadata {
+    /// Object size in bytes.
+    pub size: u64,
+    /// Last modified timestamp (Unix epoch seconds).
+    pub last_modified: Option<i64>,
+    /// Content type.
+    pub content_type: Option<String>,
+    /// ETag (usually MD5 hash for non-multipart uploads).
+    pub etag: Option<String>,
+    /// User-defined metadata (x-amz-meta-* headers).
+    pub user_metadata: HashMap<String, String>,
+}
+
 /// Low-level S3 operations - implemented by each backend.
 #[async_trait]
 pub trait StorageClient: Send + Sync {
@@ -38,6 +53,23 @@ pub trait StorageClient: Send + Sync {
     /// Returns None if object doesn't exist.
     /// Implementations should include ExpectedBucketOwner if configured.
     async fn head_object(&self, bucket: &str, key: &str) -> Result<Option<u64>, StorageError>;
+
+    /// Get extended object metadata including user-defined metadata.
+    ///
+    /// Returns None if object doesn't exist.
+    /// Implementations should include ExpectedBucketOwner if configured.
+    ///
+    /// # Arguments
+    /// * `bucket` - S3 bucket name
+    /// * `key` - S3 object key
+    ///
+    /// # Returns
+    /// Object metadata including size, last_modified, content_type, and user metadata.
+    async fn head_object_with_metadata(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Option<ObjectMetadata>, StorageError>;
 
     /// Upload bytes to S3.
     async fn put_object(
