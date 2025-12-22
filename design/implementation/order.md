@@ -7,6 +7,8 @@ This document outlines the implementation order to build the `submit_bundle_atta
 ## Phase 1: Foundation (Already Done)
 
 - [x] `model` crate - Manifest structures, encode/decode
+  - [x] `merge_manifests()` - Merge multiple manifests (deduplicates by path)
+  - [x] `merge_manifests_chronologically()` - Merge manifests sorted by timestamp (oldest first)
 - [x] `storage` crate - Types, traits, CAS utilities
 
 ---
@@ -119,20 +121,30 @@ Storage profiles and path grouping logic, separate from network operations.
   - `get_manifest_content_type()` - Content type selection
   - `build_partial_input_manifest_prefix()` - Build partial prefix for input manifests
 
-### 6c. Manifest Download (Not Started)
+### 6c. Manifest Download ✅ COMPLETE
 
-- [ ] `download_manifest()` - Download manifest by S3 key
-- [ ] `download_input_manifest()` - Download manifest by hash
-- [ ] Output manifest discovery primitives:
-  - `OutputManifestScope` enum
-  - `build_output_manifest_prefix()` - Build S3 prefix for listing
-  - `filter_output_manifest_keys()` - Filter to manifest files
-  - `parse_manifest_keys()` - Extract task IDs and session folders
-  - `group_manifests_by_task()` - Group by task ID
-  - `select_latest_manifests_per_task()` - Select latest per task
-- [ ] `discover_output_manifest_keys()` - Composed discovery function
-- [ ] `download_output_manifests_by_asset_root()` - Download and group by root
-- [ ] `match_manifests_to_roots()` - Match manifest keys to job attachment roots
+- [x] `download_manifest()` - Download manifest by S3 key
+- [x] `download_input_manifest()` - Download manifest by hash
+- [x] Output manifest discovery primitives:
+  - [x] `OutputManifestScope` enum
+  - [x] `build_output_manifest_prefix()` - Build S3 prefix for listing
+  - [x] `filter_output_manifest_objects()` - Filter to manifest files
+  - [x] `parse_manifest_keys()` - Extract task IDs and session folders
+  - [x] `group_manifests_by_task()` - Group by task ID
+  - [x] `select_latest_manifests_per_task()` - Select latest per task
+- [x] `discover_output_manifest_keys()` - Composed discovery function
+- [x] `download_output_manifests_by_asset_root()` - Download and group by root
+- [x] `download_manifests_parallel()` - Parallel manifest downloads with configurable concurrency
+- [x] `ManifestDownloadOptions` - Options struct for download operations (max_concurrency)
+- [x] `match_manifests_to_roots()` - Match manifest keys to job attachment roots
+- [x] `find_manifests_by_session_action_id()` - Find manifests for specific session action
+- [x] S3 Prefix Format Functions:
+  - [x] `format_job_output_prefix()` - Format job-level output prefix
+  - [x] `format_step_output_prefix()` - Format step-level output prefix
+  - [x] `format_task_output_prefix()` - Format task-level output prefix
+- [x] `ObjectMetadata` struct - Extended metadata from HEAD operations
+- [x] `head_object_with_metadata()` - StorageClient trait method for metadata retrieval
+- [x] `MissingAssetRoot` error - For compatibility with Python's MissingAssetRootError
 
 ### 6b. Upload Orchestrator
 

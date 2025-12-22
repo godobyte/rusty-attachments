@@ -2,6 +2,9 @@
 
 use thiserror::Error;
 
+use crate::hash::HashAlgorithm;
+use crate::version::ManifestVersion;
+
 /// Errors that can occur during manifest operations.
 #[derive(Debug, Error)]
 pub enum ManifestError {
@@ -16,6 +19,18 @@ pub enum ManifestError {
 
     #[error("Validation error: {0}")]
     Validation(#[from] ValidationError),
+
+    #[error("Cannot merge manifests with different hash algorithms: expected {expected:?}, got {actual:?}")]
+    MergeHashAlgorithmMismatch {
+        expected: HashAlgorithm,
+        actual: HashAlgorithm,
+    },
+
+    #[error("Cannot merge manifests with different versions: expected {expected:?}, got {actual:?}")]
+    MergeVersionMismatch {
+        expected: ManifestVersion,
+        actual: ManifestVersion,
+    },
 }
 
 /// Validation errors for manifest entries.

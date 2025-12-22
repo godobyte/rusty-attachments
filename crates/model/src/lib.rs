@@ -6,6 +6,7 @@
 
 pub mod error;
 pub mod hash;
+pub mod merge;
 pub mod version;
 
 pub mod v2023_03_03;
@@ -17,6 +18,7 @@ mod encode;
 pub use decode::decode_manifest;
 pub use error::ManifestError;
 pub use hash::HashAlgorithm;
+pub use merge::{merge_manifests, merge_manifests_chronologically};
 pub use version::{ManifestType, ManifestVersion};
 
 /// Version-agnostic manifest wrapper.

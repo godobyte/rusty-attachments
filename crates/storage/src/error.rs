@@ -37,6 +37,13 @@ pub enum StorageError {
     #[error("Invalid configuration: {message}")]
     InvalidConfig { message: String },
 
+    /// Missing asset root in manifest metadata.
+    ///
+    /// This error occurs when downloading a manifest that doesn't have the
+    /// required `asset-root` or `asset-root-json` metadata field.
+    #[error("Failed to get asset root from metadata of output manifest: {s3_key}")]
+    MissingAssetRoot { s3_key: String },
+
     /// Other error.
     #[error("{message}")]
     Other { message: String },
@@ -53,6 +60,7 @@ impl StorageError {
             StorageError::IoError { .. } => false,
             StorageError::Cancelled => false,
             StorageError::InvalidConfig { .. } => false,
+            StorageError::MissingAssetRoot { .. } => false,
             StorageError::Other { .. } => false,
         }
     }

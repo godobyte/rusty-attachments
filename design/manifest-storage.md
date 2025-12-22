@@ -1,5 +1,7 @@
 # Rusty Attachments: Manifest Storage Design
 
+**Status: ✅ IMPLEMENTED** - See `crates/storage/src/manifest_storage.rs`
+
 ## Overview
 
 This document proposes a set of functions for uploading and downloading manifest files to/from S3. These operations are distinct from CAS data transfers - manifests are stored with specific naming conventions, metadata, and content types.

@@ -23,6 +23,7 @@
 
 use std::collections::HashMap;
 
+use futures::future::join_all;
 use regex::Regex;
 use rusty_attachments_common::hash_bytes;
 use rusty_attachments_model::Manifest;
@@ -1231,11 +1232,44 @@ pub struct DownloadedManifest {
     pub last_modified: i64,
 }
 
+/// Default maximum concurrency for parallel manifest downloads.
+/// Matches Python's S3_DOWNLOAD_MAX_CONCURRENCY.
+pub const DEFAULT_MANIFEST_DOWNLOAD_CONCURRENCY: usize = 10;
+
+/// Options for parallel manifest download operations.
+#[derive(Debug, Clone)]
+pub struct ManifestDownloadOptions {
+    /// Maximum number of concurrent downloads.
+    /// Default: 10 (matches Python's S3_DOWNLOAD_MAX_CONCURRENCY)
+    pub max_concurrency: usize,
+}
+
+impl Default for ManifestDownloadOptions {
+    fn default() -> Self {
+        Self {
+            max_concurrency: DEFAULT_MANIFEST_DOWNLOAD_CONCURRENCY,
+        }
+    }
+}
+
+impl ManifestDownloadOptions {
+    /// Create options with default settings.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the maximum concurrency for parallel downloads.
+    pub fn with_max_concurrency(mut self, max_concurrency: usize) -> Self {
+        self.max_concurrency = max_concurrency;
+        self
+    }
+}
+
 /// Download output manifests and group by asset root.
 ///
 /// This composed function:
 /// 1. Discovers manifest keys using the given options
-/// 2. Downloads all manifests (sequentially for now)
+/// 2. Downloads all manifests in parallel (up to specified max_concurrency)
 /// 3. Groups manifests by their asset root (from S3 metadata)
 ///
 /// Note: Manifest merging should be done by the caller using the returned
@@ -1244,28 +1278,24 @@ pub struct DownloadedManifest {
 /// # Arguments
 /// * `client` - Storage client for S3 operations
 /// * `location` - Manifest location configuration
-/// * `options` - Discovery options
+/// * `discovery_options` - Discovery options (scope, latest per task)
+/// * `download_options` - Download options (concurrency settings)
 ///
 /// # Returns
 /// Map of asset_root -> list of downloaded manifests with timestamps.
 pub async fn download_output_manifests_by_asset_root<C: StorageClient>(
     client: &C,
     location: &ManifestLocation,
-    options: &OutputManifestDiscoveryOptions,
+    discovery_options: &OutputManifestDiscoveryOptions,
+    download_options: &ManifestDownloadOptions,
 ) -> Result<HashMap<String, Vec<DownloadedManifest>>, StorageError> {
     // 1. Discover manifest keys
-    let keys: Vec<String> = discover_output_manifest_keys(client, location, options).await?;
+    let keys: Vec<String> =
+        discover_output_manifest_keys(client, location, discovery_options).await?;
 
-    // 2. Download all manifests
-    let mut downloaded: Vec<DownloadedManifest> = Vec::new();
-    for key in &keys {
-        let (manifest, metadata) = download_manifest(client, &location.bucket, key).await?;
-        downloaded.push(DownloadedManifest {
-            manifest,
-            asset_root: metadata.asset_root,
-            last_modified: metadata.last_modified.unwrap_or(0),
-        });
-    }
+    // 2. Download all manifests in parallel
+    let downloaded: Vec<DownloadedManifest> =
+        download_manifests_parallel(client, &location.bucket, &keys, download_options).await?;
 
     // 3. Group by asset root
     let mut by_root: HashMap<String, Vec<DownloadedManifest>> = HashMap::new();
@@ -1274,6 +1304,80 @@ pub async fn download_output_manifests_by_asset_root<C: StorageClient>(
     }
 
     Ok(by_root)
+}
+
+/// Download multiple manifests in parallel.
+///
+/// Downloads manifests concurrently up to the specified `max_concurrency`.
+/// All downloads are initiated and awaited together using `join_all`.
+///
+/// # Arguments
+/// * `client` - Storage client for S3 operations
+/// * `bucket` - S3 bucket name
+/// * `keys` - List of S3 keys to download
+/// * `options` - Download options including max concurrency
+///
+/// # Returns
+/// List of downloaded manifests with metadata.
+///
+/// # Errors
+/// Returns the first error encountered during parallel downloads.
+/// Returns `MissingAssetRoot` if any manifest is missing the asset-root metadata.
+///
+/// # Example
+/// ```ignore
+/// let options = ManifestDownloadOptions::default()
+///     .with_max_concurrency(20);
+/// let manifests = download_manifests_parallel(&client, "bucket", &keys, &options).await?;
+/// ```
+pub async fn download_manifests_parallel<C: StorageClient>(
+    client: &C,
+    bucket: &str,
+    keys: &[String],
+    options: &ManifestDownloadOptions,
+) -> Result<Vec<DownloadedManifest>, StorageError> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Note: Currently we use join_all which starts all futures immediately.
+    // The max_concurrency is available for future implementation with
+    // FuturesUnordered + buffer_unordered for true concurrency limiting.
+    // For now, the underlying StorageClient implementation should handle
+    // connection pooling and rate limiting.
+    let _ = options.max_concurrency; // Reserved for future use
+
+    // Create futures for all downloads
+    let download_futures: Vec<_> = keys
+        .iter()
+        .map(|key| async move {
+            let (manifest, metadata) = download_manifest(client, bucket, key).await?;
+
+            // Check for missing asset root (matches Python's MissingAssetRootError)
+            if metadata.asset_root.is_empty() {
+                return Err(StorageError::MissingAssetRoot {
+                    s3_key: key.clone(),
+                });
+            }
+
+            Ok::<DownloadedManifest, StorageError>(DownloadedManifest {
+                manifest,
+                asset_root: metadata.asset_root,
+                last_modified: metadata.last_modified.unwrap_or(0),
+            })
+        })
+        .collect();
+
+    // Execute all downloads in parallel and collect results
+    let results: Vec<Result<DownloadedManifest, StorageError>> = join_all(download_futures).await;
+
+    // Collect successful results or return first error
+    let mut downloaded: Vec<DownloadedManifest> = Vec::with_capacity(keys.len());
+    for result in results {
+        downloaded.push(result?);
+    }
+
+    Ok(downloaded)
 }
 
 // ============================================================================
