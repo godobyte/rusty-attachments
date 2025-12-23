@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/common",
     "crates/filesystem",
+    "crates/ja-deadline-utils",
     "crates/model",
     "crates/profiles",
     "crates/storage",

@@ -1,0 +1,23 @@
+[package]
+name = "ja-deadline-utils"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Deadline Cloud job attachment utilities"
+
+[dependencies]
+rusty-attachments-common = { path = "../common" }
+rusty-attachments-model = { path = "../model" }
+rusty-attachments-filesystem = { path = "../filesystem" }
+rusty-attachments-profiles = { path = "../profiles" }
+rusty-attachments-storage = { path = "../storage" }
+
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+log = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true
