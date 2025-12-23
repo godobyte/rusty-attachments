@@ -10,5 +10,14 @@ name = "rusty_attachments"
 crate-type = ["cdylib"]
 
 [dependencies]
+rusty-attachments-common = { path = "../common" }
 rusty-attachments-model = { path = "../model" }
-pyo3 = { version = "0.20", features = ["extension-module"] }
+rusty-attachments-filesystem = { path = "../filesystem" }
+rusty-attachments-profiles = { path = "../profiles" }
+rusty-attachments-storage = { path = "../storage" }
+rusty-attachments-storage-crt = { path = "../storage-crt" }
+ja-deadline-utils = { path = "../ja-deadline-utils" }
+
+pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }
+tokio = { version = "1.0", features = ["rt-multi-thread"] }
