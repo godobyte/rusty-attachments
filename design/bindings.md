@@ -1,8 +1,87 @@
-# Python Bindings (PyO3) Proposal
+# Python Bindings (PyO3)
 
 ## Overview
 
-This document outlines the APIs to export via PyO3 for building a Python CLI layer on top of the Rust job attachments library.
+This document outlines the APIs exported via PyO3 for building a Python CLI layer on top of the Rust job attachments library.
+
+---
+
+## Current Implementation Status
+
+### Implemented (Phase 1 - MVP)
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| `S3Location` | ✅ | S3 bucket and prefix configuration |
+| `ManifestLocation` | ✅ | Farm/queue manifest location |
+| `AssetReferences` | ✅ | Input files, output dirs, referenced paths |
+| `BundleSubmitOptions` | ✅ | Options for bundle submit |
+| `BundleSubmitResult` | ✅ | Result with attachments JSON and stats |
+| `SummaryStatistics` | ✅ | File/byte counts for operations |
+| `FileSystemLocation` | ✅ | Single location in storage profile |
+| `StorageProfile` | ✅ | Storage profile with locations |
+| `Manifest` | ✅ | Manifest wrapper (decode/encode) |
+| `submit_bundle_attachments_py()` | ✅ | Async job submission function |
+| `decode_manifest()` | ✅ | Parse manifest from JSON |
+| Exception classes | ✅ | `AttachmentError`, `StorageError`, `ValidationError` |
+
+### Not Yet Implemented (Phase 2+)
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| `sync_inputs()` | ❌ | Worker input download |
+| `sync_outputs()` | ❌ | Worker output upload |
+| `create_manifest()` | ❌ | Create manifest from directory |
+| `diff_manifests()` | ❌ | Compare two manifests |
+| Upload progress callback | ❌ | Separate callback for upload phase |
+
+---
+
+## Architecture Note: Single vs Multiple Python Files
+
+### Current Approach: Single Rust Module
+
+The Python bindings are implemented as a single compiled Rust extension (`rusty_attachments.so`/`.pyd`). This is the standard PyO3 approach and has these characteristics:
+
+**Pros:**
+- Single compilation unit = faster builds
+- All Rust code shares types directly
+- No Python import overhead between classes
+- Type stubs (`.pyi`) provide IDE support
+
+**Cons:**
+- Cannot split into multiple Python files at runtime
+- All classes appear in one module
+
+### Can Each Class Be in Its Own Python File?
+
+**Short answer: Not directly with PyO3.**
+
+PyO3 compiles Rust code into a single native extension module. The classes are defined in Rust, not Python, so they cannot be split into separate `.py` files.
+
+**Workarounds if needed:**
+
+1. **Re-export via Python wrapper package** (recommended if organization is important):
+   ```
+   rusty_attachments/
+   ├── __init__.py           # Re-exports everything
+   ├── _native.so            # Compiled Rust extension
+   ├── s3.py                 # from ._native import S3Location, ManifestLocation
+   ├── assets.py             # from ._native import AssetReferences
+   ├── submit.py             # from ._native import submit_bundle_attachments_py
+   └── manifest.py           # from ._native import Manifest, decode_manifest
+   ```
+
+2. **Multiple Rust crates** (not recommended):
+   - Would require separate compilation for each module
+   - Significant complexity for minimal benefit
+
+3. **Keep current approach with good documentation**:
+   - Use comprehensive docstrings in Rust
+   - Provide `.pyi` stub file for IDE support
+   - Organize by logical sections in documentation
+
+**Recommendation:** Keep the single-module approach. The `.pyi` stub file already provides excellent IDE support, and Sphinx can document the module well regardless of file organization.
 
 ---
 
@@ -397,6 +476,73 @@ async def submit_bundle_attachments(
 - `create_manifest()`, `load_manifest()`, `diff_manifests()`
 - Low-level upload/download functions
 - `GlobFilter` for custom filtering
+
+---
+
+## Sphinx Documentation
+
+The Python bindings include comprehensive docstrings compatible with Sphinx autodoc.
+
+### Documentation Features
+
+- **Module-level docstring**: Overview and quick-start example
+- **Class docstrings**: Description, attributes, and usage examples
+- **Method docstrings**: Args, Returns, Raises, and Examples sections
+- **Type stubs (`.pyi`)**: Full type annotations for IDE support
+
+### Building Sphinx Docs
+
+```bash
+# Install sphinx
+pip install sphinx sphinx-rtd-theme
+
+# Create docs directory
+mkdir docs && cd docs
+sphinx-quickstart
+
+# Add to conf.py:
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.napoleon']
+
+# Generate API docs
+sphinx-apidoc -o source/ ../rusty_attachments
+
+# Build HTML
+make html
+```
+
+### Docstring Format
+
+All docstrings follow Google style (compatible with `sphinx.ext.napoleon`):
+
+```python
+def submit_bundle_attachments_py(
+    region: str,
+    s3_location: S3Location,
+    ...
+) -> BundleSubmitResult:
+    """
+    Submit a job bundle with attachments.
+
+    This async function uploads input files to S3 CAS and returns
+    the attachments JSON payload for the CreateJob API.
+
+    Args:
+        region: AWS region (e.g., "us-west-2").
+        s3_location: S3Location configuration for CAS storage.
+        ...
+
+    Returns:
+        BundleSubmitResult containing attachments_json and statistics.
+
+    Raises:
+        StorageError: If S3 operations fail.
+        ValidationError: If input validation fails.
+
+    Example:
+        >>> result = await submit_bundle_attachments_py(...)
+        >>> print(result.attachments_json)
+    """
+```
 
 ---
 
