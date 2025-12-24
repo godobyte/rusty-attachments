@@ -349,17 +349,17 @@ impl<'a, C: StorageClient> UploadOrchestrator<'a, C> {
                 }
             }
             Manifest::V2025_12_04_beta(m) => {
-                for path in &m.paths {
+                for file in &m.files {
                     // Skip deleted entries and symlinks
-                    if path.deleted || path.symlink_target.is_some() {
+                    if file.delete || file.symlink_target.is_some() {
                         continue;
                     }
 
                     entries.push(UploadEntry {
-                        local_path: format!("{}/{}", source_root, path.path),
-                        hash: path.hash.clone(),
-                        chunkhashes: path.chunkhashes.clone(),
-                        size: path.size.unwrap_or(0),
+                        local_path: format!("{}/{}", source_root, file.name),
+                        hash: file.hash.clone(),
+                        chunkhashes: file.chunkhashes.clone(),
+                        size: file.size.unwrap_or(0),
                     });
                 }
             }

@@ -460,27 +460,27 @@ impl DiffEngine {
                 }
             }
             Manifest::V2025_12_04_beta(m) => {
-                for path in &m.paths {
+                for file in &m.files {
                     // Skip deleted entries and symlinks
-                    if path.deleted || path.symlink_target.is_some() {
+                    if file.delete || file.symlink_target.is_some() {
                         continue;
                     }
                     // Skip entries without size/mtime (deleted markers)
-                    let size: u64 = match path.size {
+                    let size: u64 = match file.size {
                         Some(s) => s,
                         None => continue,
                     };
-                    let mtime: i64 = match path.mtime {
+                    let mtime: i64 = match file.mtime {
                         Some(m) => m,
                         None => continue,
                     };
-                    if filter.is_empty() || filter.matches(&path.path) {
+                    if filter.is_empty() || filter.matches(&file.name) {
                         lookup.insert(
-                            path.path.clone(),
+                            file.name.clone(),
                             ManifestFileInfo {
                                 size,
                                 mtime,
-                                hash: path.hash.clone().unwrap_or_default(),
+                                hash: file.hash.clone().unwrap_or_default(),
                             },
                         );
                     }
@@ -498,9 +498,9 @@ impl DiffEngine {
             Manifest::V2025_12_04_beta(m) => m
                 .dirs
                 .iter()
-                .filter(|d| !d.deleted)
-                .filter(|d| filter.is_empty() || filter.matches(&d.path))
-                .map(|d| d.path.clone())
+                .filter(|d| !d.delete)
+                .filter(|d| filter.is_empty() || filter.matches(&d.name))
+                .map(|d| d.name.clone())
                 .collect(),
         }
     }

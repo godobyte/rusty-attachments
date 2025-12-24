@@ -55,21 +55,21 @@ fn build_from_v2(manifest: &v2025_12_04::AssetManifest) -> INodeManager {
 
     // Create explicit directories first
     for dir in &manifest.dirs {
-        if !dir.deleted {
-            manager.add_directory(&dir.path);
+        if !dir.delete {
+            manager.add_directory(&dir.name);
         }
     }
 
     // Process file entries
-    for entry in &manifest.paths {
+    for entry in &manifest.files {
         // Skip deleted entries
-        if entry.deleted {
+        if entry.delete {
             continue;
         }
 
         // Handle symlinks
         if let Some(ref target) = entry.symlink_target {
-            manager.add_symlink(&entry.path, target);
+            manager.add_symlink(&entry.name, target);
             continue;
         }
 
@@ -77,7 +77,7 @@ fn build_from_v2(manifest: &v2025_12_04::AssetManifest) -> INodeManager {
         if let Some(ref chunkhashes) = entry.chunkhashes {
             let content: FileContent = FileContent::Chunked(chunkhashes.clone());
             manager.add_file(
-                &entry.path,
+                &entry.name,
                 entry.size.unwrap_or(0),
                 entry.mtime.unwrap_or(0),
                 content,
@@ -91,7 +91,7 @@ fn build_from_v2(manifest: &v2025_12_04::AssetManifest) -> INodeManager {
         if let Some(ref hash) = entry.hash {
             let content: FileContent = FileContent::SingleHash(hash.clone());
             manager.add_file(
-                &entry.path,
+                &entry.name,
                 entry.size.unwrap_or(0),
                 entry.mtime.unwrap_or(0),
                 content,
@@ -154,11 +154,12 @@ mod tests {
     fn test_build_from_v2_with_symlink() {
         let dirs: Vec<v2025_12_04::ManifestDirectoryPath> =
             vec![v2025_12_04::ManifestDirectoryPath::new("subdir")];
-        let paths: Vec<v2025_12_04::ManifestFilePath> = vec![
+        let files: Vec<v2025_12_04::ManifestFilePath> = vec![
             v2025_12_04::ManifestFilePath::file("file.txt", "hash1", 100, 1000),
             v2025_12_04::ManifestFilePath::symlink("link.txt", "file.txt"),
         ];
-        let manifest: v2025_12_04::AssetManifest = v2025_12_04::AssetManifest::snapshot(dirs, paths);
+        let manifest: v2025_12_04::AssetManifest =
+            v2025_12_04::AssetManifest::snapshot(dirs, files);
 
         let manager: INodeManager = build_from_v2(&manifest);
 
@@ -179,10 +180,10 @@ mod tests {
     fn test_build_from_v2_with_chunked() {
         let chunkhashes: Vec<String> = vec!["chunk1".to_string(), "chunk2".to_string()];
         let size: u64 = 300 * 1024 * 1024; // 300MB
-        let paths: Vec<v2025_12_04::ManifestFilePath> =
+        let files: Vec<v2025_12_04::ManifestFilePath> =
             vec![v2025_12_04::ManifestFilePath::chunked("large.bin", chunkhashes, size, 1000)];
         let manifest: v2025_12_04::AssetManifest =
-            v2025_12_04::AssetManifest::snapshot(vec![], paths);
+            v2025_12_04::AssetManifest::snapshot(vec![], files);
 
         let manager: INodeManager = build_from_v2(&manifest);
 
@@ -193,12 +194,12 @@ mod tests {
 
     #[test]
     fn test_build_from_v2_skips_deleted() {
-        let paths: Vec<v2025_12_04::ManifestFilePath> = vec![
+        let files: Vec<v2025_12_04::ManifestFilePath> = vec![
             v2025_12_04::ManifestFilePath::file("keep.txt", "hash1", 100, 1000),
             v2025_12_04::ManifestFilePath::deleted("deleted.txt"),
         ];
         let manifest: v2025_12_04::AssetManifest =
-            v2025_12_04::AssetManifest::diff(vec![], paths, "parent_hash");
+            v2025_12_04::AssetManifest::diff(vec![], files, "parent_hash");
 
         let manager: INodeManager = build_from_v2(&manifest);
 

@@ -71,7 +71,7 @@ impl Manifest {
     pub fn file_count(&self) -> usize {
         match self {
             Manifest::V2023_03_03(m) => m.paths.len(),
-            Manifest::V2025_12_04_beta(m) => m.paths.len(),
+            Manifest::V2025_12_04_beta(m) => m.files.len(),
         }
     }
 }

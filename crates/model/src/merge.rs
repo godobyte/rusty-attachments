@@ -126,24 +126,24 @@ fn merge_v2023_manifests(manifests: &[Manifest]) -> Result<Option<Manifest>, Man
 /// Merge v2025-12-04-beta manifests.
 fn merge_v2025_manifests(manifests: &[Manifest]) -> Result<Option<Manifest>, ManifestError> {
     let mut merged_dirs: HashMap<String, ManifestDirectoryPath> = HashMap::new();
-    let mut merged_paths: HashMap<String, V2025Path> = HashMap::new();
+    let mut merged_files: HashMap<String, V2025Path> = HashMap::new();
 
     for manifest in manifests {
         if let Manifest::V2025_12_04_beta(m) = manifest {
             for dir in &m.dirs {
-                merged_dirs.insert(dir.path.clone(), dir.clone());
+                merged_dirs.insert(dir.name.clone(), dir.clone());
             }
-            for path in &m.paths {
-                merged_paths.insert(path.path.clone(), path.clone());
+            for file in &m.files {
+                merged_files.insert(file.name.clone(), file.clone());
             }
         }
     }
 
     let dirs: Vec<ManifestDirectoryPath> = merged_dirs.into_values().collect();
-    let paths: Vec<V2025Path> = merged_paths.into_values().collect();
+    let files: Vec<V2025Path> = merged_files.into_values().collect();
 
     Ok(Some(Manifest::V2025_12_04_beta(V2025Manifest::snapshot(
-        dirs, paths,
+        dirs, files,
     ))))
 }
 

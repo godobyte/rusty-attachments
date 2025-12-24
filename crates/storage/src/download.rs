@@ -181,8 +181,8 @@ impl<'a, C: StorageClient> DownloadOrchestrator<'a, C> {
         // Create directories first (v2 manifests)
         if let Manifest::V2025_12_04_beta(m) = manifest {
             for dir in &m.dirs {
-                if !dir.deleted {
-                    let dir_path: String = format!("{}/{}", destination_root, dir.path);
+                if !dir.delete {
+                    let dir_path: String = format!("{}/{}", destination_root, dir.name);
                     std::fs::create_dir_all(&dir_path).map_err(|e| StorageError::IoError {
                         path: dir_path,
                         message: e.to_string(),
@@ -355,20 +355,20 @@ impl<'a, C: StorageClient> DownloadOrchestrator<'a, C> {
                 }
             }
             Manifest::V2025_12_04_beta(m) => {
-                for path in &m.paths {
+                for file in &m.files {
                     // Skip deleted entries
-                    if path.deleted {
+                    if file.delete {
                         continue;
                     }
 
                     entries.push(DownloadEntry {
-                        relative_path: path.path.clone(),
-                        hash: path.hash.clone(),
-                        chunkhashes: path.chunkhashes.clone(),
-                        symlink_target: path.symlink_target.clone(),
-                        size: path.size.unwrap_or(0),
-                        mtime: path.mtime,
-                        runnable: path.runnable,
+                        relative_path: file.name.clone(),
+                        hash: file.hash.clone(),
+                        chunkhashes: file.chunkhashes.clone(),
+                        symlink_target: file.symlink_target.clone(),
+                        size: file.size.unwrap_or(0),
+                        mtime: file.mtime,
+                        runnable: file.runnable,
                     });
                 }
             }

@@ -10,7 +10,7 @@ use crate::Manifest;
 pub fn decode_manifest(json: &str) -> Result<Manifest, ManifestError> {
     let data: Value = serde_json::from_str(json)?;
 
-    let version_str = data
+    let version_str: &str = data
         .get("manifestVersion")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ManifestError::UnknownVersion("missing manifestVersion".to_string()))?;
@@ -56,9 +56,9 @@ mod tests {
         let json: &str = r#"{
             "hashAlg": "xxh128",
             "manifestVersion": "2025-12-04-beta",
-            "dirs": [{"path": "subdir"}],
+            "dirs": [{"name": "subdir"}],
             "files": [
-                {"path": "subdir/test.txt", "hash": "abc123", "size": 100, "mtime": 1234567890}
+                {"name": "subdir/test.txt", "hash": "abc123", "size": 100, "mtime": 1234567890}
             ],
             "totalSize": 100
         }"#;
@@ -195,15 +195,15 @@ mod tests {
             "manifestVersion": "2025-12-04-beta",
             "dirs": [],
             "files": [
-                {"path": "large.bin", "chunkhashes": ["hash1", "hash2"], "size": 314572801, "mtime": 1234567890}
+                {"name": "large.bin", "chunkhashes": ["hash1", "hash2"], "size": 314572801, "mtime": 1234567890}
             ],
             "totalSize": 314572801
         }"#;
 
         let manifest: Manifest = decode_manifest(json).unwrap();
         if let Manifest::V2025_12_04_beta(m) = manifest {
-            assert!(m.paths[0].chunkhashes.is_some());
-            assert_eq!(m.paths[0].chunkhashes.as_ref().unwrap().len(), 2);
+            assert!(m.files[0].chunkhashes.is_some());
+            assert_eq!(m.files[0].chunkhashes.as_ref().unwrap().len(), 2);
         } else {
             panic!("Expected V2025_12_04_beta manifest");
         }
@@ -216,14 +216,14 @@ mod tests {
             "manifestVersion": "2025-12-04-beta",
             "dirs": [],
             "files": [
-                {"path": "link.txt", "symlink_target": "target.txt"}
+                {"name": "link.txt", "symlink_target": "target.txt"}
             ],
             "totalSize": 0
         }"#;
 
         let manifest: Manifest = decode_manifest(json).unwrap();
         if let Manifest::V2025_12_04_beta(m) = manifest {
-            assert_eq!(m.paths[0].symlink_target, Some("target.txt".to_string()));
+            assert_eq!(m.files[0].symlink_target, Some("target.txt".to_string()));
         } else {
             panic!("Expected V2025_12_04_beta manifest");
         }
@@ -236,14 +236,14 @@ mod tests {
             "manifestVersion": "2025-12-04-beta",
             "dirs": [],
             "files": [
-                {"path": "script.sh", "hash": "abc123", "size": 512, "mtime": 1234567890, "runnable": true}
+                {"name": "script.sh", "hash": "abc123", "size": 512, "mtime": 1234567890, "runnable": true}
             ],
             "totalSize": 512
         }"#;
 
         let manifest: Manifest = decode_manifest(json).unwrap();
         if let Manifest::V2025_12_04_beta(m) = manifest {
-            assert!(m.paths[0].runnable);
+            assert!(m.files[0].runnable);
         } else {
             panic!("Expected V2025_12_04_beta manifest");
         }
