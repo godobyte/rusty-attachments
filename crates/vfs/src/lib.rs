@@ -11,10 +11,28 @@
 //! Layer 2: VFS Operations (lookup, read, readdir)
 //! Layer 1: Primitives (INodeManager, FileStore, MemoryPool)
 //! ```
+//!
+//! # Example
+//!
+//! ```ignore
+//! use rusty_attachments_vfs::{DeadlineVfs, VfsOptions};
+//! use rusty_attachments_model::Manifest;
+//!
+//! let manifest = Manifest::decode(&json_str)?;
+//! let store = Arc::new(MyFileStore::new());
+//! let vfs = DeadlineVfs::new(&manifest, store, VfsOptions::default())?;
+//! fuser::mount2(vfs, "/mnt/assets", &[MountOption::RO])?;
+//! ```
 
+pub mod builder;
+pub mod content;
 pub mod error;
+pub mod inode;
 pub mod memory_pool;
 pub mod options;
+
+#[cfg(feature = "fuse")]
+pub mod fuse;
 
 pub use error::VfsError;
 pub use memory_pool::{
@@ -24,3 +42,10 @@ pub use memory_pool::{
 pub use options::{
     KernelCacheOptions, PrefetchStrategy, ReadAheadOptions, TimeoutOptions, VfsOptions,
 };
+
+pub use builder::build_from_manifest;
+pub use content::FileStore;
+pub use inode::{FileContent, INode, INodeId, INodeManager, INodeType, ROOT_INODE};
+
+#[cfg(feature = "fuse")]
+pub use fuse::{mount, spawn_mount, DeadlineVfs, OpenFileInfo, VfsStats, VfsStatsCollector};

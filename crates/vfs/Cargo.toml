@@ -8,12 +8,13 @@ description = "FUSE-based virtual filesystem for Deadline Cloud job attachments"
 
 [features]
 default = []
-fuse = ["dep:fuser"]
+fuse = ["dep:fuser", "dep:libc"]
 
 [dependencies]
 async-trait = "0.1"
 fuser = { version = "0.14", optional = true }
 futures = "0.3"
+libc = { version = "0.2", optional = true }
 thiserror = "1.0"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
@@ -23,4 +24,14 @@ rusty-attachments-common = { path = "../common" }
 rusty-attachments-model = { path = "../model" }
 
 [dev-dependencies]
+ctrlc = "3.4"
+dirs = "5.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+# For mount_vfs example - uses existing storage infrastructure
+rusty-attachments-storage = { path = "../storage" }
+rusty-attachments-storage-crt = { path = "../storage-crt" }
+
+[[example]]
+name = "mount_vfs"
+required-features = ["fuse"]
