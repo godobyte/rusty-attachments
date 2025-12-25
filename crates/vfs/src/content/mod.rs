@@ -5,4 +5,4 @@
 
 mod store;
 
-pub use store::FileStore;
+pub use store::{FileStore, MemoryFileStore};

@@ -5,6 +5,8 @@
 //!
 //! Options:
 //!   --stats              Show live statistics dashboard
+//!   --writable           Mount in read-write mode with COW support
+//!   --cache-dir <path>   Directory for COW cache (default: /tmp/vfs-cache)
 //!   --bucket <name>      S3 bucket name (default: adeadlineja)
 //!   --root-prefix <pfx>  S3 root prefix (default: DeadlineCloud)
 //!   --region <region>    AWS region (default: us-west-2)
@@ -13,6 +15,10 @@
 //! Example:
 //!   cargo run -p rusty-attachments-vfs --features fuse --example mount_vfs -- \
 //!       /tmp/manifest.json ~/vfs --stats --bucket adeadlineja --root-prefix DeadlineCloud
+//!
+//!   # Writable mode:
+//!   cargo run -p rusty-attachments-vfs --features fuse --example mount_vfs -- \
+//!       /tmp/manifest.json ~/vfs --stats --writable --cache-dir /tmp/vfs-cow
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,7 +30,10 @@ use async_trait::async_trait;
 use rusty_attachments_model::{HashAlgorithm, Manifest};
 use rusty_attachments_storage::{S3Location, StorageClient, StorageSettings};
 use rusty_attachments_storage_crt::CrtStorageClient;
-use rusty_attachments_vfs::{DeadlineVfs, FileStore, VfsError, VfsOptions, VfsStatsCollector};
+use rusty_attachments_vfs::{
+    DeadlineVfs, FileStore, VfsError, VfsOptions, VfsStats, VfsStatsCollector,
+    WritableVfs, WritableVfsStats, WritableVfsStatsCollector, WriteOptions,
+};
 
 /// Adapter that wraps a StorageClient to implement FileStore.
 ///
@@ -72,9 +81,6 @@ impl<C: StorageClient + 'static> FileStore for StorageClientAdapter<C> {
 
     /// Retrieve a range of content for a hash from S3 CAS.
     ///
-    /// Note: Currently fetches full object then slices. Could be optimized
-    /// with S3 range requests if StorageClient adds get_object_range.
-    ///
     /// # Arguments
     /// * `hash` - Content hash
     /// * `algorithm` - Hash algorithm used
@@ -90,7 +96,6 @@ impl<C: StorageClient + 'static> FileStore for StorageClientAdapter<C> {
         offset: u64,
         size: u64,
     ) -> Result<Vec<u8>, VfsError> {
-        // TODO: Add get_object_range to StorageClient trait for efficiency
         let data: Vec<u8> = self.retrieve(hash, algorithm).await?;
         let start: usize = offset as usize;
         let end: usize = (offset + size).min(data.len() as u64) as usize;
@@ -128,6 +133,8 @@ struct CliArgs {
     mountpoint: PathBuf,
     show_stats: bool,
     use_mock: bool,
+    writable: bool,
+    cache_dir: PathBuf,
     bucket: String,
     root_prefix: String,
     region: String,
@@ -150,6 +157,8 @@ impl CliArgs {
         let mut mountpoint: Option<PathBuf> = None;
         let mut show_stats: bool = false;
         let mut use_mock: bool = false;
+        let mut writable: bool = false;
+        let mut cache_dir: PathBuf = PathBuf::from("/tmp/vfs-cache");
         let mut bucket: String = "adeadlineja".to_string();
         let mut root_prefix: String = "DeadlineCloud".to_string();
         let mut region: String = "us-west-2".to_string();
@@ -159,6 +168,11 @@ impl CliArgs {
             match args[i].as_str() {
                 "--stats" => show_stats = true,
                 "--mock" => use_mock = true,
+                "--writable" => writable = true,
+                "--cache-dir" => {
+                    i += 1;
+                    cache_dir = PathBuf::from(args.get(i)?);
+                }
                 "--bucket" => {
                     i += 1;
                     bucket = args.get(i)?.clone();
@@ -192,6 +206,8 @@ impl CliArgs {
             mountpoint: mountpoint?,
             show_stats,
             use_mock,
+            writable,
+            cache_dir,
             bucket,
             root_prefix,
             region,
@@ -207,14 +223,20 @@ impl CliArgs {
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --stats              Show live statistics dashboard (updates every 2s)");
+        eprintln!("  --writable           Mount in read-write mode with COW support");
+        eprintln!("  --cache-dir <path>   Directory for COW cache (default: /tmp/vfs-cache)");
         eprintln!("  --mock               Use mock file store instead of S3");
         eprintln!("  --bucket <name>      S3 bucket name (default: adeadlineja)");
         eprintln!("  --root-prefix <pfx>  S3 root prefix (default: DeadlineCloud)");
         eprintln!("  --region <region>    AWS region (default: us-west-2)");
         eprintln!();
-        eprintln!("Example:");
+        eprintln!("Examples:");
         eprintln!(
-            "  {} /tmp/manifest.json ~/vfs --stats --bucket adeadlineja --root-prefix DeadlineCloud",
+            "  {} /tmp/manifest.json ~/vfs --stats",
+            program
+        );
+        eprintln!(
+            "  {} /tmp/manifest.json ~/vfs --stats --writable --cache-dir /tmp/cow",
             program
         );
     }
@@ -243,19 +265,35 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Print VFS statistics dashboard.
+/// Truncate a path for display.
 ///
 /// # Arguments
-/// * `collector` - Stats collector to query
-fn print_stats(collector: &VfsStatsCollector) {
-    let stats = collector.collect();
+/// * `path` - Path to truncate
+/// * `max_len` - Maximum length
+///
+/// # Returns
+/// Truncated path string.
+fn truncate_path(path: &str, max_len: usize) -> String {
+    if path.len() <= max_len {
+        path.to_string()
+    } else {
+        format!("...{}", &path[path.len() - (max_len - 3)..])
+    }
+}
 
+
+/// Print read-only VFS statistics dashboard.
+///
+/// # Arguments
+/// * `stats` - Collected VFS stats
+fn print_readonly_stats(stats: &VfsStats) {
     // Clear screen and move cursor to top
     print!("\x1B[2J\x1B[H");
 
     println!("╔══════════════════════════════════════════════════════════════════╗");
     println!("║                    VFS Statistics Dashboard                       ║");
     println!("╠══════════════════════════════════════════════════════════════════╣");
+    println!("║ Mode: READ-ONLY                                                   ║");
     println!("║ Uptime: {:>5}s                                                   ║", stats.uptime_secs);
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ FILESYSTEM                                                        ║");
@@ -280,11 +318,7 @@ fn print_stats(collector: &VfsStatsCollector) {
     if stats.open_files > 0 {
         println!("║ OPEN FILES                                                        ║");
         for (i, file) in stats.open_file_list.iter().take(10).enumerate() {
-            let path_display: String = if file.path.len() > 50 {
-                format!("...{}", &file.path[file.path.len() - 47..])
-            } else {
-                file.path.clone()
-            };
+            let path_display: String = truncate_path(&file.path, 50);
             println!("║   {:>2}. {:50} {:>8} ║",
                      i + 1, path_display, format_bytes(file.size));
         }
@@ -300,7 +334,88 @@ fn print_stats(collector: &VfsStatsCollector) {
     println!("\nPress Ctrl+C to unmount and exit.");
 }
 
-/// Spawn a background thread that prints stats periodically.
+/// Print writable VFS statistics dashboard.
+///
+/// # Arguments
+/// * `stats` - Collected writable VFS stats
+fn print_writable_stats(stats: &WritableVfsStats) {
+    // Clear screen and move cursor to top
+    print!("\x1B[2J\x1B[H");
+
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║                    VFS Statistics Dashboard                       ║");
+    println!("╠══════════════════════════════════════════════════════════════════╣");
+    println!("║ Mode: READ-WRITE (COW)                                            ║");
+    println!("║ Uptime: {:>5}s                                                   ║", stats.uptime_secs);
+    println!("╠══════════════════════════════════════════════════════════════════╣");
+    println!("║ FILESYSTEM                                                        ║");
+    println!("║   Inodes: {:>10}                                              ║", stats.inode_count);
+    println!("╠══════════════════════════════════════════════════════════════════╣");
+    println!("║ MEMORY POOL                                                       ║");
+    println!("║   Blocks: {:>6} total, {:>6} in use                            ║",
+             stats.pool_stats.total_blocks, stats.pool_stats.in_use_blocks);
+    println!("║   Memory: {:>12} / {:>12} ({:.1}%)                   ║",
+             format_bytes(stats.pool_stats.current_size),
+             format_bytes(stats.pool_stats.max_size),
+             stats.pool_stats.utilization());
+    println!("║   Pending fetches: {:>4}                                          ║", stats.pool_stats.pending_fetches);
+    println!("╠══════════════════════════════════════════════════════════════════╣");
+    println!("║ CACHE                                                             ║");
+    println!("║   Hits: {:>10}  Allocations: {:>10}                       ║",
+             stats.cache_hits, stats.cache_allocations);
+    println!("║   Hit rate: {:>6.2}%                                              ║", stats.cache_hit_rate);
+    println!("╠══════════════════════════════════════════════════════════════════╣");
+
+    // Dirty files section
+    let summary = &stats.dirty_summary;
+    println!("║ COW DIRTY FILES                                                   ║");
+    println!("║   Modified: {:>3}    New: {:>3}    Deleted: {:>3}                    ║",
+             summary.modified_count, summary.new_count, summary.deleted_count);
+
+    if !stats.modified_files.is_empty() || !stats.new_files.is_empty() {
+        println!("║                                                                   ║");
+        println!("║   Dirty files:                                                    ║");
+
+        // Combine modified and new files for display
+        let mut display_count: usize = 0;
+        for file in stats.modified_files.iter().take(5) {
+            let path_display: String = truncate_path(&file.path, 42);
+            println!("║   {:>2}. {:42} {:>8}      ║",
+                     display_count + 1, path_display, format_bytes(file.size));
+            display_count += 1;
+        }
+        for file in stats.new_files.iter().take(5 - display_count.min(5)) {
+            let path_display: String = truncate_path(&file.path, 42);
+            println!("║   {:>2}. {:42} {:>8} [NEW]║",
+                     display_count + 1, path_display, format_bytes(file.size));
+            display_count += 1;
+        }
+
+        let total_dirty: usize = stats.modified_files.len() + stats.new_files.len();
+        if total_dirty > 5 {
+            println!("║   ... and {} more                                               ║",
+                     total_dirty - 5);
+        }
+    }
+
+    if !stats.deleted_files.is_empty() {
+        println!("║                                                                   ║");
+        println!("║   Deleted files:                                                  ║");
+        for (i, path) in stats.deleted_files.iter().take(3).enumerate() {
+            let path_display: String = truncate_path(path, 50);
+            println!("║   {:>2}. {:50}        ║", i + 1, path_display);
+        }
+        if stats.deleted_files.len() > 3 {
+            println!("║   ... and {} more                                               ║",
+                     stats.deleted_files.len() - 3);
+        }
+    }
+
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+    println!("\nPress Ctrl+C to unmount and exit.");
+}
+
+/// Spawn a background thread that prints read-only stats periodically.
 ///
 /// # Arguments
 /// * `collector` - Stats collector to query
@@ -309,14 +424,38 @@ fn print_stats(collector: &VfsStatsCollector) {
 ///
 /// # Returns
 /// Handle to the spawned thread.
-fn spawn_stats_thread(
+fn spawn_readonly_stats_thread(
     collector: VfsStatsCollector,
     running: Arc<AtomicBool>,
     interval_secs: u64,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while running.load(Ordering::SeqCst) {
-            print_stats(&collector);
+            let stats: VfsStats = collector.collect();
+            print_readonly_stats(&stats);
+            thread::sleep(Duration::from_secs(interval_secs));
+        }
+    })
+}
+
+/// Spawn a background thread that prints writable stats periodically.
+///
+/// # Arguments
+/// * `collector` - Stats collector to query
+/// * `running` - Atomic flag to control thread lifetime
+/// * `interval_secs` - Interval between stats updates
+///
+/// # Returns
+/// Handle to the spawned thread.
+fn spawn_writable_stats_thread(
+    collector: WritableVfsStatsCollector,
+    running: Arc<AtomicBool>,
+    interval_secs: u64,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while running.load(Ordering::SeqCst) {
+            let stats: WritableVfsStats = collector.collect();
+            print_writable_stats(&stats);
             thread::sleep(Duration::from_secs(interval_secs));
         }
     })
@@ -338,13 +477,51 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
     }
 }
 
+/// Create the file store based on CLI arguments.
+///
+/// # Arguments
+/// * `args` - CLI arguments
+/// * `runtime` - Tokio runtime for async operations
+///
+/// # Returns
+/// Arc-wrapped FileStore implementation.
+fn create_file_store(
+    args: &CliArgs,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<Arc<dyn FileStore>, Box<dyn std::error::Error>> {
+    if args.use_mock {
+        println!("Using mock file store");
+        Ok(Arc::new(MockFileStore))
+    } else {
+        println!(
+            "Using S3 file store: s3://{}/{}/Data/",
+            args.bucket, args.root_prefix
+        );
+
+        let settings = StorageSettings {
+            region: args.region.clone(),
+            ..Default::default()
+        };
+
+        let client: CrtStorageClient = runtime.block_on(CrtStorageClient::new(settings))?;
+        let location = S3Location::new(
+            args.bucket.clone(),
+            args.root_prefix.clone(),
+            "Data",
+            "Manifests",
+        );
+
+        Ok(Arc::new(StorageClientAdapter::new(client, location)))
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: CliArgs = match CliArgs::parse() {
         Some(a) => a,
         None => std::process::exit(1),
     };
 
-    let mountpoint: PathBuf = expand_tilde(args.mountpoint);
+    let mountpoint: PathBuf = expand_tilde(args.mountpoint.clone());
 
     println!("Loading manifest from: {}", args.manifest_path.display());
     let json: String = std::fs::read_to_string(&args.manifest_path)?;
@@ -364,32 +541,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime: tokio::runtime::Runtime = tokio::runtime::Runtime::new()?;
     let _guard = runtime.enter();
 
-    // Create file store (S3 via CrtStorageClient or mock)
-    let store: Arc<dyn FileStore> = if args.use_mock {
-        println!("Using mock file store");
-        Arc::new(MockFileStore)
-    } else {
-        println!(
-            "Using S3 file store: s3://{}/{}/Data/",
-            args.bucket, args.root_prefix
-        );
-
-        let settings = StorageSettings {
-            region: args.region,
-            ..Default::default()
-        };
-
-        let client: CrtStorageClient = runtime.block_on(CrtStorageClient::new(settings))?;
-
-        let location = S3Location::new(args.bucket, args.root_prefix, "Data", "Manifests");
-
-        Arc::new(StorageClientAdapter::new(client, location))
-    };
-
-    let vfs: DeadlineVfs = DeadlineVfs::new(&manifest, store, VfsOptions::default())?;
-
-    // Get stats collector before moving vfs
-    let stats_collector: VfsStatsCollector = vfs.stats_collector();
+    let store: Arc<dyn FileStore> = create_file_store(&args, &runtime)?;
 
     let running: Arc<AtomicBool> = Arc::new(AtomicBool::new(true));
     let r: Arc<AtomicBool> = running.clone();
@@ -398,26 +550,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         r.store(false, Ordering::SeqCst);
     })?;
 
-    println!("Mounting VFS at: {}", mountpoint.display());
+    if args.writable {
+        // Writable mode
+        let write_options = WriteOptions {
+            cache_dir: args.cache_dir.clone(),
+            ..Default::default()
+        };
 
-    let session = rusty_attachments_vfs::spawn_mount(vfs, &mountpoint)?;
+        println!("Mounting writable VFS at: {}", mountpoint.display());
+        println!("COW cache directory: {}", args.cache_dir.display());
 
-    // Spawn stats thread if requested
-    let stats_handle: Option<thread::JoinHandle<()>> = if args.show_stats {
-        Some(spawn_stats_thread(stats_collector, running.clone(), 2))
+        let vfs = WritableVfs::new(&manifest, store, VfsOptions::default(), write_options)?;
+        let stats_collector: WritableVfsStatsCollector = vfs.stats_collector();
+        let session = rusty_attachments_vfs::spawn_mount_writable(vfs, &mountpoint)?;
+
+        let stats_handle: Option<thread::JoinHandle<()>> = if args.show_stats {
+            Some(spawn_writable_stats_thread(stats_collector, running.clone(), 2))
+        } else {
+            println!("Press Ctrl+C to unmount and exit.");
+            None
+        };
+
+        while running.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        drop(session);
+
+        if let Some(handle) = stats_handle {
+            let _ = handle.join();
+        }
     } else {
-        println!("Press Ctrl+C to unmount and exit.");
-        None
-    };
+        // Read-only mode
+        println!("Mounting read-only VFS at: {}", mountpoint.display());
 
-    while running.load(Ordering::SeqCst) {
-        std::thread::sleep(Duration::from_millis(100));
-    }
+        let vfs: DeadlineVfs = DeadlineVfs::new(&manifest, store, VfsOptions::default())?;
+        let stats_collector: VfsStatsCollector = vfs.stats_collector();
+        let session = rusty_attachments_vfs::spawn_mount(vfs, &mountpoint)?;
 
-    drop(session);
+        let stats_handle: Option<thread::JoinHandle<()>> = if args.show_stats {
+            Some(spawn_readonly_stats_thread(stats_collector, running.clone(), 2))
+        } else {
+            println!("Press Ctrl+C to unmount and exit.");
+            None
+        };
 
-    if let Some(handle) = stats_handle {
-        let _ = handle.join();
+        while running.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        drop(session);
+
+        if let Some(handle) = stats_handle {
+            let _ = handle.join();
+        }
     }
 
     println!("Unmounted successfully.");

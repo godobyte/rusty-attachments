@@ -601,30 +601,262 @@ pub struct DirtyEntry {
 
 ### MaterializedCache
 
-Disk-based cache using real file paths (not CAS hashes). Implements `WriteCache` trait.
+Disk-based cache using real file paths with `.partN` suffix for sparse chunks.
 
 ```rust
-/// Disk cache storing files by their relative paths.
+/// Disk cache with hybrid storage strategy.
 ///
-/// Unlike CAS storage, files are stored in a directory structure
-/// mirroring the VFS paths. This allows easy inspection and
-/// recovery of modified files.
+/// - Small files (single chunk): stored by relative path
+/// - Large file chunks: stored as `{path}.part{N}` (only dirty chunks)
 ///
 /// # Directory Structure
 /// ```
 /// cache_dir/
-/// ├── .deleted/           # Tombstones for deleted files
-/// │   └── path/to/file    # Empty file marking deletion
-/// └── path/
-///     └── to/
-///         └── file.txt    # Actual file content
+/// ├── .deleted/                    # Tombstones for deleted files
+/// │   └── path/to/file             # Empty file marking deletion
+/// ├── .meta/                       # Metadata for chunked files
+/// │   └── path/to/large_video.mp4.json  # Chunk info
+/// └── path/to/
+///     ├── small_file.txt           # Small file - full content
+///     ├── large_video.mp4.part4    # Only dirty chunk 4
+///     └── large_video.mp4.part7    # Only dirty chunk 7
 /// ```
 pub struct MaterializedCache {
     /// Root directory for cache storage.
     cache_dir: PathBuf,
     /// Directory for deletion tombstones.
     deleted_dir: PathBuf,
+    /// Directory for chunked file metadata.
+    meta_dir: PathBuf,
 }
+
+/// Metadata for a chunked file in the cache.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkedFileMeta {
+    /// Total number of chunks.
+    pub chunk_count: u32,
+    /// Original chunk hashes (from manifest).
+    pub original_hashes: Vec<String>,
+    /// Which chunks are dirty (stored as .partN files).
+    pub dirty_chunks: Vec<u32>,
+    /// Total file size.
+    pub total_size: u64,
+}
+
+impl MaterializedCache {
+    /// Create a new materialized cache.
+    pub fn new(cache_dir: PathBuf) -> std::io::Result<Self> {
+        let deleted_dir: PathBuf = cache_dir.join(".deleted");
+        let meta_dir: PathBuf = cache_dir.join(".meta");
+        std::fs::create_dir_all(&cache_dir)?;
+        std::fs::create_dir_all(&deleted_dir)?;
+        std::fs::create_dir_all(&meta_dir)?;
+
+        Ok(Self {
+            cache_dir,
+            deleted_dir,
+            meta_dir,
+        })
+    }
+
+    /// Write a dirty chunk to cache.
+    ///
+    /// # Arguments
+    /// * `rel_path` - Relative path of the file
+    /// * `chunk_index` - Chunk index (0-based)
+    /// * `data` - Chunk data
+    pub fn write_chunk(
+        &self,
+        rel_path: &str,
+        chunk_index: u32,
+        data: &[u8],
+    ) -> std::io::Result<()> {
+        let chunk_path: PathBuf = self.chunk_path(rel_path, chunk_index);
+
+        if let Some(parent) = chunk_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Write atomically
+        let temp_path: PathBuf = chunk_path.with_extension("tmp");
+        std::fs::write(&temp_path, data)?;
+        std::fs::rename(&temp_path, &chunk_path)?;
+
+        Ok(())
+    }
+
+    /// Read a dirty chunk from cache.
+    ///
+    /// # Arguments
+    /// * `rel_path` - Relative path of the file
+    /// * `chunk_index` - Chunk index
+    pub fn read_chunk(
+        &self,
+        rel_path: &str,
+        chunk_index: u32,
+    ) -> std::io::Result<Option<Vec<u8>>> {
+        let chunk_path: PathBuf = self.chunk_path(rel_path, chunk_index);
+
+        if chunk_path.exists() {
+            Ok(Some(std::fs::read(&chunk_path)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get path to a chunk file.
+    ///
+    /// # Arguments
+    /// * `rel_path` - Relative path of the file
+    /// * `chunk_index` - Chunk index
+    fn chunk_path(&self, rel_path: &str, chunk_index: u32) -> PathBuf {
+        self.cache_dir.join(format!("{}.part{}", rel_path, chunk_index))
+    }
+
+    /// Write metadata for a chunked file.
+    ///
+    /// # Arguments
+    /// * `rel_path` - Relative path of the file
+    /// * `meta` - Chunk metadata
+    pub fn write_chunked_meta(
+        &self,
+        rel_path: &str,
+        meta: &ChunkedFileMeta,
+    ) -> std::io::Result<()> {
+        let meta_path: PathBuf = self.meta_dir.join(format!("{}.json", rel_path));
+
+        if let Some(parent) = meta_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let json: String = serde_json::to_string_pretty(meta)?;
+        std::fs::write(&meta_path, json)?;
+
+        Ok(())
+    }
+
+    /// Read metadata for a chunked file.
+    ///
+    /// # Arguments
+    /// * `rel_path` - Relative path of the file
+    pub fn read_chunked_meta(&self, rel_path: &str) -> std::io::Result<Option<ChunkedFileMeta>> {
+        let meta_path: PathBuf = self.meta_dir.join(format!("{}.json", rel_path));
+
+        if meta_path.exists() {
+            let json: String = std::fs::read_to_string(&meta_path)?;
+            let meta: ChunkedFileMeta = serde_json::from_str(&json)?;
+            Ok(Some(meta))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// List all dirty chunks for a file.
+    ///
+    /// # Arguments
+    /// * `rel_path` - Relative path of the file
+    pub fn list_dirty_chunks(&self, rel_path: &str) -> std::io::Result<Vec<u32>> {
+        let parent: PathBuf = self.cache_dir.join(
+            Path::new(rel_path).parent().unwrap_or(Path::new(""))
+        );
+        let file_name: &str = Path::new(rel_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        let mut chunks: Vec<u32> = Vec::new();
+
+        if parent.exists() {
+            for entry in std::fs::read_dir(&parent)? {
+                let entry = entry?;
+                let name: String = entry.file_name().to_string_lossy().to_string();
+
+                // Match pattern: {filename}.part{N}
+                if let Some(rest) = name.strip_prefix(&format!("{}.", file_name)) {
+                    if let Some(idx_str) = rest.strip_prefix("part") {
+                        if let Ok(idx) = idx_str.parse::<u32>() {
+                            chunks.push(idx);
+                        }
+                    }
+                }
+            }
+        }
+
+        chunks.sort();
+        Ok(chunks)
+    }
+}
+```
+
+### Flush to Disk: Small vs Chunked Files
+
+```rust
+impl DirtyFileManager {
+    /// Flush dirty file to disk cache.
+    async fn flush_to_disk(&self, inode_id: INodeId) -> Result<(), VfsError> {
+        let guard = self.dirty_files.read().unwrap();
+        let dirty: &DirtyFile = guard.get(&inode_id)
+            .ok_or(VfsError::InodeNotFound(inode_id))?;
+
+        if dirty.state() == DirtyState::Deleted {
+            self.cache.delete_file(dirty.rel_path()).await?;
+            return Ok(());
+        }
+
+        match &dirty.content {
+            DirtyContent::Small { data } => {
+                // Small file - write entire content
+                self.cache.write_file(dirty.rel_path(), data).await?;
+            }
+            DirtyContent::Chunked {
+                original_chunks,
+                dirty_chunks,
+                loaded_chunks,
+                total_size,
+                ..
+            } => {
+                // Large file - write only dirty chunks as .partN files
+                for &chunk_idx in dirty_chunks {
+                    if let Some(chunk_data) = loaded_chunks.get(&chunk_idx) {
+                        self.cache.write_chunk(
+                            dirty.rel_path(),
+                            chunk_idx,
+                            chunk_data,
+                        )?;
+                    }
+                }
+
+                // Write metadata for later assembly
+                let meta = ChunkedFileMeta {
+                    chunk_count: original_chunks.len() as u32,
+                    original_hashes: original_chunks.clone(),
+                    dirty_chunks: dirty_chunks.iter().copied().collect(),
+                    total_size: *total_size,
+                };
+                self.cache.write_chunked_meta(dirty.rel_path(), &meta)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+```
+
+### Disk Layout Example
+
+After modifying chunks 4 and 7 of a 2GB video:
+
+```
+cache_dir/
+├── .meta/
+│   └── renders/
+│       └── final_video.mp4.json    # {"chunk_count":8,"dirty_chunks":[4,7],...}
+└── renders/
+    ├── final_video.mp4.part4       # 256MB - dirty chunk 4
+    └── final_video.mp4.part7       # 256MB - dirty chunk 7
+```
+
+Total disk usage: 512MB (not 2GB)
 
 #[async_trait]
 impl WriteCache for MaterializedCache {
@@ -2047,7 +2279,598 @@ impl DirtyFile {
 
 ---
 
-## Concurrent Access: Multiple Readers/Writers
+## Operation Analysis & Edge Cases
+
+### File Operations Matrix
+
+| Operation | Small File | Chunked File (single chunk) | Chunked File (span boundary) |
+|-----------|------------|----------------------------|------------------------------|
+| **create** | ✅ Empty Vec | N/A (starts small) | N/A |
+| **read clean** | ✅ MemoryPool | ✅ MemoryPool | ✅ MemoryPool |
+| **read dirty** | ✅ From Vec | ✅ Loaded or fetch | ✅ Loaded or fetch |
+| **write** | ✅ Modify Vec | ✅ Load chunk, modify | ✅ Load both chunks |
+| **truncate shrink** | ✅ Vec::truncate | ✅ Drop chunks | ✅ Adjust last chunk |
+| **truncate extend** | ✅ Vec::resize | ✅ Update total_size | ✅ Update total_size |
+| **delete** | ✅ Tombstone | ✅ Tombstone | ✅ Tombstone |
+| **small→chunked** | ✅ Auto-convert | N/A | N/A |
+
+### Read from Dirty Chunked File
+
+When reading a dirty chunked file, some chunks may be loaded (dirty or clean-read) and others unloaded:
+
+```rust
+impl DirtyFile {
+    /// Read from file content.
+    ///
+    /// # Arguments
+    /// * `offset` - Byte offset to read from
+    /// * `size` - Maximum bytes to read
+    /// * `read_store` - Fallback store for unloaded chunks (chunked files only)
+    ///
+    /// # Returns
+    /// Data read from the file.
+    pub async fn read(
+        &self,
+        offset: u64,
+        size: u32,
+        read_store: &dyn FileStore,
+    ) -> Result<Vec<u8>, VfsError> {
+        match &self.content {
+            DirtyContent::Small { data } => {
+                // Small file - read directly from Vec
+                let start: usize = (offset as usize).min(data.len());
+                let end: usize = (offset as u64 + size as u64).min(data.len() as u64) as usize;
+                Ok(data[start..end].to_vec())
+            }
+            DirtyContent::Chunked { .. } => {
+                self.read_chunked(offset, size, read_store).await
+            }
+        }
+    }
+
+    /// Read from a chunked dirty file.
+    ///
+    /// # Arguments
+    /// * `offset` - Byte offset
+    /// * `size` - Bytes to read
+    /// * `read_store` - Fallback for unloaded chunks
+    async fn read_chunked(
+        &self,
+        offset: u64,
+        size: u32,
+        read_store: &dyn FileStore,
+    ) -> Result<Vec<u8>, VfsError> {
+        let DirtyContent::Chunked {
+            original_chunks,
+            chunk_size,
+            total_size,
+            loaded_chunks,
+            ..
+        } = &self.content else {
+            unreachable!()
+        };
+
+        // Clamp read to file size
+        let read_end: u64 = (offset + size as u64).min(*total_size);
+        if offset >= *total_size {
+            return Ok(Vec::new());
+        }
+        let actual_size: u64 = read_end - offset;
+
+        let start_chunk: u32 = (offset / chunk_size) as u32;
+        let end_chunk: u32 = ((read_end - 1) / chunk_size) as u32;
+
+        let mut result: Vec<u8> = Vec::with_capacity(actual_size as usize);
+
+        for chunk_idx in start_chunk..=end_chunk {
+            // Get chunk data - from loaded cache or fetch from S3
+            let chunk_data: Vec<u8> = if let Some(data) = loaded_chunks.get(&chunk_idx) {
+                data.clone()
+            } else if (chunk_idx as usize) < original_chunks.len() {
+                // Fetch from S3 using original hash
+                let hash: &str = &original_chunks[chunk_idx as usize];
+                read_store.retrieve(hash, HashAlgorithm::Xxh128).await?
+            } else {
+                // Chunk beyond original file (sparse extension) - return zeros
+                let chunk_len: usize = (*chunk_size as usize).min(
+                    (*total_size - chunk_idx as u64 * chunk_size) as usize
+                );
+                vec![0u8; chunk_len]
+            };
+
+            // Calculate slice within this chunk
+            let chunk_start_offset: u64 = chunk_idx as u64 * chunk_size;
+            let read_start: usize = if chunk_idx == start_chunk {
+                (offset - chunk_start_offset) as usize
+            } else {
+                0
+            };
+            let read_end_in_chunk: usize = if chunk_idx == end_chunk {
+                (read_end - chunk_start_offset) as usize
+            } else {
+                chunk_data.len()
+            };
+
+            // Handle case where chunk_data is shorter than expected (truncated chunk)
+            let actual_end: usize = read_end_in_chunk.min(chunk_data.len());
+            if read_start < actual_end {
+                result.extend_from_slice(&chunk_data[read_start..actual_end]);
+            }
+        }
+
+        Ok(result)
+    }
+}
+```
+
+### Write to Dirty File (Including Boundary Spanning)
+
+```rust
+impl DirtyFileManager {
+    /// Write data to a dirty file.
+    ///
+    /// Handles both small files and chunked files, including writes
+    /// that span chunk boundaries.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID of the file
+    /// * `offset` - Byte offset to write at
+    /// * `data` - Data to write
+    ///
+    /// # Returns
+    /// Number of bytes written.
+    pub async fn write(
+        &self,
+        inode_id: INodeId,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<usize, VfsError> {
+        // Ensure file is dirty (COW if needed)
+        self.cow_copy(inode_id).await?;
+
+        // Perform write
+        let bytes_written: usize = {
+            let mut guard = self.dirty_files.write().unwrap();
+            let dirty: &mut DirtyFile = guard.get_mut(&inode_id)
+                .ok_or(VfsError::InodeNotFound(inode_id))?;
+
+            match &mut dirty.content {
+                DirtyContent::Small { data: file_data } => {
+                    Self::write_small(file_data, offset, data)
+                }
+                DirtyContent::Chunked { .. } => {
+                    self.write_chunked(dirty, offset, data).await?
+                }
+            }
+        };
+
+        // Check if small file should convert to chunked
+        {
+            let mut guard = self.dirty_files.write().unwrap();
+            if let Some(dirty) = guard.get_mut(&inode_id) {
+                dirty.maybe_convert_to_chunked();
+            }
+        }
+
+        // Flush to disk cache
+        self.flush_to_disk(inode_id).await?;
+
+        Ok(bytes_written)
+    }
+
+    /// Write to a small file's data buffer.
+    ///
+    /// # Arguments
+    /// * `file_data` - The file's data Vec
+    /// * `offset` - Byte offset
+    /// * `data` - Data to write
+    fn write_small(file_data: &mut Vec<u8>, offset: u64, data: &[u8]) -> usize {
+        let offset: usize = offset as usize;
+        let end: usize = offset + data.len();
+
+        // Extend file if needed
+        if end > file_data.len() {
+            file_data.resize(end, 0);
+        }
+
+        file_data[offset..end].copy_from_slice(data);
+        data.len()
+    }
+
+    /// Write to a chunked file, handling boundary spanning.
+    ///
+    /// # Arguments
+    /// * `dirty` - The dirty file
+    /// * `offset` - Byte offset
+    /// * `data` - Data to write
+    async fn write_chunked(
+        &self,
+        dirty: &mut DirtyFile,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<usize, VfsError> {
+        let DirtyContent::Chunked {
+            original_chunks,
+            chunk_size,
+            total_size,
+            loaded_chunks,
+            dirty_chunks,
+        } = &mut dirty.content else {
+            unreachable!()
+        };
+
+        let write_end: u64 = offset + data.len() as u64;
+        let start_chunk: u32 = (offset / *chunk_size) as u32;
+        let end_chunk: u32 = if data.is_empty() {
+            start_chunk
+        } else {
+            ((write_end - 1) / *chunk_size) as u32
+        };
+
+        let mut data_offset: usize = 0;
+
+        for chunk_idx in start_chunk..=end_chunk {
+            // Ensure chunk is loaded
+            if !loaded_chunks.contains_key(&chunk_idx) {
+                let chunk_data: Vec<u8> = if (chunk_idx as usize) < original_chunks.len() {
+                    // Fetch existing chunk from S3
+                    let hash: &str = &original_chunks[chunk_idx as usize];
+                    self.read_store.retrieve(hash, HashAlgorithm::Xxh128).await?
+                } else {
+                    // New chunk beyond original file - create empty
+                    Vec::new()
+                };
+                loaded_chunks.insert(chunk_idx, chunk_data);
+            }
+
+            // Calculate write range within this chunk
+            let chunk_start_offset: u64 = chunk_idx as u64 * *chunk_size;
+            let write_start_in_chunk: usize = if chunk_idx == start_chunk {
+                (offset - chunk_start_offset) as usize
+            } else {
+                0
+            };
+            let write_end_in_chunk: usize = if chunk_idx == end_chunk {
+                (write_end - chunk_start_offset) as usize
+            } else {
+                *chunk_size as usize
+            };
+            let write_len: usize = write_end_in_chunk - write_start_in_chunk;
+
+            // Apply write to chunk
+            let chunk: &mut Vec<u8> = loaded_chunks.get_mut(&chunk_idx).unwrap();
+
+            // Extend chunk if writing beyond current length
+            if write_end_in_chunk > chunk.len() {
+                chunk.resize(write_end_in_chunk, 0);
+            }
+
+            chunk[write_start_in_chunk..write_end_in_chunk]
+                .copy_from_slice(&data[data_offset..data_offset + write_len]);
+
+            // Mark chunk as dirty
+            dirty_chunks.insert(chunk_idx);
+
+            data_offset += write_len;
+        }
+
+        // Update total file size if we wrote beyond end
+        if write_end > *total_size {
+            *total_size = write_end;
+        }
+
+        dirty.mtime = SystemTime::now();
+
+        Ok(data.len())
+    }
+}
+```
+
+### Truncate Chunked File
+
+```rust
+impl DirtyFile {
+    /// Truncate a chunked file to a new size.
+    ///
+    /// # Arguments
+    /// * `new_size` - New file size in bytes
+    ///
+    /// # Behavior
+    /// - Shrink: drops excess chunks, truncates last chunk if needed
+    /// - Extend: updates total_size only (sparse - reads beyond old size return zeros)
+    fn truncate_chunked(&mut self, new_size: u64) {
+        let DirtyContent::Chunked {
+            original_chunks,
+            chunk_size,
+            total_size,
+            loaded_chunks,
+            dirty_chunks,
+        } = &mut self.content else {
+            return;
+        };
+
+        let old_size: u64 = *total_size;
+
+        if new_size >= old_size {
+            // Extending - just update size (sparse extension)
+            // Reads beyond old_size will return zeros until written
+            *total_size = new_size;
+            self.mtime = SystemTime::now();
+            return;
+        }
+
+        // Shrinking
+        let new_chunk_count: u32 = if new_size == 0 {
+            0
+        } else {
+            ((new_size - 1) / *chunk_size + 1) as u32
+        };
+        let old_chunk_count: u32 = original_chunks.len() as u32;
+
+        // Remove chunks beyond new size
+        for chunk_idx in new_chunk_count..old_chunk_count {
+            loaded_chunks.remove(&chunk_idx);
+            dirty_chunks.remove(&chunk_idx);
+        }
+
+        // Truncate original_chunks list (for new files with no originals, this is a no-op)
+        if new_chunk_count < original_chunks.len() as u32 {
+            original_chunks.truncate(new_chunk_count as usize);
+        }
+
+        // Truncate last chunk if it's loaded and new size doesn't align to chunk boundary
+        if new_chunk_count > 0 {
+            let last_chunk_idx: u32 = new_chunk_count - 1;
+            let last_chunk_end: u64 = new_size - (last_chunk_idx as u64 * *chunk_size);
+
+            if let Some(chunk_data) = loaded_chunks.get_mut(&last_chunk_idx) {
+                if (last_chunk_end as usize) < chunk_data.len() {
+                    chunk_data.truncate(last_chunk_end as usize);
+                    dirty_chunks.insert(last_chunk_idx);
+                }
+            }
+        }
+
+        *total_size = new_size;
+        self.mtime = SystemTime::now();
+    }
+
+    /// Truncate a small file.
+    ///
+    /// # Arguments
+    /// * `new_size` - New file size in bytes
+    fn truncate_small(&mut self, new_size: u64) {
+        if let DirtyContent::Small { data } = &mut self.content {
+            let new_len: usize = new_size as usize;
+            if new_len < data.len() {
+                data.truncate(new_len);
+            } else {
+                data.resize(new_len, 0);
+            }
+            self.mtime = SystemTime::now();
+        }
+    }
+
+    /// Truncate file to new size (dispatches to small or chunked).
+    ///
+    /// # Arguments
+    /// * `new_size` - New file size in bytes
+    pub fn truncate(&mut self, new_size: u64) {
+        match &self.content {
+            DirtyContent::Small { .. } => self.truncate_small(new_size),
+            DirtyContent::Chunked { .. } => self.truncate_chunked(new_size),
+        }
+
+        // Check if small file grew past chunk threshold
+        self.maybe_convert_to_chunked();
+    }
+}
+```
+
+### Truncate Edge Cases
+
+| Scenario | Before | After | Action |
+|----------|--------|-------|--------|
+| Shrink within chunk | 300MB (2 chunks) | 200MB | Keep chunk 0, truncate to 200MB |
+| Shrink to zero | 1GB (4 chunks) | 0 | Remove all chunks |
+| Shrink exact boundary | 512MB (2 chunks) | 256MB | Keep chunk 0 only |
+| Extend small | 100MB | 200MB | Resize Vec, fill zeros |
+| Extend chunked | 512MB (2 chunks) | 1GB | Update total_size only (sparse) |
+| Extend then write | 512MB → 1GB → write@800MB | | Fetch/create chunk 3 on write |
+```
+
+### Small File Growing to Chunked
+
+```rust
+impl DirtyFile {
+    /// Check if small file should convert to chunked after write.
+    fn maybe_convert_to_chunked(&mut self) {
+        if let DirtyContent::Small { data } = &self.content {
+            if data.len() as u64 > CHUNK_SIZE_V2 {
+                // Convert to chunked
+                let chunk_size: u64 = CHUNK_SIZE_V2;
+                let mut loaded_chunks: HashMap<u32, Vec<u8>> = HashMap::new();
+                let mut dirty_chunks: HashSet<u32> = HashSet::new();
+
+                for (idx, chunk) in data.chunks(chunk_size as usize).enumerate() {
+                    loaded_chunks.insert(idx as u32, chunk.to_vec());
+                    dirty_chunks.insert(idx as u32); // All chunks are dirty (new file)
+                }
+
+                self.content = DirtyContent::Chunked {
+                    original_chunks: Vec::new(), // No original hashes (new file)
+                    chunk_size,
+                    total_size: data.len() as u64,
+                    loaded_chunks,
+                    dirty_chunks,
+                };
+            }
+        }
+    }
+}
+```
+
+---
+
+## Multi-threaded Access
+
+### Concurrency Model
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         DirtyFileManager                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  dirty_files: RwLock<HashMap<INodeId, DirtyFile>>                   │    │
+│  │                                                                      │    │
+│  │  - Read lock: multiple concurrent reads                             │    │
+│  │  - Write lock: COW, write, truncate, delete                         │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Race Condition Fixes
+
+#### 1. COW Race (Double Fetch)
+
+```rust
+impl DirtyFileManager {
+    /// Perform COW with proper locking to prevent double fetch.
+    async fn cow_copy(&self, inode_id: INodeId) -> Result<(), VfsError> {
+        // Fast path: already dirty
+        if self.dirty_files.read().unwrap().contains_key(&inode_id) {
+            return Ok(());
+        }
+
+        // Slow path: need to COW
+        // Use a separate pending map to coordinate concurrent COW attempts
+        let pending = {
+            let mut pending_guard = self.pending_cow.lock().unwrap();
+            if let Some(waiter) = pending_guard.get(&inode_id) {
+                // Another thread is already doing COW - wait for it
+                waiter.clone()
+            } else {
+                // We're the first - create a waiter
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                pending_guard.insert(inode_id, rx.shared());
+                None // We do the work
+            }
+        };
+
+        if let Some(waiter) = pending {
+            // Wait for other thread to complete COW
+            let _ = waiter.await;
+            return Ok(());
+        }
+
+        // We're responsible for COW
+        let result = self.do_cow_copy(inode_id).await;
+
+        // Signal waiters
+        self.pending_cow.lock().unwrap().remove(&inode_id);
+
+        result
+    }
+}
+```
+
+#### 2. Read-Write Consistency for Chunked Files
+
+```rust
+impl WritableVfs {
+    fn read(&mut self, ino: u64, offset: i64, size: u32, reply: ReplyData) {
+        // Always check dirty layer first with read lock held
+        let guard = self.dirty_manager.dirty_files.read().unwrap();
+
+        if let Some(dirty) = guard.get(&ino) {
+            // File is dirty - read from dirty layer
+            let rt = tokio::runtime::Handle::current();
+            match rt.block_on(dirty.read(offset as u64, size, &self.read_store)) {
+                Ok(data) => reply.data(&data),
+                Err(e) => {
+                    tracing::error!("Read failed: {}", e);
+                    reply.error(libc::EIO);
+                }
+            }
+            return;
+        }
+
+        drop(guard); // Release lock before S3 fetch
+
+        // File is clean - delegate to base VFS
+        self.base.read(ino, offset, size, reply);
+    }
+}
+```
+
+#### 3. Flush Atomicity
+
+```rust
+impl DirtyFileManager {
+    /// Flush with snapshot to avoid holding lock during I/O.
+    async fn flush_to_disk(&self, inode_id: INodeId) -> Result<(), VfsError> {
+        // Take snapshot under lock
+        let snapshot: FlushSnapshot = {
+            let guard = self.dirty_files.read().unwrap();
+            let dirty: &DirtyFile = guard.get(&inode_id)
+                .ok_or(VfsError::InodeNotFound(inode_id))?;
+
+            FlushSnapshot {
+                rel_path: dirty.rel_path().to_string(),
+                state: dirty.state(),
+                content: dirty.content.clone(), // Clone the content
+            }
+        };
+        // Lock released here
+
+        // Perform I/O without holding lock
+        match snapshot.state {
+            DirtyState::Deleted => {
+                self.cache.delete_file(&snapshot.rel_path).await?;
+            }
+            _ => {
+                self.flush_content(&snapshot.rel_path, &snapshot.content).await?;
+            }
+        }
+
+        Ok(())
+    }
+}
+```
+
+### Thread Safety Summary
+
+| Operation | Lock Type | Duration | Notes |
+|-----------|-----------|----------|-------|
+| `is_dirty()` | Read | Brief | Check only |
+| `get()` for read | Read | Held during read | Returns guard |
+| `cow_copy()` | Write | Brief + async fetch | Uses pending map |
+| `write()` | Write | Brief | Modify in place |
+| `flush_to_disk()` | Read | Brief | Snapshot then release |
+| `delete_file()` | Write | Brief | Mark deleted |
+| `get_dirty_entries()` | Read | Brief | Clone entries |
+
+### Potential Deadlock Prevention
+
+1. **Single lock**: Only one lock (`dirty_files`), no nested locks
+2. **No lock across await**: Release lock before async operations
+3. **Consistent ordering**: Always acquire `dirty_files` before `pending_cow`
+4. **Timeout on pending**: COW waiters have timeout to prevent infinite wait
+
+```rust
+// Timeout for COW coordination
+const COW_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
+
+if let Some(waiter) = pending {
+    match tokio::time::timeout(COW_TIMEOUT, waiter).await {
+        Ok(_) => return Ok(()),
+        Err(_) => return Err(VfsError::CowTimeout(inode_id)),
+    }
+}
+```
+
+---
+
+## Concurrent Access
 
 ### Scenario: Two Users Access Same File
 
@@ -2966,6 +3789,230 @@ let vfs = WritableVfs::new(
 6. **Directory Operations**: `mkdir()`, `rmdir()` support
 7. **Shared Disk Cache**: Allow multiple VFS instances to share the same disk cache
 8. **Cache Warming**: Pre-populate disk cache from manifest on mount
+
+---
+
+## Writable VFS Statistics
+
+The library provides a `WritableVfsStatsCollector` that extends the base `VfsStatsCollector` with dirty file tracking. This allows CLI tools and other consumers to query the current state of modified files.
+
+### Data Structures
+
+```rust
+/// Information about a single dirty file.
+#[derive(Debug, Clone)]
+pub struct DirtyFileInfo {
+    /// Relative path within VFS.
+    pub path: String,
+    /// Current file size in bytes.
+    pub size: u64,
+}
+
+/// Statistics for a writable VFS.
+#[derive(Debug, Clone, Default)]
+pub struct WritableVfsStats {
+    /// Base read-only stats (inode count, pool stats, cache hits, etc.).
+    pub base: VfsStats,
+    /// Summary counts of dirty files.
+    pub dirty_summary: DirtySummary,
+    /// List of modified files (state = Modified).
+    pub modified_files: Vec<DirtyFileInfo>,
+    /// List of newly created files (state = New).
+    pub new_files: Vec<DirtyFileInfo>,
+    /// List of deleted file paths (state = Deleted).
+    pub deleted_files: Vec<String>,
+}
+```
+
+### WritableVfsStatsCollector
+
+```rust
+/// Collects statistics from a writable VFS.
+///
+/// Wraps the base VfsStatsCollector and adds dirty file tracking.
+/// Thread-safe and cloneable for use from background stats threads.
+#[derive(Clone)]
+pub struct WritableVfsStatsCollector {
+    /// Base stats collector.
+    base: VfsStatsCollector,
+    /// Reference to dirty file manager.
+    dirty_manager: Arc<DirtyFileManager>,
+}
+
+impl WritableVfsStatsCollector {
+    /// Create a new writable stats collector.
+    ///
+    /// # Arguments
+    /// * `base` - Base VFS stats collector
+    /// * `dirty_manager` - Dirty file manager reference
+    pub fn new(base: VfsStatsCollector, dirty_manager: Arc<DirtyFileManager>) -> Self {
+        Self { base, dirty_manager }
+    }
+
+    /// Collect current statistics.
+    ///
+    /// # Returns
+    /// Snapshot of writable VFS statistics including dirty file lists.
+    pub fn collect(&self) -> WritableVfsStats {
+        let base: VfsStats = self.base.collect();
+        let entries: Vec<DirtyEntry> = self.dirty_manager.get_dirty_entries();
+
+        let mut modified_files: Vec<DirtyFileInfo> = Vec::new();
+        let mut new_files: Vec<DirtyFileInfo> = Vec::new();
+        let mut deleted_files: Vec<String> = Vec::new();
+
+        for entry in &entries {
+            match entry.state {
+                DirtyState::Modified => {
+                    modified_files.push(DirtyFileInfo {
+                        path: entry.path.clone(),
+                        size: entry.size,
+                    });
+                }
+                DirtyState::New => {
+                    new_files.push(DirtyFileInfo {
+                        path: entry.path.clone(),
+                        size: entry.size,
+                    });
+                }
+                DirtyState::Deleted => {
+                    deleted_files.push(entry.path.clone());
+                }
+            }
+        }
+
+        let dirty_summary = DirtySummary {
+            modified_count: modified_files.len(),
+            new_count: new_files.len(),
+            deleted_count: deleted_files.len(),
+        };
+
+        WritableVfsStats {
+            base,
+            dirty_summary,
+            modified_files,
+            new_files,
+            deleted_files,
+        }
+    }
+}
+```
+
+### WritableVfs Integration
+
+```rust
+impl WritableVfs {
+    /// Get a stats collector for this writable VFS.
+    ///
+    /// # Returns
+    /// Collector that can be cloned and used from another thread to query stats.
+    pub fn stats_collector(&self) -> WritableVfsStatsCollector {
+        let base: VfsStatsCollector = VfsStatsCollector::new(
+            self.inodes.clone(),
+            self.pool.clone(),
+            self.start_time,
+        );
+        WritableVfsStatsCollector::new(base, self.dirty_manager.clone())
+    }
+}
+```
+
+### CLI Usage Example
+
+The CLI is responsible for formatting and displaying the stats. The library only provides the data:
+
+```rust
+// In mount_vfs.rs example
+
+/// Print writable VFS statistics dashboard.
+///
+/// # Arguments
+/// * `stats` - Collected writable VFS stats
+fn print_writable_stats(stats: &WritableVfsStats) {
+    // Print base stats first (existing logic)
+    print_base_stats(&stats.base);
+
+    // Print dirty files section
+    let summary: &DirtySummary = &stats.dirty_summary;
+    println!("╠══════════════════════════════════════════════════════════════════╣");
+    println!("║ COW DIRTY FILES                                                   ║");
+    println!("║   Modified: {:>3}    New: {:>3}    Deleted: {:>3}                    ║",
+             summary.modified_count, summary.new_count, summary.deleted_count);
+
+    // List modified + new files with sizes
+    if !stats.modified_files.is_empty() || !stats.new_files.is_empty() {
+        println!("║                                                                   ║");
+        println!("║   Dirty files:                                                    ║");
+
+        let all_dirty: Vec<(&DirtyFileInfo, &str)> = stats.modified_files.iter()
+            .map(|f| (f, ""))
+            .chain(stats.new_files.iter().map(|f| (f, "[NEW]")))
+            .collect();
+
+        for (i, (file, marker)) in all_dirty.iter().take(10).enumerate() {
+            let path_display: String = truncate_path(&file.path, 42);
+            println!("║   {:>2}. {:42} {:>8} {:5} ║",
+                     i + 1, path_display, format_bytes(file.size), marker);
+        }
+
+        if all_dirty.len() > 10 {
+            println!("║   ... and {} more                                               ║",
+                     all_dirty.len() - 10);
+        }
+    }
+
+    // List deleted files
+    if !stats.deleted_files.is_empty() {
+        println!("║                                                                   ║");
+        println!("║   Deleted files:                                                  ║");
+
+        for (i, path) in stats.deleted_files.iter().take(5).enumerate() {
+            let path_display: String = truncate_path(path, 50);
+            println!("║   {:>2}. {:50}        ║", i + 1, path_display);
+        }
+
+        if stats.deleted_files.len() > 5 {
+            println!("║   ... and {} more                                               ║",
+                     stats.deleted_files.len() - 5);
+        }
+    }
+
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+}
+
+/// Spawn background thread for writable stats display.
+///
+/// # Arguments
+/// * `collector` - Stats collector (cloned into thread)
+/// * `running` - Atomic flag to control thread lifetime
+/// * `interval_secs` - Interval between stats updates
+fn spawn_writable_stats_thread(
+    collector: WritableVfsStatsCollector,
+    running: Arc<AtomicBool>,
+    interval_secs: u64,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while running.load(Ordering::SeqCst) {
+            let stats: WritableVfsStats = collector.collect();
+            print_writable_stats(&stats);
+            thread::sleep(Duration::from_secs(interval_secs));
+        }
+    })
+}
+```
+
+### Architecture Summary
+
+| Layer | Component | Responsibility |
+|-------|-----------|----------------|
+| Library | `DirtyFileInfo` | Data struct for a single dirty file |
+| Library | `WritableVfsStats` | Aggregated stats with file lists |
+| Library | `WritableVfsStatsCollector` | Thread-safe collector, queries `DirtyFileManager` |
+| Library | `WritableVfs::stats_collector()` | Factory method to create collector |
+| CLI | `print_writable_stats()` | Format and display dashboard |
+| CLI | `spawn_writable_stats_thread()` | Background refresh loop |
+
+This separation keeps the library focused on data collection while the CLI handles presentation concerns.
 
 ---
 

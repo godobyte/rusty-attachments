@@ -11,6 +11,9 @@ pub enum VfsError {
     /// Not a directory.
     NotADirectory(u64),
 
+    /// Not a file.
+    NotAFile(u64),
+
     /// Content retrieval failed.
     ContentRetrievalFailed {
         hash: String,
@@ -22,6 +25,24 @@ pub enum VfsError {
 
     /// Mount operation failed.
     MountFailed(String),
+
+    /// Write cache error.
+    WriteCacheError(String),
+
+    /// Cache read failed.
+    CacheReadFailed(String),
+
+    /// Chunk not loaded for dirty file.
+    ChunkNotLoaded { path: String, chunk_index: u32 },
+
+    /// IO error.
+    Io(std::io::Error),
+
+    /// File already exists.
+    FileExists(String),
+
+    /// Read-only filesystem.
+    ReadOnly,
 }
 
 impl fmt::Display for VfsError {
@@ -29,6 +50,7 @@ impl fmt::Display for VfsError {
         match self {
             VfsError::InodeNotFound(id) => write!(f, "Inode not found: {}", id),
             VfsError::NotADirectory(id) => write!(f, "Not a directory: {}", id),
+            VfsError::NotAFile(id) => write!(f, "Not a file: {}", id),
             VfsError::ContentRetrievalFailed { hash, source } => {
                 write!(f, "Content retrieval failed for hash {}: {}", hash, source)
             }
@@ -36,6 +58,14 @@ impl fmt::Display for VfsError {
                 write!(f, "Hash mismatch: expected {}, got {}", expected, actual)
             }
             VfsError::MountFailed(msg) => write!(f, "Mount failed: {}", msg),
+            VfsError::WriteCacheError(msg) => write!(f, "Write cache error: {}", msg),
+            VfsError::CacheReadFailed(path) => write!(f, "Cache read failed: {}", path),
+            VfsError::ChunkNotLoaded { path, chunk_index } => {
+                write!(f, "Chunk {} not loaded for file: {}", chunk_index, path)
+            }
+            VfsError::Io(e) => write!(f, "IO error: {}", e),
+            VfsError::FileExists(path) => write!(f, "File already exists: {}", path),
+            VfsError::ReadOnly => write!(f, "Read-only filesystem"),
         }
     }
 }
@@ -44,7 +74,14 @@ impl std::error::Error for VfsError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             VfsError::ContentRetrievalFailed { source, .. } => Some(source.as_ref()),
+            VfsError::Io(e) => Some(e),
             _ => None,
         }
+    }
+}
+
+impl From<std::io::Error> for VfsError {
+    fn from(e: std::io::Error) -> Self {
+        VfsError::Io(e)
     }
 }

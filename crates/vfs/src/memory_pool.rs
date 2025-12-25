@@ -456,7 +456,7 @@ impl MemoryPoolInner {
 // ============================================================================
 
 /// Statistics about the memory pool state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MemoryPoolStats {
     /// Total number of blocks in the pool.
     pub total_blocks: usize,
