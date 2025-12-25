@@ -139,6 +139,8 @@ pub struct DirtyFile {
     inode_id: INodeId,
     /// Relative path within the VFS.
     rel_path: String,
+    /// Parent inode ID (only set for new files).
+    parent_inode: Option<INodeId>,
     /// File content (small or chunked).
     content: DirtyContent,
     /// Original hash before modification (None if new file).
@@ -177,6 +179,7 @@ impl DirtyFile {
         Self {
             inode_id,
             rel_path,
+            parent_inode: None,
             content,
             original_hash: None,
             state: DirtyState::Modified,
@@ -190,10 +193,12 @@ impl DirtyFile {
     /// # Arguments
     /// * `inode_id` - Inode ID of the file
     /// * `rel_path` - Relative path within VFS
-    pub fn new_file(inode_id: INodeId, rel_path: String) -> Self {
+    /// * `parent_inode` - Parent directory inode ID
+    pub fn new_file(inode_id: INodeId, rel_path: String, parent_inode: INodeId) -> Self {
         Self {
             inode_id,
             rel_path,
+            parent_inode: Some(parent_inode),
             content: DirtyContent::Small { data: Vec::new() },
             original_hash: None,
             state: DirtyState::New,
@@ -216,6 +221,19 @@ impl DirtyFile {
     /// Get relative path.
     pub fn rel_path(&self) -> &str {
         &self.rel_path
+    }
+
+    /// Get parent inode ID (only set for new files).
+    pub fn parent_inode(&self) -> Option<INodeId> {
+        self.parent_inode
+    }
+
+    /// Get the file name (last component of path).
+    pub fn file_name(&self) -> &str {
+        self.rel_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&self.rel_path)
     }
 
     /// Get current state.
@@ -939,10 +957,69 @@ impl DirtyFileManager {
     /// # Arguments
     /// * `inode_id` - Inode ID for new file
     /// * `rel_path` - Relative path for new file
-    pub fn create_file(&self, inode_id: INodeId, rel_path: String) -> Result<(), VfsError> {
-        let dirty = DirtyFile::new_file(inode_id, rel_path);
+    /// * `parent_inode` - Parent directory inode ID
+    pub fn create_file(
+        &self,
+        inode_id: INodeId,
+        rel_path: String,
+        parent_inode: INodeId,
+    ) -> Result<(), VfsError> {
+        let dirty = DirtyFile::new_file(inode_id, rel_path, parent_inode);
         self.dirty_files.write().unwrap().insert(inode_id, dirty);
         Ok(())
+    }
+
+    /// Get new files in a directory.
+    ///
+    /// # Arguments
+    /// * `parent_inode` - Parent directory inode ID
+    ///
+    /// # Returns
+    /// Vector of (inode_id, file_name) for new files in the directory.
+    pub fn get_new_files_in_dir(&self, parent_inode: INodeId) -> Vec<(INodeId, String)> {
+        let guard = self.dirty_files.read().unwrap();
+        guard
+            .values()
+            .filter(|f| {
+                f.state() == DirtyState::New && f.parent_inode() == Some(parent_inode)
+            })
+            .map(|f| (f.inode_id(), f.file_name().to_string()))
+            .collect()
+    }
+
+    /// Look up a new file by parent inode and name.
+    ///
+    /// # Arguments
+    /// * `parent_inode` - Parent directory inode ID
+    /// * `name` - File name to look up
+    ///
+    /// # Returns
+    /// Inode ID if found, None otherwise.
+    pub fn lookup_new_file(&self, parent_inode: INodeId, name: &str) -> Option<INodeId> {
+        let guard = self.dirty_files.read().unwrap();
+        guard
+            .values()
+            .find(|f| {
+                f.state() == DirtyState::New
+                    && f.parent_inode() == Some(parent_inode)
+                    && f.file_name() == name
+            })
+            .map(|f| f.inode_id())
+    }
+
+    /// Check if an inode is a new file (created, not from manifest).
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID to check
+    ///
+    /// # Returns
+    /// True if this is a new file, false otherwise.
+    pub fn is_new_file(&self, inode_id: INodeId) -> bool {
+        let guard = self.dirty_files.read().unwrap();
+        guard
+            .get(&inode_id)
+            .map(|f| f.state() == DirtyState::New)
+            .unwrap_or(false)
     }
 
     /// Mark a file as deleted.
@@ -1200,16 +1277,17 @@ mod tests {
 
     #[test]
     fn test_dirty_file_new() {
-        let dirty = DirtyFile::new_file(1, "test.txt".to_string());
+        let dirty = DirtyFile::new_file(1, "test.txt".to_string(), 100);
         assert_eq!(dirty.inode_id(), 1);
         assert_eq!(dirty.rel_path(), "test.txt");
         assert_eq!(dirty.state(), DirtyState::New);
         assert_eq!(dirty.size(), 0);
+        assert_eq!(dirty.parent_inode(), Some(100));
     }
 
     #[test]
     fn test_dirty_file_truncate_small() {
-        let mut dirty = DirtyFile::new_file(1, "test.txt".to_string());
+        let mut dirty = DirtyFile::new_file(1, "test.txt".to_string(), 100);
 
         // Write some data
         if let DirtyContent::Small { data } = dirty.content_mut() {
@@ -1231,7 +1309,7 @@ mod tests {
     async fn test_manager_create_file() {
         let (manager, _inodes) = create_test_manager();
 
-        manager.create_file(100, "new_file.txt".to_string()).unwrap();
+        manager.create_file(100, "new_file.txt".to_string(), 1).unwrap();
 
         assert!(manager.is_dirty(100));
         assert_eq!(manager.get_state(100), Some(DirtyState::New));

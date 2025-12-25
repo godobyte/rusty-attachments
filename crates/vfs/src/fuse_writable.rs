@@ -225,43 +225,111 @@ mod impl_fuse {
                 format!("{}/{}", parent_inode.path(), name_str)
             };
 
-            match self.inodes.get_by_path(&path) {
-                Some(child) => {
-                    let mut attr: FileAttr = self.to_file_attr(child.as_ref());
-
-                    // Check if dirty and update attributes
-                    if let Some(size) = self.dirty_manager.get_size(child.id()) {
-                        attr.size = size;
-                    }
-                    if let Some(mtime) = self.dirty_manager.get_mtime(child.id()) {
-                        attr.mtime = mtime;
-                        attr.atime = mtime;
-                    }
-
-                    reply.entry(&self.ttl(), &attr, 0);
+            // First check if it's an existing file from the manifest
+            if let Some(child) = self.inodes.get_by_path(&path) {
+                // Check if deleted
+                if self.dirty_manager.get_state(child.id()) == Some(DirtyState::Deleted) {
+                    reply.error(libc::ENOENT);
+                    return;
                 }
-                None => reply.error(libc::ENOENT),
+
+                let mut attr: FileAttr = self.to_file_attr(child.as_ref());
+
+                // Check if dirty and update attributes
+                if let Some(size) = self.dirty_manager.get_size(child.id()) {
+                    attr.size = size;
+                }
+                if let Some(mtime) = self.dirty_manager.get_mtime(child.id()) {
+                    attr.mtime = mtime;
+                    attr.atime = mtime;
+                }
+
+                reply.entry(&self.ttl(), &attr, 0);
+                return;
             }
+
+            // Check if it's a new file created in this session
+            if let Some(new_ino) = self.dirty_manager.lookup_new_file(parent, name_str) {
+                let size: u64 = self.dirty_manager.get_size(new_ino).unwrap_or(0);
+                let mtime: SystemTime = self.dirty_manager.get_mtime(new_ino).unwrap_or(SystemTime::now());
+
+                let attr = FileAttr {
+                    ino: new_ino,
+                    size,
+                    blocks: (size + 511) / 512,
+                    atime: mtime,
+                    mtime,
+                    ctime: mtime,
+                    crtime: mtime,
+                    kind: FileType::RegularFile,
+                    perm: 0o644,
+                    nlink: 1,
+                    uid: unsafe { libc::getuid() },
+                    gid: unsafe { libc::getgid() },
+                    rdev: 0,
+                    blksize: 512,
+                    flags: 0,
+                };
+
+                reply.entry(&self.ttl(), &attr, 0);
+                return;
+            }
+
+            reply.error(libc::ENOENT);
         }
 
         fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-            match self.inodes.get(ino) {
-                Some(inode) => {
-                    let mut attr: FileAttr = self.to_file_attr(inode.as_ref());
-
-                    // Check if dirty and update attributes
-                    if let Some(size) = self.dirty_manager.get_size(ino) {
-                        attr.size = size;
-                    }
-                    if let Some(mtime) = self.dirty_manager.get_mtime(ino) {
-                        attr.mtime = mtime;
-                        attr.atime = mtime;
-                    }
-
-                    reply.attr(&self.ttl(), &attr);
+            // First check if it's an existing inode from the manifest
+            if let Some(inode) = self.inodes.get(ino) {
+                // Check if deleted
+                if self.dirty_manager.get_state(ino) == Some(DirtyState::Deleted) {
+                    reply.error(libc::ENOENT);
+                    return;
                 }
-                None => reply.error(libc::ENOENT),
+
+                let mut attr: FileAttr = self.to_file_attr(inode.as_ref());
+
+                // Check if dirty and update attributes
+                if let Some(size) = self.dirty_manager.get_size(ino) {
+                    attr.size = size;
+                }
+                if let Some(mtime) = self.dirty_manager.get_mtime(ino) {
+                    attr.mtime = mtime;
+                    attr.atime = mtime;
+                }
+
+                reply.attr(&self.ttl(), &attr);
+                return;
             }
+
+            // Check if it's a new file created in this session
+            if self.dirty_manager.is_new_file(ino) {
+                let size: u64 = self.dirty_manager.get_size(ino).unwrap_or(0);
+                let mtime: SystemTime = self.dirty_manager.get_mtime(ino).unwrap_or(SystemTime::now());
+
+                let attr = FileAttr {
+                    ino,
+                    size,
+                    blocks: (size + 511) / 512,
+                    atime: mtime,
+                    mtime,
+                    ctime: mtime,
+                    crtime: mtime,
+                    kind: FileType::RegularFile,
+                    perm: 0o644,
+                    nlink: 1,
+                    uid: unsafe { libc::getuid() },
+                    gid: unsafe { libc::getgid() },
+                    rdev: 0,
+                    blksize: 512,
+                    flags: 0,
+                };
+
+                reply.attr(&self.ttl(), &attr);
+                return;
+            }
+
+            reply.error(libc::ENOENT);
         }
 
         fn readdir(
@@ -290,6 +358,7 @@ mod impl_fuse {
                 (inode.parent_id(), FileType::Directory, "..".to_string()),
             ];
 
+            // Add children from inode manager (original manifest files)
             if let Some(children) = self.inodes.get_dir_children(ino) {
                 for (name, cid) in children {
                     if let Some(c) = self.inodes.get(cid) {
@@ -308,6 +377,12 @@ mod impl_fuse {
                 }
             }
 
+            // Add new files created in this directory
+            let new_files: Vec<(u64, String)> = self.dirty_manager.get_new_files_in_dir(ino);
+            for (new_ino, name) in new_files {
+                entries.push((new_ino, FileType::RegularFile, name));
+            }
+
             for (i, (e_ino, kind, name)) in entries.iter().enumerate().skip(offset as usize) {
                 if reply.add(*e_ino, (i + 1) as i64, *kind, name) {
                     break;
@@ -317,6 +392,20 @@ mod impl_fuse {
         }
 
         fn open(&mut self, _req: &Request, ino: u64, _flags: i32, reply: ReplyOpen) {
+            // Check if deleted
+            if self.dirty_manager.get_state(ino) == Some(DirtyState::Deleted) {
+                reply.error(libc::ENOENT);
+                return;
+            }
+
+            // Check if it's a new file
+            if self.dirty_manager.is_new_file(ino) {
+                let fh: u64 = self.next_handle.fetch_add(1, Ordering::SeqCst);
+                reply.opened(fh, 0);
+                return;
+            }
+
+            // Check existing inode
             let inode: Arc<dyn INode> = match self.inodes.get(ino) {
                 Some(i) => i,
                 None => {
@@ -327,12 +416,6 @@ mod impl_fuse {
 
             if inode.inode_type() != INodeType::File {
                 reply.error(libc::EISDIR);
-                return;
-            }
-
-            // Check if deleted
-            if self.dirty_manager.get_state(ino) == Some(DirtyState::Deleted) {
-                reply.error(libc::ENOENT);
                 return;
             }
 
@@ -489,7 +572,7 @@ mod impl_fuse {
                 }
             }
 
-            // Return updated attributes
+            // Return updated attributes - check existing inode first
             if let Some(inode) = self.inodes.get(ino) {
                 let mut attr: FileAttr = self.to_file_attr(inode.as_ref());
 
@@ -503,9 +586,37 @@ mod impl_fuse {
                 }
 
                 reply.attr(&TTL, &attr);
-            } else {
-                reply.error(libc::ENOENT);
+                return;
             }
+
+            // Check if it's a new file
+            if self.dirty_manager.is_new_file(ino) {
+                let file_size: u64 = self.dirty_manager.get_size(ino).unwrap_or(0);
+                let mtime: SystemTime = self.dirty_manager.get_mtime(ino).unwrap_or(SystemTime::now());
+
+                let attr = FileAttr {
+                    ino,
+                    size: file_size,
+                    blocks: (file_size + 511) / 512,
+                    atime: mtime,
+                    mtime,
+                    ctime: mtime,
+                    crtime: mtime,
+                    kind: FileType::RegularFile,
+                    perm: 0o644,
+                    nlink: 1,
+                    uid: unsafe { libc::getuid() },
+                    gid: unsafe { libc::getgid() },
+                    rdev: 0,
+                    blksize: 512,
+                    flags: 0,
+                };
+
+                reply.attr(&TTL, &attr);
+                return;
+            }
+
+            reply.error(libc::ENOENT);
         }
 
         fn create(
@@ -552,7 +663,7 @@ mod impl_fuse {
             let new_ino: u64 = 0x8000_0000 + self.next_handle.fetch_add(1, Ordering::SeqCst);
 
             // Create dirty file entry
-            if let Err(e) = self.dirty_manager.create_file(new_ino, new_path.clone()) {
+            if let Err(e) = self.dirty_manager.create_file(new_ino, new_path.clone(), parent) {
                 tracing::error!("Failed to create file: {}", e);
                 reply.error(libc::EIO);
                 return;

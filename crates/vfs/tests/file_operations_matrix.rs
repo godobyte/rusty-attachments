@@ -100,7 +100,7 @@ mod create {
         let (manager, _inodes, _store) = create_test_env();
 
         // Create a new file
-        manager.create_file(100, "new_file.txt".to_string()).unwrap();
+        manager.create_file(100, "new_file.txt".to_string(), 1).unwrap();
 
         // Verify state
         assert!(manager.is_dirty(100));
@@ -112,9 +112,9 @@ mod create {
     async fn test_create_multiple_files() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "file1.txt".to_string()).unwrap();
-        manager.create_file(101, "file2.txt".to_string()).unwrap();
-        manager.create_file(102, "dir/file3.txt".to_string()).unwrap();
+        manager.create_file(100, "file1.txt".to_string(), 1).unwrap();
+        manager.create_file(101, "file2.txt".to_string(), 1).unwrap();
+        manager.create_file(102, "dir/file3.txt".to_string(), 1).unwrap();
 
         assert!(manager.is_dirty(100));
         assert!(manager.is_dirty(101));
@@ -191,7 +191,7 @@ mod read_dirty {
         let (manager, _inodes, _store) = create_test_env();
 
         // Create and write to a new file
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello world").await.unwrap();
 
         // Read back
@@ -203,7 +203,7 @@ mod read_dirty {
     async fn test_read_dirty_small_file_partial() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello world").await.unwrap();
 
         // Read partial - middle
@@ -219,7 +219,7 @@ mod read_dirty {
     async fn test_read_dirty_small_file_beyond_eof() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello").await.unwrap();
 
         // Read beyond EOF
@@ -264,7 +264,7 @@ mod write {
     async fn test_write_small_file_new() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
 
         let written: usize = manager.write(100, 0, b"hello").await.unwrap();
         assert_eq!(written, 5);
@@ -275,7 +275,7 @@ mod write {
     async fn test_write_small_file_append() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello").await.unwrap();
         manager.write(100, 5, b" world").await.unwrap();
 
@@ -289,7 +289,7 @@ mod write {
     async fn test_write_small_file_overwrite() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello world").await.unwrap();
         manager.write(100, 0, b"HELLO").await.unwrap();
 
@@ -301,7 +301,7 @@ mod write {
     async fn test_write_small_file_with_gap() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 10, b"hello").await.unwrap();
 
         assert_eq!(manager.get_size(100), Some(15));
@@ -348,7 +348,7 @@ mod truncate_shrink {
     async fn test_truncate_shrink_small_file() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello world").await.unwrap();
 
         manager.truncate(100, 5).await.unwrap();
@@ -363,7 +363,7 @@ mod truncate_shrink {
     async fn test_truncate_shrink_to_zero() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello world").await.unwrap();
 
         manager.truncate(100, 0).await.unwrap();
@@ -412,7 +412,7 @@ mod truncate_extend {
     async fn test_truncate_extend_small_file() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello").await.unwrap();
 
         manager.truncate(100, 10).await.unwrap();
@@ -428,7 +428,7 @@ mod truncate_extend {
     async fn test_truncate_extend_then_write() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello").await.unwrap();
 
         // Extend
@@ -447,7 +447,7 @@ mod truncate_extend {
     async fn test_truncate_extend_empty_file() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
 
         manager.truncate(100, 100).await.unwrap();
 
@@ -469,7 +469,7 @@ mod delete {
     async fn test_delete_new_file() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello").await.unwrap();
 
         manager.delete_file(100).await.unwrap();
@@ -574,7 +574,7 @@ mod small_to_chunked {
     fn test_dirty_file_converts_when_large() {
         use rusty_attachments_vfs::write::DirtyFile;
 
-        let mut dirty = DirtyFile::new_file(1, "test.bin".to_string());
+        let mut dirty = DirtyFile::new_file(1, "test.bin".to_string(), 100);
 
         // Write data that exceeds chunk threshold (256MB in production, but we test the mechanism)
         // The actual conversion happens in maybe_convert_to_chunked based on CHUNK_SIZE_V2
@@ -611,7 +611,7 @@ mod dirty_entries {
         let (manager, inodes, store) = create_test_env();
 
         // New file
-        manager.create_file(100, "new.txt".to_string()).unwrap();
+        manager.create_file(100, "new.txt".to_string(), 1).unwrap();
 
         // Modified file
         let original: Vec<u8> = b"original".to_vec();
@@ -654,8 +654,8 @@ mod dirty_entries {
     async fn test_clear_dirty_entries() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "file1.txt".to_string()).unwrap();
-        manager.create_file(101, "file2.txt".to_string()).unwrap();
+        manager.create_file(100, "file1.txt".to_string(), 1).unwrap();
+        manager.create_file(101, "file2.txt".to_string(), 1).unwrap();
 
         assert_eq!(manager.get_dirty_entries().len(), 2);
 
@@ -679,7 +679,7 @@ mod mtime_tracking {
     async fn test_mtime_updated_on_write() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         let mtime1: SystemTime = manager.get_mtime(100).unwrap();
 
         // Small delay to ensure time difference
@@ -695,7 +695,7 @@ mod mtime_tracking {
     async fn test_mtime_updated_on_truncate() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello world").await.unwrap();
         let mtime1: SystemTime = manager.get_mtime(100).unwrap();
 
@@ -933,7 +933,7 @@ mod cache_integration {
     async fn test_flush_to_disk_small_file() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello world").await.unwrap();
 
         // Flush should succeed
@@ -944,7 +944,7 @@ mod cache_integration {
     async fn test_flush_deleted_file() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "test.txt".to_string()).unwrap();
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
         manager.write(100, 0, b"hello").await.unwrap();
         manager.delete_file(100).await.unwrap();
 
