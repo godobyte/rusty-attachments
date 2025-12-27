@@ -26,88 +26,23 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use rusty_attachments_model::{HashAlgorithm, Manifest};
-use rusty_attachments_storage::{S3Location, StorageClient, StorageSettings};
+use rusty_attachments_model::Manifest;
+use rusty_attachments_storage::{S3Location, StorageSettings};
 use rusty_attachments_storage_crt::CrtStorageClient;
 use rusty_attachments_vfs::{
-    DeadlineVfs, FileStore, VfsError, VfsOptions, VfsStats, VfsStatsCollector,
+    DeadlineVfs, FileStore, StorageClientAdapter, VfsError, VfsOptions, VfsStats, VfsStatsCollector,
     WritableVfs, WritableVfsStats, WritableVfsStatsCollector, WriteOptions,
 };
 
-/// Adapter that wraps a StorageClient to implement FileStore.
-///
-/// This bridges the storage crate's `StorageClient` trait with the VFS
-/// crate's `FileStore` trait, following the pyramid architecture pattern.
-struct StorageClientAdapter<C: StorageClient> {
-    /// The underlying storage client.
-    client: C,
-    /// S3 location configuration.
-    location: S3Location,
-}
-
-impl<C: StorageClient> StorageClientAdapter<C> {
-    /// Create a new adapter wrapping a storage client.
-    ///
-    /// # Arguments
-    /// * `client` - Storage client implementing S3 operations
-    /// * `location` - S3 location with bucket and root prefix
-    fn new(client: C, location: S3Location) -> Self {
-        Self { client, location }
-    }
-}
-
-#[async_trait]
-impl<C: StorageClient + 'static> FileStore for StorageClientAdapter<C> {
-    /// Retrieve the entire content for a hash from S3 CAS.
-    ///
-    /// # Arguments
-    /// * `hash` - Content hash
-    /// * `algorithm` - Hash algorithm used
-    ///
-    /// # Returns
-    /// The raw bytes of the content.
-    async fn retrieve(&self, hash: &str, algorithm: HashAlgorithm) -> Result<Vec<u8>, VfsError> {
-        let key: String = self.location.cas_key(hash, algorithm);
-
-        self.client
-            .get_object(&self.location.bucket, &key)
-            .await
-            .map_err(|e| VfsError::ContentRetrievalFailed {
-                hash: hash.to_string(),
-                source: format!("StorageClient get_object failed: {}", e).into(),
-            })
-    }
-
-    /// Retrieve a range of content for a hash from S3 CAS.
-    ///
-    /// # Arguments
-    /// * `hash` - Content hash
-    /// * `algorithm` - Hash algorithm used
-    /// * `offset` - Start offset in bytes
-    /// * `size` - Number of bytes to retrieve
-    ///
-    /// # Returns
-    /// The raw bytes of the requested range.
-    async fn retrieve_range(
-        &self,
-        hash: &str,
-        algorithm: HashAlgorithm,
-        offset: u64,
-        size: u64,
-    ) -> Result<Vec<u8>, VfsError> {
-        let data: Vec<u8> = self.retrieve(hash, algorithm).await?;
-        let start: usize = offset as usize;
-        let end: usize = (offset + size).min(data.len() as u64) as usize;
-        Ok(data[start..end].to_vec())
-    }
-}
+use async_trait::async_trait;
+use rusty_attachments_model::HashAlgorithm;
+use rusty_attachments_vfs::content::FileStore as FileStoreTrait;
 
 /// Mock file store that returns placeholder content for testing.
 struct MockFileStore;
 
 #[async_trait]
-impl FileStore for MockFileStore {
+impl FileStoreTrait for MockFileStore {
     async fn retrieve(&self, hash: &str, _algorithm: HashAlgorithm) -> Result<Vec<u8>, VfsError> {
         let placeholder: String = format!("[Mock content for hash: {}]", hash);
         Ok(placeholder.into_bytes())

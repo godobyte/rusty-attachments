@@ -1,6 +1,6 @@
 # Rusty Attachments: Virtual File System (VFS) Module Design
 
-**Status: ✅ READ-ONLY IMPLEMENTATION COMPLETE**
+**Status: ✅ READ-ONLY COMPLETE | ✅ WRITE SUPPORT COMPLETE**
 
 ## Implementation Status
 
@@ -10,17 +10,22 @@
 | INodeManager | ✅ | `src/inode/manager.rs` |
 | FileStore Trait | ✅ | `src/content/store.rs` |
 | MemoryFileStore (test) | ✅ | `src/content/store.rs` |
+| StorageClientAdapter | ✅ | `src/content/s3_adapter.rs` |
 | Manifest Builder (V1/V2) | ✅ | `src/builder.rs` |
 | MemoryPool (LRU, fetch coordination) | ✅ | `src/memory_pool.rs` |
 | VfsOptions | ✅ | `src/options.rs` |
-| FUSE Implementation | ✅ | `src/fuse.rs` |
+| FUSE Implementation (read-only) | ✅ | `src/fuse.rs` |
+| FUSE Implementation (writable) | ✅ | `src/fuse_writable.rs` |
 | Error Types | ✅ | `src/error.rs` |
 | Example Binary | ✅ | `examples/mount_vfs.rs` |
-| Stats Dashboard | ✅ | `src/fuse.rs` (VfsStats, VfsStatsCollector) |
-| StorageClient Adapter | ✅ | `examples/mount_vfs.rs` (bridges storage → vfs) |
-| CachedStore (disk cache) | ❌ | Future work |
+| Stats Dashboard | ✅ | `src/fuse.rs`, `src/write/stats.rs` |
+| WriteCache Trait | ✅ | `src/write/cache.rs` |
+| MaterializedCache (disk) | ✅ | `src/write/cache.rs` |
+| MemoryWriteCache (test) | ✅ | `src/write/cache.rs` |
+| DirtyFileManager (COW) | ✅ | `src/write/dirty.rs` |
+| DiffManifestExporter | ✅ | `src/write/export.rs` |
+| CachedStore (read cache) | ❌ | Future work |
 | Hash Verification | ❌ | Future work |
-| Write Support | ❌ | Future work (see design below) |
 
 ---
 
@@ -38,16 +43,10 @@ The VFS reuses existing storage infrastructure rather than implementing S3 acces
 │  │    - retrieve(hash, algorithm) -> Vec<u8>                           │    │
 │  │    - retrieve_range(hash, algorithm, offset, size) -> Vec<u8>       │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    ▲
-                                    │ implements
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    StorageClientAdapter<C: StorageClient>                    │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │  - client: C (any StorageClient implementation)                      │    │
-│  │  - location: S3Location (bucket, root_prefix, cas_prefix)           │    │
-│  │                                                                      │    │
-│  │  retrieve() → location.cas_key() → client.get_object()              │    │
+│  │  StorageClientAdapter<C: StorageClient>  (src/content/s3_adapter.rs)│    │
+│  │    - Bridges StorageClient → FileStore                              │    │
+│  │    - Now part of VFS crate for reuse                                │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
@@ -77,28 +76,21 @@ The VFS reuses existing storage infrastructure rather than implementing S3 acces
 
 ### StorageClientAdapter Pattern
 
-The adapter bridges the `StorageClient` trait (storage crate) to the `FileStore` trait (VFS crate):
+The adapter bridges the `StorageClient` trait (storage crate) to the `FileStore` trait (VFS crate).
+**Now located in `src/content/s3_adapter.rs` for reuse across applications:**
 
 ```rust
-/// Adapter that wraps a StorageClient to implement FileStore.
-struct StorageClientAdapter<C: StorageClient> {
-    client: C,
-    location: S3Location,
-}
+use rusty_attachments_vfs::{StorageClientAdapter, FileStore};
+use rusty_attachments_storage::{S3Location, StorageSettings};
+use rusty_attachments_storage_crt::CrtStorageClient;
 
-#[async_trait]
-impl<C: StorageClient + 'static> FileStore for StorageClientAdapter<C> {
-    async fn retrieve(&self, hash: &str, algorithm: HashAlgorithm) -> Result<Vec<u8>, VfsError> {
-        let key: String = self.location.cas_key(hash, algorithm);
-        self.client
-            .get_object(&self.location.bucket, &key)
-            .await
-            .map_err(|e| VfsError::ContentRetrievalFailed {
-                hash: hash.to_string(),
-                source: format!("StorageClient get_object failed: {}", e).into(),
-            })
-    }
-}
+// Create storage client
+let settings = StorageSettings::default();
+let client = CrtStorageClient::new(settings).await?;
+let location = S3Location::new("bucket", "root", "Data", "Manifests");
+
+// Wrap in adapter - now implements FileStore
+let store: Arc<dyn FileStore> = Arc::new(StorageClientAdapter::new(client, location));
 ```
 
 ### Why This Design?
@@ -107,6 +99,7 @@ impl<C: StorageClient + 'static> FileStore for StorageClientAdapter<C> {
 2. **Testability**: Can inject mock `StorageClient` for testing without S3
 3. **Backend Flexibility**: Same VFS works with CRT, WASM, or future backends
 4. **Single Source of Truth**: S3 key format (`cas_key()`) defined once in storage crate
+5. **Reusability**: `StorageClientAdapter` is now part of the VFS crate public API
 
 ### Usage
 
@@ -125,9 +118,13 @@ cargo run -p rusty-attachments-vfs --features fuse --example mount_vfs -- \
 cargo run -p rusty-attachments-vfs --features fuse --example mount_vfs -- \
     <manifest.json> <mountpoint> --mock
 
+# Writable mode with COW support
+cargo run -p rusty-attachments-vfs --features fuse --example mount_vfs -- \
+    <manifest.json> <mountpoint> --writable --cache-dir /tmp/vfs-cow
+
 # Full example with all options
 cargo run -p rusty-attachments-vfs --features fuse --example mount_vfs -- \
-    /tmp/manifest.json ~/vfs --stats \
+    /tmp/manifest.json ~/vfs --stats --writable \
     --bucket my-bucket --root-prefix MyPrefix --region us-east-1
 ```
 
@@ -139,6 +136,8 @@ cargo run -p rusty-attachments-vfs --features fuse --example mount_vfs -- \
 | `<mountpoint>` | (required) | Directory to mount VFS (created if needed) |
 | `--stats` | off | Show live statistics dashboard |
 | `--mock` | off | Use mock file store instead of S3 |
+| `--writable` | off | Mount in read-write mode with COW support |
+| `--cache-dir` | `/tmp/vfs-cache` | Directory for COW cache (writable mode) |
 | `--bucket` | `adeadlineja` | S3 bucket name |
 | `--root-prefix` | `DeadlineCloud` | S3 root prefix |
 | `--region` | `us-west-2` | AWS region |
@@ -356,27 +355,37 @@ let session = fuser::spawn_mount2(filesystem, "/mnt/vfs", &[MountOption::RO])?;
 
 ```
 crates/vfs/src/
-├── lib.rs
+├── lib.rs                # Public API exports
 ├── error.rs              # VfsError enum
+├── options.rs            # VfsOptions, PrefetchStrategy, etc.
 ├── memory_pool.rs        # Layer 1: Memory pool for V2 chunks
+├── builder.rs            # Layer 2: Build INode tree from Manifest
 │
 ├── inode/                # Layer 1: INode primitives
 │   ├── mod.rs
-│   ├── types.rs          # INodeId, INodeType, FileAttr
-│   ├── file.rs           # INodeFile (hash, size, mtime)
+│   ├── types.rs          # INodeId, INodeType, INode trait
+│   ├── file.rs           # INodeFile (hash, size, mtime, FileContent)
 │   ├── dir.rs            # INodeDir (children map)
 │   ├── symlink.rs        # INodeSymlink (target path)
 │   └── manager.rs        # INodeManager (allocation, lookup)
 │
 ├── content/              # Layer 1: Content retrieval
 │   ├── mod.rs
-│   ├── store.rs          # FileStore trait
-│   ├── s3_cas.rs         # S3CasStore implementation
-│   └── cached.rs         # CachedStore wrapper with DiskCache
+│   ├── store.rs          # FileStore trait, MemoryFileStore
+│   └── s3_adapter.rs     # StorageClientAdapter<C: StorageClient>
 │
-├── builder.rs            # Layer 2: Build INode tree from Manifest
+├── write/                # Layer 2: Write support (COW)
+│   ├── mod.rs
+│   ├── cache.rs          # WriteCache trait, MaterializedCache, MemoryWriteCache
+│   ├── dirty.rs          # DirtyFile, DirtyFileManager, DirtyContent
+│   ├── export.rs         # DiffManifestExporter trait, DirtySummary
+│   └── stats.rs          # WritableVfsStats, WritableVfsStatsCollector
 │
-└── fuse.rs               # Layer 3: fuser::Filesystem implementation
+├── fuse.rs               # Layer 3: Read-only fuser::Filesystem
+└── fuse_writable.rs      # Layer 3: Writable fuser::Filesystem (COW)
+
+examples/
+└── mount_vfs.rs          # CLI example with S3 and mock backends
 ```
 
 ---
@@ -387,9 +396,7 @@ crates/vfs/src/
 
 ```rust
 pub type INodeId = u64;
-pub const ROOT_INODE: INodeId = 1;
-
-pub enum INodeType { File, Directory, Symlink }
+pub const ROOT_INODE: INodeId = 1;pub enum INodeType { File, Directory, Symlink }
 
 /// File content source - handles both V1 (single hash) and V2 (chunked) files.
 pub enum FileContent {

@@ -48,7 +48,7 @@ pub use options::{
 };
 
 pub use builder::build_from_manifest;
-pub use content::FileStore;
+pub use content::{FileStore, StorageClientAdapter};
 pub use inode::{FileContent, INode, INodeFile, INodeId, INodeManager, INodeType, ROOT_INODE};
 
 pub use write::{
