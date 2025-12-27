@@ -1,6 +1,6 @@
 ---
 name: rusty-attachments-design
-version: 1.0.0
+version: 1.1.0
 description: Design documentation reference for rusty-attachments project
 keywords:
   - rusty-attachments
@@ -13,6 +13,8 @@ keywords:
   - cas
   - deadline
   - job-attachments
+  - vfs
+  - fuse
 ---
 
 # Rusty Attachments Design Reference
@@ -53,6 +55,14 @@ Use these summaries to identify which document to read for specific topics. Refe
 | `storage-profiles.md` | Storage profiles | FileSystemLocation (Local/Shared), AssetRootGroup, group_asset_paths(), path validation |
 | `path-mapping.md` | Path transformation | PathMappingRule, PathMappingApplier (trie-based), cross-platform path handling |
 
+### Virtual File System (VFS)
+
+| Document | Purpose | Key Topics |
+|----------|---------|------------|
+| `vfs.md` | VFS core design | FUSE interface, INode primitives, FileStore trait, MemoryPool, StorageClientAdapter |
+| `vfs-writes.md` | Write support (COW) | DirtyFileManager, MaterializedCache, WriteCache trait, DiffManifestExporter |
+| `vfs-dirs.md` | Directory operations | mkdir/rmdir FUSE ops, DirtyDirManager, directory tracking for diff manifests |
+
 ### Job Integration
 
 | Document | Purpose | Key Topics |
@@ -64,18 +74,8 @@ Use these summaries to identify which document to read for specific topics. Refe
 
 | Document | Purpose | Key Topics |
 |----------|---------|------------|
-| `implementation/order.md` | Build order | Phase-by-phase implementation plan, dependency graph, completion status |
 | `todo.md` | Remaining work | Feature checklist, skipped features with rationale, Python function mapping |
 | `utilities.md` | CLI utilities | filter_redundant_known_paths(), classify_paths(), warning message generation |
-
-### Examples
-
-| Document | Purpose |
-|----------|---------|
-| `examples/example-bundle-submit.md` | Full job submission workflow |
-| `examples/example-worker-agent.md` | Worker input/output sync |
-| `examples/example-incremental-download.md` | Incremental download with diff manifests |
-| `examples/example-output-download.md` | Output manifest discovery and download |
 
 ## Quick Reference
 
@@ -97,7 +97,16 @@ crates/
 ├── profiles/      # Storage profiles
 ├── storage/       # Upload/download orchestration
 ├── storage-crt/   # AWS SDK backend
+├── vfs/           # Virtual file system (FUSE)
+├── ja-deadline-utils/  # High-level job attachment utilities
 └── python/        # PyO3 bindings
+```
+
+### VFS Architecture
+```
+Layer 3: FUSE Interface (fuse.rs, fuse_writable.rs)
+Layer 2: VFS Operations (builder.rs, write/)
+Layer 1: Primitives (inode/, content/, memory_pool.rs)
 ```
 
 ## Usage
