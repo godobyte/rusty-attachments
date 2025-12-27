@@ -424,12 +424,12 @@ impl DirtyFileManager {
     /// # Arguments
     /// * `inode_id` - Inode ID of file to COW
     pub async fn cow_copy(&self, inode_id: INodeId) -> Result<(), VfsError> {
-        // Check if already dirty
+        // Check if already dirty (includes new files created via create_file)
         if self.is_dirty(inode_id) {
             return Ok(());
         }
 
-        // Get file metadata from inode manager
+        // Get file metadata from inode manager (only for manifest files)
         let inode: Arc<dyn INode> = self
             .inodes
             .get(inode_id)

@@ -222,23 +222,24 @@ mod impl_fuse {
                 }
             };
 
-            let parent_inode: Arc<dyn INode> = match self.inodes.get(parent) {
-                Some(i) => i,
-                None => {
-                    reply.error(libc::ENOENT);
+            // Get parent path - check manifest inodes first, then new directories
+            let parent_path: String = if let Some(parent_inode) = self.inodes.get(parent) {
+                if parent_inode.inode_type() != INodeType::Directory {
+                    reply.error(libc::ENOTDIR);
                     return;
                 }
+                parent_inode.path().to_string()
+            } else if let Some(path) = self.dirty_dir_manager.get_new_dir_path(parent) {
+                path
+            } else {
+                reply.error(libc::ENOENT);
+                return;
             };
 
-            if parent_inode.inode_type() != INodeType::Directory {
-                reply.error(libc::ENOTDIR);
-                return;
-            }
-
-            let path: String = if parent_inode.path().is_empty() {
+            let path: String = if parent_path.is_empty() {
                 name_str.to_string()
             } else {
-                format!("{}/{}", parent_inode.path(), name_str)
+                format!("{}/{}", parent_path, name_str)
             };
 
             // First check if it's an existing file from the manifest
@@ -719,13 +720,14 @@ mod impl_fuse {
                 }
             };
 
-            // Get parent path
-            let parent_path: String = match self.inodes.get(parent) {
-                Some(inode) => inode.path().to_string(),
-                None => {
-                    reply.error(libc::ENOENT);
-                    return;
-                }
+            // Get parent path - check manifest inodes first, then new directories
+            let parent_path: String = if let Some(inode) = self.inodes.get(parent) {
+                inode.path().to_string()
+            } else if let Some(path) = self.dirty_dir_manager.get_new_dir_path(parent) {
+                path
+            } else {
+                reply.error(libc::ENOENT);
+                return;
             };
 
             // Build new file path
@@ -785,13 +787,14 @@ mod impl_fuse {
                 }
             };
 
-            // Get parent path
-            let parent_path: String = match self.inodes.get(parent) {
-                Some(inode) => inode.path().to_string(),
-                None => {
-                    reply.error(libc::ENOENT);
-                    return;
-                }
+            // Get parent path - check manifest inodes first, then new directories
+            let parent_path: String = if let Some(inode) = self.inodes.get(parent) {
+                inode.path().to_string()
+            } else if let Some(path) = self.dirty_dir_manager.get_new_dir_path(parent) {
+                path
+            } else {
+                reply.error(libc::ENOENT);
+                return;
             };
 
             // Build file path
@@ -943,20 +946,23 @@ mod impl_fuse {
                 return;
             }
 
-            // Build the directory path for cleanup
-            let dir_path: String = match self.inodes.get(parent) {
-                Some(parent_inode) => {
-                    let parent_path: &str = parent_inode.path();
-                    if parent_path.is_empty() {
-                        name_str.to_string()
-                    } else {
-                        format!("{}/{}", parent_path, name_str)
-                    }
+            // Build the directory path for cleanup - check manifest inodes first, then new directories
+            let dir_path: String = if let Some(parent_inode) = self.inodes.get(parent) {
+                let parent_path: &str = parent_inode.path();
+                if parent_path.is_empty() {
+                    name_str.to_string()
+                } else {
+                    format!("{}/{}", parent_path, name_str)
                 }
-                None => {
-                    reply.error(libc::ENOENT);
-                    return;
+            } else if let Some(parent_path) = self.dirty_dir_manager.get_new_dir_path(parent) {
+                if parent_path.is_empty() {
+                    name_str.to_string()
+                } else {
+                    format!("{}/{}", parent_path, name_str)
                 }
+            } else {
+                reply.error(libc::ENOENT);
+                return;
             };
 
             // Clean up any new files created under this directory

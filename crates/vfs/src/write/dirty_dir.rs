@@ -148,6 +148,21 @@ impl DirtyDirManager {
             .unwrap_or(false)
     }
 
+    /// Get the path of a new directory by inode ID.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID to look up
+    ///
+    /// # Returns
+    /// Path if found and is a new directory, None otherwise.
+    pub fn get_new_dir_path(&self, inode_id: INodeId) -> Option<String> {
+        let guard = self.dirty_dirs.read().unwrap();
+        guard
+            .get(&inode_id)
+            .filter(|d| d.state() == DirtyDirState::New)
+            .map(|d| d.rel_path().to_string())
+    }
+
     /// Create a new directory.
     ///
     /// # Arguments
