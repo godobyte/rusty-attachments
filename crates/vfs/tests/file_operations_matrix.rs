@@ -19,11 +19,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rusty_attachments_model::HashAlgorithm;
-use rusty_attachments_vfs::content::MemoryFileStore;
 use rusty_attachments_vfs::inode::{FileContent, INodeManager};
 use rusty_attachments_vfs::write::{
-    DirtyContent, DirtyFileManager, DirtyState, MemoryWriteCache,
+    DirtyFileManager, DirtyState, MemoryWriteCache,
 };
+use rusty_attachments_vfs::memory_pool::{MemoryPool, MemoryPoolConfig};
 use rusty_attachments_vfs::{FileStore, VfsError};
 
 /// Helper to create a test environment with manager and inodes.
@@ -31,10 +31,12 @@ fn create_test_env() -> (Arc<DirtyFileManager>, Arc<INodeManager>, Arc<TestFileS
     let cache = Arc::new(MemoryWriteCache::new());
     let store = Arc::new(TestFileStore::new());
     let inodes = Arc::new(INodeManager::new());
+    let pool = Arc::new(MemoryPool::new(MemoryPoolConfig::default()));
     let manager = Arc::new(DirtyFileManager::new(
         cache,
         store.clone(),
         inodes.clone(),
+        pool,
     ));
     (manager, inodes, store)
 }
@@ -553,46 +555,6 @@ mod delete {
 }
 
 // =============================================================================
-// SMALL TO CHUNKED CONVERSION TESTS
-// =============================================================================
-
-mod small_to_chunked {
-    use super::*;
-    use rusty_attachments_vfs::write::DirtyContent;
-
-    #[test]
-    fn test_dirty_content_stays_small_under_threshold() {
-        let content = DirtyContent::Small {
-            data: vec![0u8; 100],
-        };
-
-        // Should stay small
-        assert!(matches!(content, DirtyContent::Small { .. }));
-        assert_eq!(content.size(), 100);
-    }
-
-    #[test]
-    fn test_dirty_file_converts_when_large() {
-        use rusty_attachments_vfs::write::DirtyFile;
-
-        let mut dirty = DirtyFile::new_file(1, "test.bin".to_string(), 100);
-
-        // Write data that exceeds chunk threshold (256MB in production, but we test the mechanism)
-        // The actual conversion happens in maybe_convert_to_chunked based on CHUNK_SIZE_V2
-        if let DirtyContent::Small { data } = dirty.content_mut() {
-            // Simulate writing a lot of data
-            data.extend(vec![0u8; 1000]);
-        }
-
-        // After calling maybe_convert_to_chunked, if size > CHUNK_SIZE_V2, it converts
-        dirty.maybe_convert_to_chunked();
-
-        // In tests with small data, it stays small (CHUNK_SIZE_V2 is 256MB)
-        assert!(matches!(dirty.content(), DirtyContent::Small { .. }));
-    }
-}
-
-// =============================================================================
 // DIRTY ENTRIES TESTS
 // =============================================================================
 
@@ -1077,10 +1039,12 @@ mod realistic_chunked {
         let cache = Arc::new(MemoryWriteCache::new());
         let store = Arc::new(PaddedChunkStore::new());
         let inodes = Arc::new(INodeManager::new());
+        let pool = Arc::new(MemoryPool::new(MemoryPoolConfig::default()));
         let manager = Arc::new(DirtyFileManager::new(
             cache,
             store.clone(),
             inodes.clone(),
+            pool,
         ));
         (manager, inodes, store)
     }
@@ -1346,10 +1310,12 @@ mod directory_file_cleanup {
         let cache = Arc::new(MemoryWriteCache::new());
         let store = Arc::new(TestFileStore::new());
         let inodes = Arc::new(INodeManager::new());
+        let pool = Arc::new(MemoryPool::new(MemoryPoolConfig::default()));
         let file_manager = Arc::new(DirtyFileManager::new(
             cache,
             store,
             inodes.clone(),
+            pool,
         ));
         let dir_manager = Arc::new(DirtyDirManager::new(
             inodes.clone(),

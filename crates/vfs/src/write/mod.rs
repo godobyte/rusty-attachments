@@ -11,7 +11,7 @@ mod export;
 mod stats;
 
 pub use cache::{MaterializedCache, MemoryWriteCache, WriteCache, WriteCacheError};
-pub use dirty::{DirtyContent, DirtyEntry, DirtyFile, DirtyFileManager, DirtyState};
+pub use dirty::{DirtyEntry, DirtyFileManager, DirtyFileMetadata, DirtyState};
 pub use dirty_dir::{DirtyDir, DirtyDirEntry, DirtyDirManager, DirtyDirState};
 pub use export::{DiffManifestExporter, DirtyFileInfo, DirtySummary};
 pub use stats::{WritableVfsStats, WritableVfsStatsCollector};

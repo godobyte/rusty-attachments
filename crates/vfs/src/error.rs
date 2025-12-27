@@ -35,6 +35,9 @@ pub enum VfsError {
     /// Chunk not loaded for dirty file.
     ChunkNotLoaded { path: String, chunk_index: u32 },
 
+    /// Memory pool error.
+    MemoryPoolError(String),
+
     /// IO error.
     Io(std::io::Error),
 
@@ -72,6 +75,7 @@ impl fmt::Display for VfsError {
             VfsError::ChunkNotLoaded { path, chunk_index } => {
                 write!(f, "Chunk {} not loaded for file: {}", chunk_index, path)
             }
+            VfsError::MemoryPoolError(msg) => write!(f, "Memory pool error: {}", msg),
             VfsError::Io(e) => write!(f, "IO error: {}", e),
             VfsError::FileExists(path) => write!(f, "File already exists: {}", path),
             VfsError::ReadOnly => write!(f, "Read-only filesystem"),

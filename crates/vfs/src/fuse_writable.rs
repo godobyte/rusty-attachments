@@ -109,10 +109,12 @@ mod impl_fuse {
                     .map_err(|e| VfsError::WriteCacheError(e.to_string()))?,
             );
 
-            let dirty_manager = Arc::new(DirtyFileManager::new(
+            // Use pool-based DirtyFileManager for unified memory management
+            let dirty_manager = Arc::new(DirtyFileManager::with_pool(
                 cache,
                 store.clone(),
                 inodes.clone(),
+                pool.clone(),
             ));
 
             // Collect original directories for diff tracking

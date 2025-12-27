@@ -2,6 +2,17 @@
 //!
 //! This module provides the core data structures for tracking modified files
 //! in the writable VFS layer.
+//!
+//! # Architecture
+//!
+//! The dirty file system uses a unified memory pool for content storage:
+//! - `DirtyFileMetadata` - Tracks file state, size, and chunk info (no content)
+//! - `MemoryPool` - Stores actual chunk data with LRU eviction
+//!
+//! This separation allows:
+//! - Global memory limit enforcement across read and write caches
+//! - Automatic eviction of dirty blocks after flush
+//! - Invalidation of stale read-only blocks when files are modified
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -12,6 +23,7 @@ use rusty_attachments_model::HashAlgorithm;
 
 use crate::content::FileStore;
 use crate::inode::{FileContent, INode, INodeId, INodeManager, INodeType};
+use crate::memory_pool::MemoryPool;
 use crate::VfsError;
 
 use super::cache::WriteCache;
@@ -27,134 +39,38 @@ pub enum DirtyState {
     Deleted,
 }
 
-/// Content state for a dirty file.
+/// Metadata about a dirty file (content stored in memory pool).
 ///
-/// Tracks original chunks and which have been modified.
+/// This struct tracks file state and chunk information without storing
+/// the actual content. Content is stored in the unified `MemoryPool`.
 #[derive(Debug)]
-pub enum DirtyContent {
-    /// Small file (single chunk) - entire content in memory.
-    Small {
-        /// File data.
-        data: Vec<u8>,
-    },
-    /// Large file (multiple chunks) - sparse tracking.
-    Chunked {
-        /// Original chunk hashes (from manifest).
-        original_chunks: Vec<String>,
-        /// Chunk size (256MB for V2).
-        chunk_size: u64,
-        /// Total file size.
-        total_size: u64,
-        /// Loaded chunks: chunk_index → data.
-        /// Only chunks that have been read or written are loaded.
-        loaded_chunks: HashMap<u32, Vec<u8>>,
-        /// Which chunks have been modified.
-        dirty_chunks: HashSet<u32>,
-    },
-}
-
-impl DirtyContent {
-    /// Create sparse content for a chunked file.
-    ///
-    /// # Arguments
-    /// * `original_chunks` - Chunk hashes from manifest
-    /// * `chunk_size` - Size of each chunk (256MB)
-    /// * `total_size` - Total file size
-    pub fn chunked(original_chunks: Vec<String>, chunk_size: u64, total_size: u64) -> Self {
-        Self::Chunked {
-            original_chunks,
-            chunk_size,
-            total_size,
-            loaded_chunks: HashMap::new(),
-            dirty_chunks: HashSet::new(),
-        }
-    }
-
-    /// Check if a chunk is loaded.
-    ///
-    /// # Arguments
-    /// * `chunk_index` - Index of the chunk to check
-    pub fn is_chunk_loaded(&self, chunk_index: u32) -> bool {
-        match self {
-            Self::Small { .. } => true,
-            Self::Chunked { loaded_chunks, .. } => loaded_chunks.contains_key(&chunk_index),
-        }
-    }
-
-    /// Get loaded chunk data (None if not loaded).
-    ///
-    /// # Arguments
-    /// * `chunk_index` - Index of the chunk to get
-    ///
-    /// # Returns
-    /// Chunk data if loaded, None otherwise.
-    pub fn get_chunk(&self, chunk_index: u32) -> Option<&[u8]> {
-        match self {
-            Self::Small { data } if chunk_index == 0 => Some(data),
-            Self::Small { .. } => None,
-            Self::Chunked { loaded_chunks, .. } => {
-                loaded_chunks.get(&chunk_index).map(|v| v.as_slice())
-            }
-        }
-    }
-
-    /// Insert a loaded chunk.
-    ///
-    /// # Arguments
-    /// * `chunk_index` - Index of the chunk
-    /// * `data` - Chunk data
-    pub fn insert_chunk(&mut self, chunk_index: u32, data: Vec<u8>) {
-        if let Self::Chunked { loaded_chunks, .. } = self {
-            loaded_chunks.insert(chunk_index, data);
-        }
-    }
-
-    /// Mark a chunk as dirty.
-    ///
-    /// # Arguments
-    /// * `chunk_index` - Index of the chunk to mark
-    pub fn mark_dirty(&mut self, chunk_index: u32) {
-        if let Self::Chunked { dirty_chunks, .. } = self {
-            dirty_chunks.insert(chunk_index);
-        }
-    }
-
-    /// Get the current file size.
-    pub fn size(&self) -> u64 {
-        match self {
-            Self::Small { data } => data.len() as u64,
-            Self::Chunked { total_size, .. } => *total_size,
-        }
-    }
-}
-
-
-/// A file that has been modified via copy-on-write.
-///
-/// Maintains both in-memory data (fast access) and tracks state for
-/// disk persistence.
-#[derive(Debug)]
-pub struct DirtyFile {
+pub struct DirtyFileMetadata {
     /// Inode ID of this file.
     inode_id: INodeId,
     /// Relative path within the VFS.
     rel_path: String,
     /// Parent inode ID (only set for new files).
     parent_inode: Option<INodeId>,
-    /// File content (small or chunked).
-    content: DirtyContent,
-    /// Original hash before modification (None if new file).
-    original_hash: Option<String>,
+    /// Original chunk hashes (for invalidation when modified).
+    original_hashes: Vec<String>,
     /// Current state of the file.
     state: DirtyState,
     /// Modification time (updated on each write).
     mtime: SystemTime,
     /// Whether file is executable (from original or set via chmod).
     executable: bool,
+    /// Current file size in bytes.
+    size: u64,
+    /// Chunk size (256MB for V2).
+    chunk_size: u64,
+    /// Number of chunks (1 for small files).
+    chunk_count: u32,
+    /// Which chunks have been modified (need flush).
+    dirty_chunks: HashSet<u32>,
 }
 
-impl DirtyFile {
-    /// Create a new dirty file from COW copy.
+impl DirtyFileMetadata {
+    /// Create metadata for a COW copy of an existing file.
     ///
     /// # Arguments
     /// * `inode_id` - Inode ID of the file
@@ -169,10 +85,11 @@ impl DirtyFile {
         total_size: u64,
         executable: bool,
     ) -> Self {
-        let content: DirtyContent = match file_content {
-            FileContent::SingleHash(_) => DirtyContent::Small { data: Vec::new() },
+        let (original_hashes, chunk_count): (Vec<String>, u32) = match file_content {
+            FileContent::SingleHash(hash) => (vec![hash.clone()], 1),
             FileContent::Chunked(hashes) => {
-                DirtyContent::chunked(hashes.clone(), CHUNK_SIZE_V2, total_size)
+                let count: u32 = hashes.len() as u32;
+                (hashes.clone(), count)
             }
         };
 
@@ -180,15 +97,18 @@ impl DirtyFile {
             inode_id,
             rel_path,
             parent_inode: None,
-            content,
-            original_hash: None,
+            original_hashes,
             state: DirtyState::Modified,
             mtime: SystemTime::now(),
             executable,
+            size: total_size,
+            chunk_size: CHUNK_SIZE_V2,
+            chunk_count,
+            dirty_chunks: HashSet::new(),
         }
     }
 
-    /// Create a new file (not from COW).
+    /// Create metadata for a new file (not from COW).
     ///
     /// # Arguments
     /// * `inode_id` - Inode ID of the file
@@ -199,18 +119,15 @@ impl DirtyFile {
             inode_id,
             rel_path,
             parent_inode: Some(parent_inode),
-            content: DirtyContent::Small { data: Vec::new() },
-            original_hash: None,
+            original_hashes: Vec::new(),
             state: DirtyState::New,
             mtime: SystemTime::now(),
             executable: false,
+            size: 0,
+            chunk_size: CHUNK_SIZE_V2,
+            chunk_count: 1,
+            dirty_chunks: HashSet::new(),
         }
-    }
-
-    /// Mark file as deleted.
-    pub fn mark_deleted(&mut self) {
-        self.state = DirtyState::Deleted;
-        self.content = DirtyContent::Small { data: Vec::new() };
     }
 
     /// Get the inode ID.
@@ -248,7 +165,7 @@ impl DirtyFile {
 
     /// Get current file size.
     pub fn size(&self) -> u64 {
-        self.content.size()
+        self.size
     }
 
     /// Check if file is executable.
@@ -256,27 +173,53 @@ impl DirtyFile {
         self.executable
     }
 
-    /// Get reference to content.
-    pub fn content(&self) -> &DirtyContent {
-        &self.content
+    /// Get original hashes for invalidation.
+    pub fn original_hashes(&self) -> &[String] {
+        &self.original_hashes
     }
 
-    /// Get mutable reference to content.
-    pub fn content_mut(&mut self) -> &mut DirtyContent {
-        &mut self.content
+    /// Get chunk size.
+    pub fn chunk_size(&self) -> u64 {
+        self.chunk_size
     }
 
-    /// Set the original hash (for small files after loading).
+    /// Get chunk count.
+    pub fn chunk_count(&self) -> u32 {
+        self.chunk_count
+    }
+
+    /// Check if a chunk is dirty.
     ///
     /// # Arguments
-    /// * `hash` - Original content hash
-    pub fn set_original_hash(&mut self, hash: String) {
-        self.original_hash = Some(hash);
+    /// * `chunk_index` - Index of the chunk to check
+    pub fn is_chunk_dirty(&self, chunk_index: u32) -> bool {
+        self.dirty_chunks.contains(&chunk_index)
     }
 
-    /// Get the original hash.
-    pub fn original_hash(&self) -> Option<&str> {
-        self.original_hash.as_deref()
+    /// Get all dirty chunk indices.
+    pub fn dirty_chunks(&self) -> &HashSet<u32> {
+        &self.dirty_chunks
+    }
+
+    /// Mark a chunk as dirty.
+    ///
+    /// # Arguments
+    /// * `chunk_index` - Index of the chunk to mark
+    pub fn mark_chunk_dirty(&mut self, chunk_index: u32) {
+        self.dirty_chunks.insert(chunk_index);
+    }
+
+    /// Clear dirty flag for a chunk (after flush).
+    ///
+    /// # Arguments
+    /// * `chunk_index` - Index of the chunk to mark as flushed
+    pub fn mark_chunk_flushed(&mut self, chunk_index: u32) {
+        self.dirty_chunks.remove(&chunk_index);
+    }
+
+    /// Clear all dirty flags (after full flush).
+    pub fn mark_all_flushed(&mut self) {
+        self.dirty_chunks.clear();
     }
 
     /// Update modification time.
@@ -284,97 +227,67 @@ impl DirtyFile {
         self.mtime = SystemTime::now();
     }
 
-    /// Check if small file should convert to chunked after write.
-    pub fn maybe_convert_to_chunked(&mut self) {
-        if let DirtyContent::Small { data } = &self.content {
-            if data.len() as u64 > CHUNK_SIZE_V2 {
-                let chunk_size: u64 = CHUNK_SIZE_V2;
-                let mut loaded_chunks: HashMap<u32, Vec<u8>> = HashMap::new();
-                let mut dirty_chunks: HashSet<u32> = HashSet::new();
-
-                for (idx, chunk) in data.chunks(chunk_size as usize).enumerate() {
-                    loaded_chunks.insert(idx as u32, chunk.to_vec());
-                    dirty_chunks.insert(idx as u32);
-                }
-
-                self.content = DirtyContent::Chunked {
-                    original_chunks: Vec::new(),
-                    chunk_size,
-                    total_size: data.len() as u64,
-                    loaded_chunks,
-                    dirty_chunks,
-                };
-            }
-        }
-    }
-
-    /// Truncate file to new size.
+    /// Update file size.
     ///
     /// # Arguments
-    /// * `new_size` - New file size in bytes
-    pub fn truncate(&mut self, new_size: u64) {
-        match &mut self.content {
-            DirtyContent::Small { data } => {
-                let new_len: usize = new_size as usize;
-                if new_len < data.len() {
-                    data.truncate(new_len);
-                } else {
-                    data.resize(new_len, 0);
-                }
-            }
-            DirtyContent::Chunked {
-                original_chunks,
-                chunk_size,
-                total_size,
-                loaded_chunks,
-                dirty_chunks,
-            } => {
-                let old_size: u64 = *total_size;
+    /// * `size` - New file size in bytes
+    pub fn set_size(&mut self, size: u64) {
+        self.size = size;
+        // Recalculate chunk count
+        self.chunk_count = if size == 0 {
+            1
+        } else {
+            ((size - 1) / self.chunk_size + 1) as u32
+        };
+    }
 
-                if new_size >= old_size {
-                    // Extending - just update size (sparse extension)
-                    *total_size = new_size;
-                    self.mtime = SystemTime::now();
-                    return;
-                }
+    /// Mark file as deleted.
+    pub fn mark_deleted(&mut self) {
+        self.state = DirtyState::Deleted;
+        self.size = 0;
+        self.chunk_count = 0;
+        self.dirty_chunks.clear();
+    }
 
-                // Shrinking
-                let new_chunk_count: u32 = if new_size == 0 {
-                    0
-                } else {
-                    ((new_size - 1) / *chunk_size + 1) as u32
-                };
-                let old_chunk_count: u32 = original_chunks.len() as u32;
+    /// Check if this is a small file (single chunk).
+    pub fn is_small_file(&self) -> bool {
+        self.chunk_count <= 1 && self.size <= self.chunk_size
+    }
 
-                // Remove chunks beyond new size
-                for chunk_idx in new_chunk_count..old_chunk_count.max(new_chunk_count) {
-                    loaded_chunks.remove(&chunk_idx);
-                    dirty_chunks.remove(&chunk_idx);
-                }
+    /// Get the original hash for a chunk (if available).
+    ///
+    /// # Arguments
+    /// * `chunk_index` - Index of the chunk
+    ///
+    /// # Returns
+    /// Original hash if available, None for new chunks.
+    pub fn original_hash(&self, chunk_index: u32) -> Option<&str> {
+        self.original_hashes.get(chunk_index as usize).map(|s| s.as_str())
+    }
 
-                // Truncate original_chunks list
-                if new_chunk_count < original_chunks.len() as u32 {
-                    original_chunks.truncate(new_chunk_count as usize);
-                }
+    /// Calculate chunk index for a byte offset.
+    ///
+    /// # Arguments
+    /// * `offset` - Byte offset within the file
+    pub fn chunk_index_for_offset(&self, offset: u64) -> u32 {
+        (offset / self.chunk_size) as u32
+    }
 
-                // Truncate last chunk if loaded
-                if new_chunk_count > 0 {
-                    let last_chunk_idx: u32 = new_chunk_count - 1;
-                    let last_chunk_end: u64 = new_size - (last_chunk_idx as u64 * *chunk_size);
-
-                    if let Some(chunk_data) = loaded_chunks.get_mut(&last_chunk_idx) {
-                        if (last_chunk_end as usize) < chunk_data.len() {
-                            chunk_data.truncate(last_chunk_end as usize);
-                            dirty_chunks.insert(last_chunk_idx);
-                        }
-                    }
-                }
-
-                *total_size = new_size;
-            }
-        }
-        self.mtime = SystemTime::now();
-        self.maybe_convert_to_chunked();
+    /// Calculate byte range within a chunk for a file offset.
+    ///
+    /// # Arguments
+    /// * `chunk_index` - Chunk index
+    /// * `file_offset` - Byte offset within the file
+    /// * `size` - Number of bytes
+    ///
+    /// # Returns
+    /// (start_in_chunk, end_in_chunk) byte offsets within the chunk.
+    pub fn chunk_byte_range(&self, chunk_index: u32, file_offset: u64, size: u64) -> (usize, usize) {
+        let chunk_start: u64 = chunk_index as u64 * self.chunk_size;
+        let start_in_chunk: usize = (file_offset.saturating_sub(chunk_start)) as usize;
+        let end_in_chunk: usize = ((file_offset + size).saturating_sub(chunk_start))
+            .min(self.chunk_size) as usize;
+        (start_in_chunk, end_in_chunk)
     }
 }
 
@@ -399,9 +312,12 @@ pub struct DirtyEntry {
 /// Manages dirty (modified) files with copy-on-write semantics.
 ///
 /// Coordinates between in-memory dirty files and disk cache.
+/// Content is stored in the unified memory pool for global memory management.
 pub struct DirtyFileManager {
-    /// Map of inode ID to dirty file.
-    dirty_files: RwLock<HashMap<INodeId, DirtyFile>>,
+    /// Map of inode ID to dirty file metadata (content in pool).
+    dirty_metadata: RwLock<HashMap<INodeId, DirtyFileMetadata>>,
+    /// Unified memory pool for content storage.
+    pool: Arc<MemoryPool>,
     /// Disk cache for persistence (trait object for testability).
     cache: Arc<dyn WriteCache>,
     /// Reference to read-only file store (for COW source).
@@ -411,23 +327,49 @@ pub struct DirtyFileManager {
 }
 
 impl DirtyFileManager {
-    /// Create a new dirty file manager.
+    /// Create a new dirty file manager with unified memory pool.
     ///
     /// # Arguments
     /// * `cache` - Write cache implementation (disk or memory)
     /// * `read_store` - Read-only file store for COW source
     /// * `inodes` - Inode manager for metadata
+    /// * `pool` - Unified memory pool for content storage
     pub fn new(
         cache: Arc<dyn WriteCache>,
         read_store: Arc<dyn FileStore>,
         inodes: Arc<INodeManager>,
+        pool: Arc<MemoryPool>,
     ) -> Self {
         Self {
-            dirty_files: RwLock::new(HashMap::new()),
+            dirty_metadata: RwLock::new(HashMap::new()),
+            pool,
             cache,
             read_store,
             inodes,
         }
+    }
+
+    /// Create a new dirty file manager with unified memory pool.
+    ///
+    /// This is an alias for `new()` for backward compatibility.
+    ///
+    /// # Arguments
+    /// * `cache` - Write cache implementation (disk or memory)
+    /// * `read_store` - Read-only file store for COW source
+    /// * `inodes` - Inode manager for metadata
+    /// * `pool` - Unified memory pool for content storage
+    pub fn with_pool(
+        cache: Arc<dyn WriteCache>,
+        read_store: Arc<dyn FileStore>,
+        inodes: Arc<INodeManager>,
+        pool: Arc<MemoryPool>,
+    ) -> Self {
+        Self::new(cache, read_store, inodes, pool)
+    }
+
+    /// Get reference to the memory pool.
+    pub fn pool(&self) -> &Arc<MemoryPool> {
+        &self.pool
     }
 
     /// Check if a file is dirty.
@@ -435,7 +377,7 @@ impl DirtyFileManager {
     /// # Arguments
     /// * `inode_id` - Inode ID to check
     pub fn is_dirty(&self, inode_id: INodeId) -> bool {
-        self.dirty_files.read().unwrap().contains_key(&inode_id)
+        self.dirty_metadata.read().unwrap().contains_key(&inode_id)
     }
 
     /// Get dirty file size if dirty.
@@ -446,8 +388,8 @@ impl DirtyFileManager {
     /// # Returns
     /// File size if dirty, None otherwise.
     pub fn get_size(&self, inode_id: INodeId) -> Option<u64> {
-        let guard = self.dirty_files.read().unwrap();
-        guard.get(&inode_id).map(|f| f.size())
+        let guard = self.dirty_metadata.read().unwrap();
+        guard.get(&inode_id).map(|meta| meta.size())
     }
 
     /// Get dirty file mtime if dirty.
@@ -458,8 +400,8 @@ impl DirtyFileManager {
     /// # Returns
     /// Modification time if dirty, None otherwise.
     pub fn get_mtime(&self, inode_id: INodeId) -> Option<SystemTime> {
-        let guard = self.dirty_files.read().unwrap();
-        guard.get(&inode_id).map(|f| f.mtime())
+        let guard = self.dirty_metadata.read().unwrap();
+        guard.get(&inode_id).map(|meta| meta.mtime())
     }
 
     /// Get dirty file state if dirty.
@@ -470,8 +412,8 @@ impl DirtyFileManager {
     /// # Returns
     /// State if dirty, None otherwise.
     pub fn get_state(&self, inode_id: INodeId) -> Option<DirtyState> {
-        let guard = self.dirty_files.read().unwrap();
-        guard.get(&inode_id).map(|f| f.state())
+        let guard = self.dirty_metadata.read().unwrap();
+        guard.get(&inode_id).map(|meta| meta.state())
     }
 
     /// Perform copy-on-write for a file before modification.
@@ -509,8 +451,7 @@ impl DirtyFileManager {
             .map(|f| f.is_executable())
             .unwrap_or(false);
 
-        // Create dirty file (sparse - no data fetched yet)
-        let dirty = DirtyFile::from_cow(
+        let metadata = DirtyFileMetadata::from_cow(
             inode_id,
             inode.path().to_string(),
             &file_content,
@@ -518,117 +459,16 @@ impl DirtyFileManager {
             executable,
         );
 
-        // Insert into dirty map
-        self.dirty_files.write().unwrap().insert(inode_id, dirty);
+        // Invalidate any cached read-only blocks for original hashes
+        for hash in metadata.original_hashes() {
+            self.pool.invalidate_hash(hash);
+        }
+
+        self.dirty_metadata.write().unwrap().insert(inode_id, metadata);
 
         Ok(())
     }
 
-    /// Ensure a chunk is loaded for a dirty file.
-    ///
-    /// # Arguments
-    /// * `inode_id` - Inode ID of the file
-    /// * `chunk_index` - Index of the chunk to load
-    async fn ensure_chunk_loaded(&self, inode_id: INodeId, chunk_index: u32) -> Result<(), VfsError> {
-        // Check if already loaded
-        {
-            let guard = self.dirty_files.read().unwrap();
-            if let Some(dirty) = guard.get(&inode_id) {
-                if dirty.content().is_chunk_loaded(chunk_index) {
-                    return Ok(());
-                }
-            } else {
-                return Err(VfsError::InodeNotFound(inode_id));
-            }
-        }
-
-        // Need to fetch chunk - get hash first
-        let chunk_hash: Option<String> = {
-            let guard = self.dirty_files.read().unwrap();
-            let dirty: &DirtyFile = guard
-                .get(&inode_id)
-                .ok_or(VfsError::InodeNotFound(inode_id))?;
-
-            match dirty.content() {
-                DirtyContent::Small { .. } => None,
-                DirtyContent::Chunked { original_chunks, .. } => {
-                    original_chunks.get(chunk_index as usize).cloned()
-                }
-            }
-        };
-
-        // Fetch chunk data
-        let chunk_data: Vec<u8> = if let Some(hash) = chunk_hash {
-            self.read_store
-                .retrieve(&hash, HashAlgorithm::Xxh128)
-                .await?
-        } else {
-            // New chunk beyond original file
-            Vec::new()
-        };
-
-        // Insert loaded chunk
-        {
-            let mut guard = self.dirty_files.write().unwrap();
-            if let Some(dirty) = guard.get_mut(&inode_id) {
-                dirty.content_mut().insert_chunk(chunk_index, chunk_data);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Load small file content if not already loaded.
-    ///
-    /// # Arguments
-    /// * `inode_id` - Inode ID of the file
-    async fn ensure_small_file_loaded(&self, inode_id: INodeId) -> Result<(), VfsError> {
-        // Check if already loaded
-        {
-            let guard = self.dirty_files.read().unwrap();
-            if let Some(dirty) = guard.get(&inode_id) {
-                if let DirtyContent::Small { data } = dirty.content() {
-                    if !data.is_empty() || dirty.state() == DirtyState::New {
-                        return Ok(());
-                    }
-                }
-            } else {
-                return Err(VfsError::InodeNotFound(inode_id));
-            }
-        }
-
-        // Get original hash from inode
-        let hash: String = {
-            let file_content: FileContent = self
-                .inodes
-                .get_file_content(inode_id)
-                .ok_or(VfsError::NotAFile(inode_id))?;
-
-            match file_content {
-                FileContent::SingleHash(h) => h,
-                FileContent::Chunked(_) => return Ok(()), // Not a small file
-            }
-        };
-
-        // Fetch content
-        let data: Vec<u8> = self
-            .read_store
-            .retrieve(&hash, HashAlgorithm::Xxh128)
-            .await?;
-
-        // Store in dirty file
-        {
-            let mut guard = self.dirty_files.write().unwrap();
-            if let Some(dirty) = guard.get_mut(&inode_id) {
-                dirty.set_original_hash(hash);
-                if let DirtyContent::Small { data: file_data } = dirty.content_mut() {
-                    *file_data = data;
-                }
-            }
-        }
-
-        Ok(())
-    }
 
     /// Read from a dirty file.
     ///
@@ -645,103 +485,43 @@ impl DirtyFileManager {
         offset: u64,
         size: u32,
     ) -> Result<Vec<u8>, VfsError> {
-        // Determine content type and read accordingly
-        let is_chunked: bool = {
-            let guard = self.dirty_files.read().unwrap();
-            let dirty: &DirtyFile = guard
+        // Get file metadata
+        let (file_size, chunk_size, chunk_count): (u64, u64, u32) = {
+            let guard = self.dirty_metadata.read().unwrap();
+            let meta: &DirtyFileMetadata = guard
                 .get(&inode_id)
                 .ok_or(VfsError::InodeNotFound(inode_id))?;
-            matches!(dirty.content(), DirtyContent::Chunked { .. })
+            (meta.size(), meta.chunk_size(), meta.chunk_count())
         };
 
-        if is_chunked {
-            self.read_chunked(inode_id, offset, size).await
-        } else {
-            self.read_small(inode_id, offset, size).await
-        }
-    }
-
-    /// Read from a small dirty file.
-    ///
-    /// # Arguments
-    /// * `inode_id` - Inode ID
-    /// * `offset` - Byte offset
-    /// * `size` - Max bytes to read
-    async fn read_small(
-        &self,
-        inode_id: INodeId,
-        offset: u64,
-        size: u32,
-    ) -> Result<Vec<u8>, VfsError> {
-        self.ensure_small_file_loaded(inode_id).await?;
-
-        let guard = self.dirty_files.read().unwrap();
-        let dirty: &DirtyFile = guard
-            .get(&inode_id)
-            .ok_or(VfsError::InodeNotFound(inode_id))?;
-
-        if let DirtyContent::Small { data } = dirty.content() {
-            let start: usize = (offset as usize).min(data.len());
-            let end: usize = (offset as u64 + size as u64).min(data.len() as u64) as usize;
-            Ok(data[start..end].to_vec())
-        } else {
-            Err(VfsError::NotAFile(inode_id))
-        }
-    }
-
-    /// Read from a chunked dirty file.
-    ///
-    /// # Arguments
-    /// * `inode_id` - Inode ID
-    /// * `offset` - Byte offset
-    /// * `size` - Max bytes to read
-    async fn read_chunked(
-        &self,
-        inode_id: INodeId,
-        offset: u64,
-        size: u32,
-    ) -> Result<Vec<u8>, VfsError> {
-        // Get file info
-        let (chunk_size, total_size): (u64, u64) = {
-            let guard = self.dirty_files.read().unwrap();
-            let dirty: &DirtyFile = guard
-                .get(&inode_id)
-                .ok_or(VfsError::InodeNotFound(inode_id))?;
-
-            match dirty.content() {
-                DirtyContent::Chunked {
-                    chunk_size,
-                    total_size,
-                    ..
-                } => (*chunk_size, *total_size),
-                _ => return Err(VfsError::NotAFile(inode_id)),
-            }
-        };
-
-        // Clamp read to file size
-        let read_end: u64 = (offset + size as u64).min(total_size);
-        if offset >= total_size {
+        // Handle empty file or read past end
+        if offset >= file_size {
             return Ok(Vec::new());
         }
+
+        let read_end: u64 = (offset + size as u64).min(file_size);
         let actual_size: u64 = read_end - offset;
 
+        // Small file optimization: single chunk read
+        if chunk_count <= 1 {
+            return self.read_single_chunk(inode_id, offset, actual_size as u32).await;
+        }
+
+        // Multi-chunk read
         let start_chunk: u32 = (offset / chunk_size) as u32;
         let end_chunk: u32 = ((read_end - 1) / chunk_size) as u32;
 
         let mut result: Vec<u8> = Vec::with_capacity(actual_size as usize);
 
         for chunk_idx in start_chunk..=end_chunk {
-            // Ensure chunk is loaded
-            self.ensure_chunk_loaded(inode_id, chunk_idx).await?;
+            // Ensure chunk is loaded into pool
+            self.ensure_chunk_in_pool(inode_id, chunk_idx).await?;
 
-            // Read from chunk
-            let guard = self.dirty_files.read().unwrap();
-            let dirty: &DirtyFile = guard
-                .get(&inode_id)
-                .ok_or(VfsError::InodeNotFound(inode_id))?;
-
-            if let Some(chunk_data) = dirty.content().get_chunk(chunk_idx) {
+            // Read from pool
+            if let Some(handle) = self.pool.get_dirty(inode_id, chunk_idx) {
+                let chunk_data: &[u8] = handle.data();
                 let chunk_start_offset: u64 = chunk_idx as u64 * chunk_size;
+
                 let read_start: usize = if chunk_idx == start_chunk {
                     (offset - chunk_start_offset) as usize
                 } else {
@@ -762,10 +542,106 @@ impl DirtyFileManager {
 
         Ok(result)
     }
-}
+
+    /// Read a single chunk (optimized for small files).
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID
+    /// * `offset` - Byte offset within the file
+    /// * `size` - Bytes to read
+    async fn read_single_chunk(
+        &self,
+        inode_id: INodeId,
+        offset: u64,
+        size: u32,
+    ) -> Result<Vec<u8>, VfsError> {
+        // Get file size from metadata
+        let file_size: u64 = {
+            let guard = self.dirty_metadata.read().unwrap();
+            let meta: &DirtyFileMetadata = guard
+                .get(&inode_id)
+                .ok_or(VfsError::InodeNotFound(inode_id))?;
+            meta.size()
+        };
+
+        // Ensure chunk 0 is loaded
+        self.ensure_chunk_in_pool(inode_id, 0).await?;
+
+        // Read from pool
+        let pool_data: Vec<u8> = if let Some(handle) = self.pool.get_dirty(inode_id, 0) {
+            handle.data().to_vec()
+        } else {
+            // New file with no content yet - treat as empty
+            Vec::new()
+        };
+
+        // Calculate read range
+        let start: usize = offset as usize;
+        let end: usize = (offset + size as u64).min(file_size) as usize;
+
+        if start >= end {
+            return Ok(Vec::new());
+        }
+
+        let read_len: usize = end - start;
+        let mut result: Vec<u8> = Vec::with_capacity(read_len);
+
+        // Handle case where file was extended via truncate (pool data < file size)
+        for i in start..end {
+            if i < pool_data.len() {
+                result.push(pool_data[i]);
+            } else {
+                // Extended region - return zeros
+                result.push(0);
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Ensure a chunk is loaded into the pool.
+    ///
+    /// Checks pool first, then fetches from S3 if needed.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID
+    /// * `chunk_index` - Chunk index to load
+    async fn ensure_chunk_in_pool(&self, inode_id: INodeId, chunk_index: u32) -> Result<(), VfsError> {
+        // Check if already in pool
+        if self.pool.has_dirty(inode_id, chunk_index) {
+            return Ok(());
+        }
+
+        // Get original hash for this chunk (if any)
+        let original_hash: Option<String> = {
+            let guard = self.dirty_metadata.read().unwrap();
+            let meta: &DirtyFileMetadata = guard
+                .get(&inode_id)
+                .ok_or(VfsError::InodeNotFound(inode_id))?;
+            meta.original_hash(chunk_index).map(|s| s.to_string())
+        };
+
+        // Fetch from S3 if we have an original hash
+        let chunk_data: Vec<u8> = if let Some(hash) = original_hash {
+            self.read_store
+                .retrieve(&hash, HashAlgorithm::Xxh128)
+                .await?
+        } else {
+            // New chunk - start empty
+            Vec::new()
+        };
+
+        // Insert into pool (not dirty yet - just loaded)
+        self.pool.insert_dirty(inode_id, chunk_index, chunk_data)
+            .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
+
+        // Mark as not needing flush (just loaded, not modified)
+        self.pool.mark_flushed(inode_id, chunk_index);
+
+        Ok(())
+    }
 
 
-impl DirtyFileManager {
     /// Write to a dirty file, performing COW if needed.
     ///
     /// # Arguments
@@ -784,28 +660,23 @@ impl DirtyFileManager {
         // Ensure file is dirty (COW if needed)
         self.cow_copy(inode_id).await?;
 
-        // Determine content type
-        let is_chunked: bool = {
-            let guard = self.dirty_files.read().unwrap();
-            let dirty: &DirtyFile = guard
+        // Get file metadata
+        let (chunk_size, chunk_count): (u64, u32) = {
+            let guard = self.dirty_metadata.read().unwrap();
+            let meta: &DirtyFileMetadata = guard
                 .get(&inode_id)
                 .ok_or(VfsError::InodeNotFound(inode_id))?;
-            matches!(dirty.content(), DirtyContent::Chunked { .. })
+            (meta.chunk_size(), meta.chunk_count())
         };
 
-        let bytes_written: usize = if is_chunked {
-            self.write_chunked(inode_id, offset, data).await?
+        let write_end: u64 = offset + data.len() as u64;
+
+        // Small file optimization: single chunk
+        let bytes_written: usize = if chunk_count <= 1 && write_end <= chunk_size {
+            self.write_single_chunk(inode_id, offset, data).await?
         } else {
-            self.write_small(inode_id, offset, data).await?
+            self.write_multi_chunk(inode_id, offset, data).await?
         };
-
-        // Check if small file should convert to chunked
-        {
-            let mut guard = self.dirty_files.write().unwrap();
-            if let Some(dirty) = guard.get_mut(&inode_id) {
-                dirty.maybe_convert_to_chunked();
-            }
-        }
 
         // Flush to disk cache
         self.flush_to_disk(inode_id).await?;
@@ -813,27 +684,31 @@ impl DirtyFileManager {
         Ok(bytes_written)
     }
 
-    /// Write to a small file.
+    /// Write to a single chunk (optimized for small files).
     ///
     /// # Arguments
     /// * `inode_id` - Inode ID
-    /// * `offset` - Byte offset
+    /// * `offset` - Byte offset within the file
     /// * `data` - Data to write
-    async fn write_small(
+    ///
+    /// # Returns
+    /// Number of bytes written.
+    async fn write_single_chunk(
         &self,
         inode_id: INodeId,
         offset: u64,
         data: &[u8],
     ) -> Result<usize, VfsError> {
-        // Ensure content is loaded first
-        self.ensure_small_file_loaded(inode_id).await?;
+        // Ensure chunk 0 is loaded
+        self.ensure_chunk_in_pool(inode_id, 0).await?;
 
-        let mut guard = self.dirty_files.write().unwrap();
-        let dirty: &mut DirtyFile = guard
-            .get_mut(&inode_id)
-            .ok_or(VfsError::InodeNotFound(inode_id))?;
+        let write_end: u64 = offset + data.len() as u64;
 
-        if let DirtyContent::Small { data: file_data } = dirty.content_mut() {
+        // Get current data, modify, and update
+        let new_data: Vec<u8> = if let Some(handle) = self.pool.get_dirty(inode_id, 0) {
+            let mut file_data: Vec<u8> = handle.data().to_vec();
+            drop(handle);
+
             let offset_usize: usize = offset as usize;
             let end: usize = offset_usize + data.len();
 
@@ -843,36 +718,54 @@ impl DirtyFileManager {
             }
 
             file_data[offset_usize..end].copy_from_slice(data);
-            dirty.touch();
-            Ok(data.len())
+            file_data
         } else {
-            Err(VfsError::NotAFile(inode_id))
+            // New file
+            let mut file_data: Vec<u8> = vec![0u8; write_end as usize];
+            file_data[offset as usize..write_end as usize].copy_from_slice(data);
+            file_data
+        };
+
+        // Update in pool
+        self.pool.update_dirty(inode_id, 0, new_data)
+            .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
+
+        // Update metadata
+        {
+            let mut guard = self.dirty_metadata.write().unwrap();
+            if let Some(meta) = guard.get_mut(&inode_id) {
+                meta.mark_chunk_dirty(0);
+                if write_end > meta.size() {
+                    meta.set_size(write_end);
+                }
+                meta.touch();
+            }
         }
+
+        Ok(data.len())
     }
 
-    /// Write to a chunked file, handling boundary spanning.
+    /// Write across multiple chunks.
     ///
     /// # Arguments
-    /// * `inode_id` - Inode ID
-    /// * `offset` - Byte offset
+    /// * `inode_id` - Inode ID of file
+    /// * `offset` - Byte offset to write at
     /// * `data` - Data to write
-    async fn write_chunked(
+    ///
+    /// # Returns
+    /// Number of bytes written.
+    async fn write_multi_chunk(
         &self,
         inode_id: INodeId,
         offset: u64,
         data: &[u8],
     ) -> Result<usize, VfsError> {
-        // Get chunk size
         let chunk_size: u64 = {
-            let guard = self.dirty_files.read().unwrap();
-            let dirty: &DirtyFile = guard
+            let guard = self.dirty_metadata.read().unwrap();
+            let meta: &DirtyFileMetadata = guard
                 .get(&inode_id)
                 .ok_or(VfsError::InodeNotFound(inode_id))?;
-
-            match dirty.content() {
-                DirtyContent::Chunked { chunk_size, .. } => *chunk_size,
-                _ => return Err(VfsError::NotAFile(inode_id)),
-            }
+            meta.chunk_size()
         };
 
         let write_end: u64 = offset + data.len() as u64;
@@ -886,8 +779,8 @@ impl DirtyFileManager {
         let mut data_offset: usize = 0;
 
         for chunk_idx in start_chunk..=end_chunk {
-            // Ensure chunk is loaded
-            self.ensure_chunk_loaded(inode_id, chunk_idx).await?;
+            // Ensure chunk is loaded into pool
+            self.ensure_chunk_in_pool(inode_id, chunk_idx).await?;
 
             // Calculate write range within this chunk
             let chunk_start_offset: u64 = chunk_idx as u64 * chunk_size;
@@ -903,54 +796,57 @@ impl DirtyFileManager {
             };
             let write_len: usize = write_end_in_chunk - write_start_in_chunk;
 
-            // Apply write to chunk
-            {
-                let mut guard = self.dirty_files.write().unwrap();
-                let dirty: &mut DirtyFile = guard
-                    .get_mut(&inode_id)
-                    .ok_or(VfsError::InodeNotFound(inode_id))?;
+            // Get current chunk data, modify it, and update in pool
+            let new_chunk_data: Vec<u8> = if let Some(handle) = self.pool.get_dirty(inode_id, chunk_idx) {
+                let mut chunk_data: Vec<u8> = handle.data().to_vec();
+                drop(handle); // Release handle before updating
 
-                // Get rel_path before mutable borrow of content
-                let rel_path_for_error: String = dirty.rel_path().to_string();
-
-                if let DirtyContent::Chunked {
-                    loaded_chunks,
-                    dirty_chunks,
-                    total_size,
-                    ..
-                } = dirty.content_mut()
-                {
-                    let chunk: &mut Vec<u8> = loaded_chunks
-                        .get_mut(&chunk_idx)
-                        .ok_or(VfsError::ChunkNotLoaded {
-                            path: rel_path_for_error,
-                            chunk_index: chunk_idx,
-                        })?;
-
-                    // Extend chunk if writing beyond current length
-                    if write_end_in_chunk > chunk.len() {
-                        chunk.resize(write_end_in_chunk, 0);
-                    }
-
-                    chunk[write_start_in_chunk..write_end_in_chunk]
-                        .copy_from_slice(&data[data_offset..data_offset + write_len]);
-
-                    dirty_chunks.insert(chunk_idx);
-
-                    // Update total file size if we wrote beyond end
-                    if write_end > *total_size {
-                        *total_size = write_end;
-                    }
+                // Extend chunk if writing beyond current length
+                if write_end_in_chunk > chunk_data.len() {
+                    chunk_data.resize(write_end_in_chunk, 0);
                 }
 
-                dirty.touch();
+                chunk_data[write_start_in_chunk..write_end_in_chunk]
+                    .copy_from_slice(&data[data_offset..data_offset + write_len]);
+
+                chunk_data
+            } else {
+                // New chunk
+                let mut chunk_data: Vec<u8> = vec![0u8; write_end_in_chunk];
+                chunk_data[write_start_in_chunk..write_end_in_chunk]
+                    .copy_from_slice(&data[data_offset..data_offset + write_len]);
+                chunk_data
+            };
+
+            // Update chunk in pool (marks as dirty)
+            self.pool.update_dirty(inode_id, chunk_idx, new_chunk_data)
+                .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
+
+            // Mark chunk as dirty in metadata
+            {
+                let mut guard = self.dirty_metadata.write().unwrap();
+                if let Some(meta) = guard.get_mut(&inode_id) {
+                    meta.mark_chunk_dirty(chunk_idx);
+                }
             }
 
             data_offset += write_len;
         }
 
+        // Update file size in metadata
+        {
+            let mut guard = self.dirty_metadata.write().unwrap();
+            if let Some(meta) = guard.get_mut(&inode_id) {
+                if write_end > meta.size() {
+                    meta.set_size(write_end);
+                }
+                meta.touch();
+            }
+        }
+
         Ok(data.len())
     }
+
 
     /// Create a new file (not COW).
     ///
@@ -964,8 +860,8 @@ impl DirtyFileManager {
         rel_path: String,
         parent_inode: INodeId,
     ) -> Result<(), VfsError> {
-        let dirty = DirtyFile::new_file(inode_id, rel_path, parent_inode);
-        self.dirty_files.write().unwrap().insert(inode_id, dirty);
+        let metadata = DirtyFileMetadata::new_file(inode_id, rel_path, parent_inode);
+        self.dirty_metadata.write().unwrap().insert(inode_id, metadata);
         Ok(())
     }
 
@@ -977,13 +873,11 @@ impl DirtyFileManager {
     /// # Returns
     /// Vector of (inode_id, file_name) for new files in the directory.
     pub fn get_new_files_in_dir(&self, parent_inode: INodeId) -> Vec<(INodeId, String)> {
-        let guard = self.dirty_files.read().unwrap();
+        let guard = self.dirty_metadata.read().unwrap();
         guard
             .values()
-            .filter(|f| {
-                f.state() == DirtyState::New && f.parent_inode() == Some(parent_inode)
-            })
-            .map(|f| (f.inode_id(), f.file_name().to_string()))
+            .filter(|meta| meta.state() == DirtyState::New && meta.parent_inode() == Some(parent_inode))
+            .map(|meta| (meta.inode_id(), meta.file_name().to_string()))
             .collect()
     }
 
@@ -996,15 +890,15 @@ impl DirtyFileManager {
     /// # Returns
     /// Inode ID if found, None otherwise.
     pub fn lookup_new_file(&self, parent_inode: INodeId, name: &str) -> Option<INodeId> {
-        let guard = self.dirty_files.read().unwrap();
+        let guard = self.dirty_metadata.read().unwrap();
         guard
             .values()
-            .find(|f| {
-                f.state() == DirtyState::New
-                    && f.parent_inode() == Some(parent_inode)
-                    && f.file_name() == name
+            .find(|meta| {
+                meta.state() == DirtyState::New
+                    && meta.parent_inode() == Some(parent_inode)
+                    && meta.file_name() == name
             })
-            .map(|f| f.inode_id())
+            .map(|meta| meta.inode_id())
     }
 
     /// Check if an inode is a new file (created, not from manifest).
@@ -1015,10 +909,10 @@ impl DirtyFileManager {
     /// # Returns
     /// True if this is a new file, false otherwise.
     pub fn is_new_file(&self, inode_id: INodeId) -> bool {
-        let guard = self.dirty_files.read().unwrap();
+        let guard = self.dirty_metadata.read().unwrap();
         guard
             .get(&inode_id)
-            .map(|f| f.state() == DirtyState::New)
+            .map(|meta| meta.state() == DirtyState::New)
             .unwrap_or(false)
     }
 
@@ -1032,13 +926,13 @@ impl DirtyFileManager {
     pub async fn delete_file(&self, inode_id: INodeId) -> Result<(), VfsError> {
         // Check if it's a new file - if so, just remove it entirely
         if self.is_new_file(inode_id) {
-            let rel_path: Option<String> = {
-                let guard = self.dirty_files.read().unwrap();
-                guard.get(&inode_id).map(|f| f.rel_path().to_string())
-            };
+            let rel_path: Option<String> = self.get_rel_path(inode_id);
 
-            // Remove from dirty map
-            self.dirty_files.write().unwrap().remove(&inode_id);
+            // Remove from pool
+            self.pool.remove_inode_blocks(inode_id);
+
+            // Remove from metadata
+            self.dirty_metadata.write().unwrap().remove(&inode_id);
 
             // Remove from disk cache if it was written
             if let Some(path) = rel_path {
@@ -1064,26 +958,43 @@ impl DirtyFileManager {
                 .get_file_content(inode_id)
                 .ok_or(VfsError::NotAFile(inode_id))?;
 
-            let mut dirty = DirtyFile::from_cow(
+            let mut metadata = DirtyFileMetadata::from_cow(
                 inode_id,
                 inode.path().to_string(),
                 &file_content,
                 inode.size(),
                 false,
             );
-            dirty.mark_deleted();
-            self.dirty_files.write().unwrap().insert(inode_id, dirty);
+            metadata.mark_deleted();
+            self.dirty_metadata.write().unwrap().insert(inode_id, metadata);
         } else {
-            let mut guard = self.dirty_files.write().unwrap();
-            if let Some(dirty) = guard.get_mut(&inode_id) {
-                dirty.mark_deleted();
+            // Mark existing dirty entry as deleted
+            let mut guard = self.dirty_metadata.write().unwrap();
+            if let Some(meta) = guard.get_mut(&inode_id) {
+                meta.mark_deleted();
             }
         }
+
+        // Remove blocks from pool
+        self.pool.remove_inode_blocks(inode_id);
 
         // Remove from disk cache
         self.flush_to_disk(inode_id).await?;
         Ok(())
     }
+
+    /// Get the relative path for an inode.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID to look up
+    ///
+    /// # Returns
+    /// Relative path if found, None otherwise.
+    fn get_rel_path(&self, inode_id: INodeId) -> Option<String> {
+        let guard = self.dirty_metadata.read().unwrap();
+        guard.get(&inode_id).map(|meta| meta.rel_path().to_string())
+    }
+
 
     /// Truncate a dirty file.
     ///
@@ -1094,22 +1005,53 @@ impl DirtyFileManager {
         // Ensure file is dirty
         self.cow_copy(inode_id).await?;
 
-        // For small files, ensure content is loaded before truncate
-        {
-            let guard = self.dirty_files.read().unwrap();
-            if let Some(dirty) = guard.get(&inode_id) {
-                if matches!(dirty.content(), DirtyContent::Small { .. }) {
-                    drop(guard);
-                    self.ensure_small_file_loaded(inode_id).await?;
+        let (old_size, chunk_size): (u64, u64) = {
+            let guard = self.dirty_metadata.read().unwrap();
+            let meta: &DirtyFileMetadata = guard
+                .get(&inode_id)
+                .ok_or(VfsError::InodeNotFound(inode_id))?;
+            (meta.size(), meta.chunk_size())
+        };
+
+        if new_size >= old_size {
+            // Extending - just update metadata
+            let mut guard = self.dirty_metadata.write().unwrap();
+            if let Some(meta) = guard.get_mut(&inode_id) {
+                meta.set_size(new_size);
+                meta.touch();
+            }
+        } else {
+            // Shrinking - truncate last chunk if needed
+            let new_chunk_count: u32 = if new_size == 0 {
+                0
+            } else {
+                ((new_size - 1) / chunk_size + 1) as u32
+            };
+
+            // Truncate last chunk if needed
+            if new_chunk_count > 0 {
+                let last_chunk_idx: u32 = new_chunk_count - 1;
+                let last_chunk_end: u64 = new_size - (last_chunk_idx as u64 * chunk_size);
+
+                if let Some(handle) = self.pool.get_dirty(inode_id, last_chunk_idx) {
+                    let mut chunk_data: Vec<u8> = handle.data().to_vec();
+                    drop(handle);
+
+                    if (last_chunk_end as usize) < chunk_data.len() {
+                        chunk_data.truncate(last_chunk_end as usize);
+                        self.pool.update_dirty(inode_id, last_chunk_idx, chunk_data)
+                            .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
+                    }
                 }
             }
-        }
 
-        // Perform truncate
-        {
-            let mut guard = self.dirty_files.write().unwrap();
-            if let Some(dirty) = guard.get_mut(&inode_id) {
-                dirty.truncate(new_size);
+            // Update metadata
+            {
+                let mut guard = self.dirty_metadata.write().unwrap();
+                if let Some(meta) = guard.get_mut(&inode_id) {
+                    meta.set_size(new_size);
+                    meta.touch();
+                }
             }
         }
 
@@ -1124,29 +1066,18 @@ impl DirtyFileManager {
     /// # Arguments
     /// * `inode_id` - Inode ID of file to flush
     pub async fn flush_to_disk(&self, inode_id: INodeId) -> Result<(), VfsError> {
-        let (rel_path, state, content_snapshot): (String, DirtyState, ContentSnapshot) = {
-            let guard = self.dirty_files.read().unwrap();
-            let dirty: &DirtyFile = guard
+        let (rel_path, state, size, chunk_count, dirty_chunks): (String, DirtyState, u64, u32, HashSet<u32>) = {
+            let guard = self.dirty_metadata.read().unwrap();
+            let meta: &DirtyFileMetadata = guard
                 .get(&inode_id)
                 .ok_or(VfsError::InodeNotFound(inode_id))?;
-
-            let snapshot: ContentSnapshot = match dirty.content() {
-                DirtyContent::Small { data } => ContentSnapshot::Small(data.clone()),
-                DirtyContent::Chunked {
-                    original_chunks,
-                    dirty_chunks,
-                    loaded_chunks,
-                    total_size,
-                    ..
-                } => ContentSnapshot::Chunked {
-                    original_chunks: original_chunks.clone(),
-                    dirty_chunks: dirty_chunks.clone(),
-                    loaded_chunks: loaded_chunks.clone(),
-                    total_size: *total_size,
-                },
-            };
-
-            (dirty.rel_path().to_string(), dirty.state(), snapshot)
+            (
+                meta.rel_path().to_string(),
+                meta.state(),
+                meta.size(),
+                meta.chunk_count(),
+                meta.dirty_chunks().clone(),
+            )
         };
 
         if state == DirtyState::Deleted {
@@ -1157,51 +1088,47 @@ impl DirtyFileManager {
             return Ok(());
         }
 
-        match content_snapshot {
-            ContentSnapshot::Small(data) => {
-                self.cache
-                    .write_file(&rel_path, &data)
-                    .await
-                    .map_err(|e| VfsError::WriteCacheError(e.to_string()))?;
+        // Assemble file content from pool
+        let mut assembled: Vec<u8> = Vec::with_capacity(size as usize);
+
+        for chunk_idx in 0..chunk_count {
+            if let Some(handle) = self.pool.get_dirty(inode_id, chunk_idx) {
+                assembled.extend_from_slice(handle.data());
+            } else if dirty_chunks.contains(&chunk_idx) {
+                return Err(VfsError::ChunkNotLoaded {
+                    path: rel_path,
+                    chunk_index: chunk_idx,
+                });
             }
-            ContentSnapshot::Chunked {
-                dirty_chunks,
-                loaded_chunks,
-                total_size,
-                ..
-            } => {
-                // For chunked files, assemble and write the full file
-                // This is a simplified approach - a more optimized version
-                // would write only dirty chunks using MaterializedCache::write_chunk
-                let mut assembled: Vec<u8> = Vec::with_capacity(total_size as usize);
-                let chunk_size: u64 = CHUNK_SIZE_V2;
-                let chunk_count: u32 = ((total_size + chunk_size - 1) / chunk_size) as u32;
+        }
 
-                for chunk_idx in 0..chunk_count {
-                    if let Some(chunk_data) = loaded_chunks.get(&chunk_idx) {
-                        assembled.extend_from_slice(chunk_data);
-                    } else if dirty_chunks.contains(&chunk_idx) {
-                        // Dirty chunk should be loaded - this is an error
-                        return Err(VfsError::ChunkNotLoaded {
-                            path: rel_path,
-                            chunk_index: chunk_idx,
-                        });
-                    }
-                    // Unloaded, non-dirty chunks are skipped (sparse)
-                }
+        // Truncate to actual size (last chunk may be larger)
+        assembled.truncate(size as usize);
 
-                // Only write if we have data
-                if !assembled.is_empty() {
-                    self.cache
-                        .write_file(&rel_path, &assembled)
-                        .await
-                        .map_err(|e| VfsError::WriteCacheError(e.to_string()))?;
-                }
+        // Write to cache
+        if !assembled.is_empty() || size == 0 {
+            self.cache
+                .write_file(&rel_path, &assembled)
+                .await
+                .map_err(|e| VfsError::WriteCacheError(e.to_string()))?;
+        }
+
+        // Mark all chunks as flushed in pool
+        for chunk_idx in 0..chunk_count {
+            self.pool.mark_flushed(inode_id, chunk_idx);
+        }
+
+        // Clear dirty flags in metadata
+        {
+            let mut guard = self.dirty_metadata.write().unwrap();
+            if let Some(meta) = guard.get_mut(&inode_id) {
+                meta.mark_all_flushed();
             }
         }
 
         Ok(())
     }
+
 
     /// Remove all new files under a directory path.
     ///
@@ -1220,19 +1147,22 @@ impl DirtyFileManager {
             format!("{}/", dir_path)
         };
 
-        let mut guard = self.dirty_files.write().unwrap();
-
-        // Collect inode IDs of new files under this path
+        let mut guard = self.dirty_metadata.write().unwrap();
         let to_remove: Vec<INodeId> = guard
             .iter()
-            .filter(|(_, dirty)| {
-                dirty.state() == DirtyState::New
-                    && (dirty.rel_path().starts_with(&prefix) || dirty.rel_path() == dir_path)
+            .filter(|(_, meta)| {
+                meta.state() == DirtyState::New
+                    && (meta.rel_path().starts_with(&prefix) || meta.rel_path() == dir_path)
             })
             .map(|(id, _)| *id)
             .collect();
 
         let count: usize = to_remove.len();
+
+        // Remove blocks from pool
+        for id in &to_remove {
+            self.pool.remove_inode_blocks(*id);
+        }
 
         for id in to_remove {
             guard.remove(&id);
@@ -1246,23 +1176,30 @@ impl DirtyFileManager {
     /// # Returns
     /// Vector of dirty entry summaries.
     pub fn get_dirty_entries(&self) -> Vec<DirtyEntry> {
-        let guard = self.dirty_files.read().unwrap();
+        let guard = self.dirty_metadata.read().unwrap();
         guard
             .values()
-            .map(|dirty| DirtyEntry {
-                inode_id: dirty.inode_id(),
-                path: dirty.rel_path().to_string(),
-                state: dirty.state(),
-                size: dirty.size(),
-                mtime: dirty.mtime(),
-                executable: dirty.is_executable(),
+            .map(|meta| DirtyEntry {
+                inode_id: meta.inode_id(),
+                path: meta.rel_path().to_string(),
+                state: meta.state(),
+                size: meta.size(),
+                mtime: meta.mtime(),
+                executable: meta.is_executable(),
             })
             .collect()
     }
 
     /// Clear all dirty state.
     pub fn clear(&self) {
-        self.dirty_files.write().unwrap().clear();
+        // Clear pool blocks for all dirty inodes
+        let guard = self.dirty_metadata.read().unwrap();
+        for inode_id in guard.keys() {
+            self.pool.remove_inode_blocks(*inode_id);
+        }
+        drop(guard);
+
+        self.dirty_metadata.write().unwrap().clear();
     }
 
     /// Get reference to the cache.
@@ -1276,30 +1213,164 @@ impl DirtyFileManager {
     }
 }
 
-/// Snapshot of content for flush operation.
-enum ContentSnapshot {
-    Small(Vec<u8>),
-    Chunked {
-        #[allow(dead_code)]
-        original_chunks: Vec<String>,
-        dirty_chunks: HashSet<u32>,
-        loaded_chunks: HashMap<u32, Vec<u8>>,
-        total_size: u64,
-    },
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::content::MemoryFileStore;
+    use crate::memory_pool::MemoryPoolConfig;
     use crate::write::cache::MemoryWriteCache;
 
-    fn create_test_manager() -> (DirtyFileManager, Arc<INodeManager>) {
+    fn create_test_manager() -> (DirtyFileManager, Arc<INodeManager>, Arc<MemoryPool>) {
         let cache = Arc::new(MemoryWriteCache::new());
         let store = Arc::new(MemoryFileStore::new());
         let inodes = Arc::new(INodeManager::new());
-        let manager = DirtyFileManager::new(cache, store, inodes.clone());
-        (manager, inodes)
+        let pool = Arc::new(MemoryPool::new(MemoryPoolConfig::default()));
+        let manager = DirtyFileManager::new(cache, store, inodes.clone(), pool.clone());
+        (manager, inodes, pool)
+    }
+
+    // ========================================================================
+    // DirtyFileMetadata Tests
+    // ========================================================================
+
+    #[test]
+    fn test_dirty_file_metadata_new_file() {
+        let meta = DirtyFileMetadata::new_file(42, "test/file.txt".to_string(), 1);
+
+        assert_eq!(meta.inode_id(), 42);
+        assert_eq!(meta.rel_path(), "test/file.txt");
+        assert_eq!(meta.file_name(), "file.txt");
+        assert_eq!(meta.parent_inode(), Some(1));
+        assert_eq!(meta.state(), DirtyState::New);
+        assert_eq!(meta.size(), 0);
+        assert_eq!(meta.chunk_count(), 1);
+        assert!(meta.original_hashes().is_empty());
+        assert!(!meta.is_executable());
+    }
+
+    #[test]
+    fn test_dirty_file_metadata_from_cow_small() {
+        let file_content = FileContent::SingleHash("abc123".to_string());
+        let meta = DirtyFileMetadata::from_cow(
+            42,
+            "test/file.txt".to_string(),
+            &file_content,
+            1024,
+            true,
+        );
+
+        assert_eq!(meta.inode_id(), 42);
+        assert_eq!(meta.state(), DirtyState::Modified);
+        assert_eq!(meta.size(), 1024);
+        assert_eq!(meta.chunk_count(), 1);
+        assert_eq!(meta.original_hashes(), &["abc123".to_string()]);
+        assert!(meta.is_executable());
+        assert!(meta.is_small_file());
+    }
+
+    #[test]
+    fn test_dirty_file_metadata_from_cow_chunked() {
+        let file_content = FileContent::Chunked(vec![
+            "hash1".to_string(),
+            "hash2".to_string(),
+            "hash3".to_string(),
+        ]);
+        let meta = DirtyFileMetadata::from_cow(
+            42,
+            "large_file.bin".to_string(),
+            &file_content,
+            CHUNK_SIZE_V2 * 2 + 1000,
+            false,
+        );
+
+        assert_eq!(meta.chunk_count(), 3);
+        assert_eq!(meta.original_hashes().len(), 3);
+        assert_eq!(meta.original_hash(0), Some("hash1"));
+        assert_eq!(meta.original_hash(1), Some("hash2"));
+        assert_eq!(meta.original_hash(2), Some("hash3"));
+        assert_eq!(meta.original_hash(3), None);
+        assert!(!meta.is_small_file());
+    }
+
+    #[test]
+    fn test_dirty_file_metadata_dirty_chunks() {
+        let mut meta = DirtyFileMetadata::new_file(42, "test.txt".to_string(), 1);
+
+        assert!(!meta.is_chunk_dirty(0));
+        assert!(meta.dirty_chunks().is_empty());
+
+        meta.mark_chunk_dirty(0);
+        meta.mark_chunk_dirty(2);
+
+        assert!(meta.is_chunk_dirty(0));
+        assert!(!meta.is_chunk_dirty(1));
+        assert!(meta.is_chunk_dirty(2));
+        assert_eq!(meta.dirty_chunks().len(), 2);
+
+        meta.mark_chunk_flushed(0);
+        assert!(!meta.is_chunk_dirty(0));
+
+        meta.mark_all_flushed();
+        assert!(meta.dirty_chunks().is_empty());
+    }
+
+    #[test]
+    fn test_dirty_file_metadata_set_size() {
+        let mut meta = DirtyFileMetadata::new_file(42, "test.txt".to_string(), 1);
+
+        meta.set_size(100);
+        assert_eq!(meta.size(), 100);
+        assert_eq!(meta.chunk_count(), 1);
+
+        meta.set_size(CHUNK_SIZE_V2 + 1);
+        assert_eq!(meta.size(), CHUNK_SIZE_V2 + 1);
+        assert_eq!(meta.chunk_count(), 2);
+
+        meta.set_size(0);
+        assert_eq!(meta.size(), 0);
+        assert_eq!(meta.chunk_count(), 1);
+    }
+
+    #[test]
+    fn test_dirty_file_metadata_mark_deleted() {
+        let mut meta = DirtyFileMetadata::new_file(42, "test.txt".to_string(), 1);
+        meta.set_size(1000);
+        meta.mark_chunk_dirty(0);
+
+        meta.mark_deleted();
+
+        assert_eq!(meta.state(), DirtyState::Deleted);
+        assert_eq!(meta.size(), 0);
+        assert_eq!(meta.chunk_count(), 0);
+        assert!(meta.dirty_chunks().is_empty());
+    }
+
+    #[test]
+    fn test_dirty_file_metadata_chunk_calculations() {
+        let file_content = FileContent::Chunked(vec!["h1".to_string(), "h2".to_string()]);
+        let meta = DirtyFileMetadata::from_cow(
+            42,
+            "file.bin".to_string(),
+            &file_content,
+            CHUNK_SIZE_V2 + 1000,
+            false,
+        );
+
+        // Test chunk_index_for_offset
+        assert_eq!(meta.chunk_index_for_offset(0), 0);
+        assert_eq!(meta.chunk_index_for_offset(CHUNK_SIZE_V2 - 1), 0);
+        assert_eq!(meta.chunk_index_for_offset(CHUNK_SIZE_V2), 1);
+        assert_eq!(meta.chunk_index_for_offset(CHUNK_SIZE_V2 + 500), 1);
+
+        // Test chunk_byte_range
+        let (start, end): (usize, usize) = meta.chunk_byte_range(0, 100, 50);
+        assert_eq!(start, 100);
+        assert_eq!(end, 150);
+
+        let (start, end): (usize, usize) = meta.chunk_byte_range(1, CHUNK_SIZE_V2 + 100, 50);
+        assert_eq!(start, 100);
+        assert_eq!(end, 150);
     }
 
     #[test]
@@ -1308,65 +1379,14 @@ mod tests {
         assert_ne!(DirtyState::New, DirtyState::Deleted);
     }
 
-    #[test]
-    fn test_dirty_content_small() {
-        let content = DirtyContent::Small {
-            data: vec![1, 2, 3],
-        };
-        assert_eq!(content.size(), 3);
-        assert!(content.is_chunk_loaded(0));
-        assert_eq!(content.get_chunk(0), Some(&[1u8, 2, 3][..]));
-    }
 
-    #[test]
-    fn test_dirty_content_chunked() {
-        let mut content = DirtyContent::chunked(
-            vec!["hash1".to_string(), "hash2".to_string()],
-            256 * 1024 * 1024,
-            500 * 1024 * 1024,
-        );
-
-        assert_eq!(content.size(), 500 * 1024 * 1024);
-        assert!(!content.is_chunk_loaded(0));
-
-        content.insert_chunk(0, vec![1, 2, 3]);
-        assert!(content.is_chunk_loaded(0));
-        assert_eq!(content.get_chunk(0), Some(&[1u8, 2, 3][..]));
-    }
-
-    #[test]
-    fn test_dirty_file_new() {
-        let dirty = DirtyFile::new_file(1, "test.txt".to_string(), 100);
-        assert_eq!(dirty.inode_id(), 1);
-        assert_eq!(dirty.rel_path(), "test.txt");
-        assert_eq!(dirty.state(), DirtyState::New);
-        assert_eq!(dirty.size(), 0);
-        assert_eq!(dirty.parent_inode(), Some(100));
-    }
-
-    #[test]
-    fn test_dirty_file_truncate_small() {
-        let mut dirty = DirtyFile::new_file(1, "test.txt".to_string(), 100);
-
-        // Write some data
-        if let DirtyContent::Small { data } = dirty.content_mut() {
-            data.extend_from_slice(b"hello world");
-        }
-
-        assert_eq!(dirty.size(), 11);
-
-        // Truncate
-        dirty.truncate(5);
-        assert_eq!(dirty.size(), 5);
-
-        // Extend
-        dirty.truncate(10);
-        assert_eq!(dirty.size(), 10);
-    }
+    // ========================================================================
+    // DirtyFileManager Tests
+    // ========================================================================
 
     #[tokio::test]
     async fn test_manager_create_file() {
-        let (manager, _inodes) = create_test_manager();
+        let (manager, _inodes, _pool) = create_test_manager();
 
         manager.create_file(100, "new_file.txt".to_string(), 1).unwrap();
 
@@ -1375,9 +1395,125 @@ mod tests {
         assert_eq!(manager.get_size(100), Some(0));
     }
 
+    #[tokio::test]
+    async fn test_manager_write_and_read() {
+        let (manager, _inodes, pool) = create_test_manager();
+
+        // Create a new file
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+
+        // Write data
+        let data: &[u8] = b"hello world";
+        let written: usize = manager.write(100, 0, data).await.unwrap();
+        assert_eq!(written, 11);
+
+        // Verify size updated
+        assert_eq!(manager.get_size(100), Some(11));
+
+        // Verify data in pool
+        assert!(pool.has_dirty(100, 0));
+
+        // Read data back
+        let read_data: Vec<u8> = manager.read(100, 0, 100).await.unwrap();
+        assert_eq!(read_data, b"hello world");
+    }
+
+    #[tokio::test]
+    async fn test_manager_partial_read() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+        manager.write(100, 0, b"hello world").await.unwrap();
+
+        // Read partial data
+        let read_data: Vec<u8> = manager.read(100, 6, 5).await.unwrap();
+        assert_eq!(read_data, b"world");
+    }
+
+    #[tokio::test]
+    async fn test_manager_overwrite() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+        manager.write(100, 0, b"hello world").await.unwrap();
+
+        // Overwrite middle
+        manager.write(100, 6, b"WORLD").await.unwrap();
+
+        let read_data: Vec<u8> = manager.read(100, 0, 100).await.unwrap();
+        assert_eq!(read_data, b"hello WORLD");
+    }
+
+    #[tokio::test]
+    async fn test_manager_extend() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+        manager.write(100, 0, b"hello").await.unwrap();
+
+        // Write beyond current end
+        manager.write(100, 10, b"world").await.unwrap();
+
+        assert_eq!(manager.get_size(100), Some(15));
+
+        let read_data: Vec<u8> = manager.read(100, 0, 100).await.unwrap();
+        assert_eq!(read_data.len(), 15);
+        assert_eq!(&read_data[0..5], b"hello");
+        assert_eq!(&read_data[10..15], b"world");
+    }
+
+    #[tokio::test]
+    async fn test_manager_delete_new_file() {
+        let (manager, _inodes, pool) = create_test_manager();
+
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+        manager.write(100, 0, b"hello").await.unwrap();
+
+        assert!(manager.is_dirty(100));
+        assert!(pool.has_dirty(100, 0));
+
+        // Delete the new file
+        manager.delete_file(100).await.unwrap();
+
+        // Should be completely removed
+        assert!(!manager.is_dirty(100));
+        assert!(!pool.has_dirty(100, 0));
+    }
+
+    #[tokio::test]
+    async fn test_manager_truncate_shrink() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+        manager.write(100, 0, b"hello world").await.unwrap();
+
+        assert_eq!(manager.get_size(100), Some(11));
+
+        // Truncate to smaller size
+        manager.truncate(100, 5).await.unwrap();
+
+        assert_eq!(manager.get_size(100), Some(5));
+
+        let read_data: Vec<u8> = manager.read(100, 0, 100).await.unwrap();
+        assert_eq!(read_data, b"hello");
+    }
+
+    #[tokio::test]
+    async fn test_manager_truncate_extend() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+        manager.write(100, 0, b"hello").await.unwrap();
+
+        // Truncate to larger size (extend)
+        manager.truncate(100, 10).await.unwrap();
+
+        assert_eq!(manager.get_size(100), Some(10));
+    }
+
     #[test]
     fn test_remove_new_files_under_path() {
-        let (manager, _inodes) = create_test_manager();
+        let (manager, _inodes, _pool) = create_test_manager();
 
         // Create files in different directories
         manager.create_file(100, "root.txt".to_string(), 1).unwrap();
@@ -1404,7 +1540,7 @@ mod tests {
 
     #[test]
     fn test_remove_new_files_under_path_no_match() {
-        let (manager, _inodes) = create_test_manager();
+        let (manager, _inodes, _pool) = create_test_manager();
 
         manager.create_file(100, "file.txt".to_string(), 1).unwrap();
         manager.create_file(101, "other/file.txt".to_string(), 1).unwrap();
@@ -1415,31 +1551,100 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_new_files_only_removes_new_state() {
-        let (manager, inodes) = create_test_manager();
+    fn test_lookup_new_file() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        manager.create_file(100, "dir/file.txt".to_string(), 1).unwrap();
+        manager.create_file(101, "dir/other.txt".to_string(), 1).unwrap();
+
+        assert_eq!(manager.lookup_new_file(1, "file.txt"), Some(100));
+        assert_eq!(manager.lookup_new_file(1, "other.txt"), Some(101));
+        assert_eq!(manager.lookup_new_file(1, "missing.txt"), None);
+        assert_eq!(manager.lookup_new_file(2, "file.txt"), None);
+    }
+
+    #[test]
+    fn test_get_new_files_in_dir() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        manager.create_file(100, "dir/file1.txt".to_string(), 1).unwrap();
+        manager.create_file(101, "dir/file2.txt".to_string(), 1).unwrap();
+        manager.create_file(102, "other/file3.txt".to_string(), 2).unwrap();
+
+        let files: Vec<(INodeId, String)> = manager.get_new_files_in_dir(1);
+        assert_eq!(files.len(), 2);
+
+        let names: Vec<&str> = files.iter().map(|(_, n)| n.as_str()).collect();
+        assert!(names.contains(&"file1.txt"));
+        assert!(names.contains(&"file2.txt"));
+    }
+
+    #[test]
+    fn test_clear() {
+        let (manager, _inodes, pool) = create_test_manager();
+
+        manager.create_file(100, "file1.txt".to_string(), 1).unwrap();
+        manager.create_file(101, "file2.txt".to_string(), 1).unwrap();
+
+        // Insert some data into pool
+        pool.insert_dirty(100, 0, vec![1, 2, 3]).unwrap();
+        pool.insert_dirty(101, 0, vec![4, 5, 6]).unwrap();
+
+        assert!(manager.is_dirty(100));
+        assert!(manager.is_dirty(101));
+        assert!(pool.has_dirty(100, 0));
+        assert!(pool.has_dirty(101, 0));
+
+        manager.clear();
+
+        assert!(!manager.is_dirty(100));
+        assert!(!manager.is_dirty(101));
+        assert!(!pool.has_dirty(100, 0));
+        assert!(!pool.has_dirty(101, 0));
+        assert_eq!(manager.get_dirty_entries().len(), 0);
+    }
+
+    #[test]
+    fn test_is_new_file() {
+        let (manager, inodes, _pool) = create_test_manager();
 
         // Create a new file
-        manager.create_file(100, "dir/new.txt".to_string(), 1).unwrap();
+        manager.create_file(100, "new.txt".to_string(), 1).unwrap();
+        assert!(manager.is_new_file(100));
 
-        // Add a manifest file and mark it modified
-        let content: Vec<u8> = b"original".to_vec();
-        let ino: INodeId = inodes.add_file(
-            "dir/existing.txt",
-            content.len() as u64,
+        // Add a manifest file
+        let _ino: INodeId = inodes.add_file(
+            "existing.txt",
+            100,
             0,
             FileContent::SingleHash("hash".to_string()),
             HashAlgorithm::Xxh128,
             false,
         );
 
-        // Simulate COW by creating a modified entry (not through cow_copy to avoid async)
-        // We'll just verify the filter logic works
-        assert!(!manager.is_dirty(ino));
+        // Non-existent file
+        assert!(!manager.is_new_file(999));
+    }
 
-        // Remove files under "dir" - should only remove new files
-        let removed: usize = manager.remove_new_files_under_path("dir");
-        assert_eq!(removed, 1); // Only the new file
+    #[tokio::test]
+    async fn test_read_empty_file() {
+        let (manager, _inodes, _pool) = create_test_manager();
 
-        assert!(!manager.is_dirty(100)); // new file removed
+        manager.create_file(100, "empty.txt".to_string(), 1).unwrap();
+
+        let data: Vec<u8> = manager.read(100, 0, 100).await.unwrap();
+        assert!(data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_read_past_end() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+        manager.write(100, 0, b"hello").await.unwrap();
+
+        // Read starting past end of file
+        let data: Vec<u8> = manager.read(100, 100, 50).await.unwrap();
+        assert!(data.is_empty());
     }
 }

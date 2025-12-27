@@ -57,7 +57,7 @@ pub use rusty_attachments_storage_crt::{CrtError, CrtStorageClient};
 pub use rusty_attachments_storage::{S3Location, StorageSettings};
 
 pub use write::{
-    DiffManifestExporter, DirtyContent, DirtyEntry, DirtyFile, DirtyFileInfo, DirtyFileManager,
+    DiffManifestExporter, DirtyEntry, DirtyFileInfo, DirtyFileManager, DirtyFileMetadata,
     DirtyState, DirtySummary, MaterializedCache, MemoryWriteCache, WritableVfsStats,
     WritableVfsStatsCollector, WriteCache, WriteCacheError,
 };

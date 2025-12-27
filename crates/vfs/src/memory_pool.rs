@@ -10,9 +10,9 @@
 //! ┌─────────────────────────────────────────────────────────────┐
 //! │                      MemoryPool                              │
 //! │  ┌─────────────────────────────────────────────────────┐    │
-//! │  │  blocks: HashMap<BlockId, Arc<PoolBlock>>           │    │
+//! │  │  blocks: HashMap<PoolBlockId, Arc<PoolBlock>>       │    │
 //! │  │  pending_fetches: HashMap<BlockKey, Shared<Future>> │    │
-//! │  │  lru_order: VecDeque<BlockId>  (front=oldest)       │    │
+//! │  │  lru_order: VecDeque<PoolBlockId>  (front=oldest)   │    │
 //! │  │  current_size / max_size                            │    │
 //! │  └─────────────────────────────────────────────────────┘    │
 //! └─────────────────────────────────────────────────────────────┘
@@ -21,7 +21,14 @@
 //!   - data: Arc<Vec<u8>> (lock-free reads)
 //!   - key: BlockKey
 //!   - ref_count: AtomicUsize
+//!   - needs_flush: AtomicBool (for dirty blocks)
 //! ```
+//!
+//! # Block Types
+//!
+//! The pool supports two types of blocks identified by `ContentId`:
+//! - `ContentId::Hash(String)` - Read-only blocks fetched from S3 (can be re-fetched)
+//! - `ContentId::Inode(u64)` - Dirty blocks with modifications (need flush before evict)
 //!
 //! # Thread Safety
 //!
@@ -35,8 +42,13 @@
 //! ```ignore
 //! let pool = MemoryPool::new(MemoryPoolConfig::default());
 //! 
-//! // Acquire a block (fetches from S3 if not cached)
+//! // Acquire a read-only block (fetches from S3 if not cached)
+//! let key = BlockKey::from_hash("abc123", 0);
 //! let handle = pool.acquire(&key, || async { fetch_from_s3(&key).await }).await?;
+//! 
+//! // Insert a dirty block
+//! let dirty_key = BlockKey::from_inode(42, 0);
+//! let handle = pool.insert_dirty(42, 0, modified_data)?;
 //! 
 //! // Read data directly - no lock needed
 //! let data: &[u8] = handle.data();
@@ -46,7 +58,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::future::{BoxFuture, Shared};
@@ -55,8 +67,8 @@ use tokio::sync::oneshot;
 
 use rusty_attachments_common::CHUNK_SIZE_V2;
 
-/// Unique identifier for a block in the pool.
-pub type BlockId = u64;
+/// Unique identifier for a block in the pool's internal storage.
+pub type PoolBlockId = u64;
 
 /// Default maximum pool size (8GB).
 pub const DEFAULT_MAX_POOL_SIZE: u64 = 8 * 1024 * 1024 * 1024;
@@ -73,7 +85,7 @@ pub const DEFAULT_BLOCK_SIZE: u64 = CHUNK_SIZE_V2;
 #[derive(Debug, Clone)]
 pub enum MemoryPoolError {
     /// Block not found in pool.
-    BlockNotFound(BlockId),
+    BlockNotFound(PoolBlockId),
 
     /// Pool is at capacity and all blocks are in use (cannot evict).
     PoolExhausted {
@@ -83,6 +95,9 @@ pub enum MemoryPoolError {
 
     /// Content retrieval failed.
     RetrievalFailed(String),
+
+    /// Flush operation failed during eviction.
+    FlushFailed(String),
 }
 
 impl fmt::Display for MemoryPoolError {
@@ -98,6 +113,7 @@ impl fmt::Display for MemoryPoolError {
                 current_blocks, in_use_blocks
             ),
             MemoryPoolError::RetrievalFailed(msg) => write!(f, "Content retrieval failed: {}", msg),
+            MemoryPoolError::FlushFailed(msg) => write!(f, "Flush failed during eviction: {}", msg),
         }
     }
 }
@@ -105,30 +121,95 @@ impl fmt::Display for MemoryPoolError {
 impl std::error::Error for MemoryPoolError {}
 
 // ============================================================================
+// Content ID
+// ============================================================================
+
+/// Identifier for block content - either hash-based or inode-based.
+///
+/// This enum allows the pool to store both read-only blocks (identified by
+/// content hash) and dirty blocks (identified by inode ID).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ContentId {
+    /// Hash-based ID for read-only content (can be re-fetched from S3).
+    Hash(String),
+    /// Inode-based ID for dirty content (must be flushed before eviction).
+    Inode(u64),
+}
+
+impl ContentId {
+    /// Check if this is a hash-based (read-only) content ID.
+    pub fn is_hash(&self) -> bool {
+        matches!(self, ContentId::Hash(_))
+    }
+
+    /// Check if this is an inode-based (dirty) content ID.
+    pub fn is_inode(&self) -> bool {
+        matches!(self, ContentId::Inode(_))
+    }
+
+    /// Get the hash if this is a hash-based ID.
+    pub fn as_hash(&self) -> Option<&str> {
+        match self {
+            ContentId::Hash(h) => Some(h),
+            ContentId::Inode(_) => None,
+        }
+    }
+
+    /// Get the inode ID if this is an inode-based ID.
+    pub fn as_inode(&self) -> Option<u64> {
+        match self {
+            ContentId::Hash(_) => None,
+            ContentId::Inode(id) => Some(*id),
+        }
+    }
+}
+
+impl fmt::Display for ContentId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ContentId::Hash(h) => write!(f, "hash:{}", h),
+            ContentId::Inode(id) => write!(f, "inode:{}", id),
+        }
+    }
+}
+
+// ============================================================================
 // Block Key
 // ============================================================================
 
 /// Key identifying a unique block of content.
 ///
-/// Combines a content hash with a chunk index to uniquely identify
+/// Combines a content identifier with a chunk index to uniquely identify
 /// a specific 256MB chunk within a file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BlockKey {
-    /// Content hash (e.g., xxh128 hash of the chunk).
-    pub hash: String,
+    /// Content identifier (hash or inode ID).
+    pub id: ContentId,
     /// Chunk index within the file (0 for non-chunked files).
     pub chunk_index: u32,
 }
 
 impl BlockKey {
-    /// Create a new block key.
+    /// Create a new block key from a content hash.
     ///
     /// # Arguments
     /// * `hash` - Content hash identifying the chunk
     /// * `chunk_index` - Zero-based chunk index within the file
-    pub fn new(hash: impl Into<String>, chunk_index: u32) -> Self {
+    pub fn from_hash(hash: impl Into<String>, chunk_index: u32) -> Self {
         Self {
-            hash: hash.into(),
+            id: ContentId::Hash(hash.into()),
+            chunk_index,
+        }
+    }
+
+    /// Create a new block key from an inode ID (for dirty blocks).
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID of the dirty file
+    /// * `chunk_index` - Zero-based chunk index within the file
+    pub fn from_inode(inode_id: u64, chunk_index: u32) -> Self {
+        Self {
+            id: ContentId::Inode(inode_id),
             chunk_index,
         }
     }
@@ -137,14 +218,45 @@ impl BlockKey {
     ///
     /// # Arguments
     /// * `hash` - Content hash of the entire file
+    #[deprecated(since = "0.2.0", note = "Use from_hash() instead")]
     pub fn single(hash: impl Into<String>) -> Self {
-        Self::new(hash, 0)
+        Self::from_hash(hash, 0)
+    }
+
+    /// Create a block key (backward compatible with old API).
+    ///
+    /// # Arguments
+    /// * `hash` - Content hash identifying the chunk
+    /// * `chunk_index` - Zero-based chunk index within the file
+    #[deprecated(since = "0.2.0", note = "Use from_hash() instead")]
+    pub fn new(hash: impl Into<String>, chunk_index: u32) -> Self {
+        Self::from_hash(hash, chunk_index)
+    }
+
+    /// Check if this is a read-only (hash-based) block key.
+    pub fn is_read_only(&self) -> bool {
+        self.id.is_hash()
+    }
+
+    /// Check if this is a dirty (inode-based) block key.
+    pub fn is_dirty(&self) -> bool {
+        self.id.is_inode()
+    }
+
+    /// Get the hash if this is a hash-based key.
+    pub fn hash(&self) -> Option<&str> {
+        self.id.as_hash()
+    }
+
+    /// Get the inode ID if this is an inode-based key.
+    pub fn inode_id(&self) -> Option<u64> {
+        self.id.as_inode()
     }
 }
 
 impl fmt::Display for BlockKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.hash, self.chunk_index)
+        write!(f, "{}:{}", self.id, self.chunk_index)
     }
 }
 
@@ -160,12 +272,54 @@ struct PoolBlock {
     data: Arc<Vec<u8>>,
     /// Number of active references to this block (atomic for lock-free updates).
     ref_count: AtomicUsize,
+    /// True if block has unflushed modifications (needs flush before eviction).
+    needs_flush: AtomicBool,
 }
 
 impl PoolBlock {
-    /// Check if this block can be evicted (no active references).
+    /// Create a new pool block.
+    ///
+    /// # Arguments
+    /// * `key` - Block key identifying the content
+    /// * `data` - Block data
+    /// * `needs_flush` - Whether this block needs to be flushed before eviction
+    fn new(key: BlockKey, data: Arc<Vec<u8>>, needs_flush: bool) -> Self {
+        Self {
+            key,
+            data,
+            ref_count: AtomicUsize::new(0),
+            needs_flush: AtomicBool::new(needs_flush),
+        }
+    }
+
+    /// Check if this block can be evicted without flushing.
+    ///
+    /// A block can be evicted if it has no active references and doesn't need flush.
+    fn can_evict_without_flush(&self) -> bool {
+        self.ref_count.load(Ordering::Acquire) == 0
+            && !self.needs_flush.load(Ordering::Acquire)
+    }
+
+    /// Check if this block can be evicted (possibly after flushing).
+    ///
+    /// A block can be evicted if it has no active references.
     fn can_evict(&self) -> bool {
         self.ref_count.load(Ordering::Acquire) == 0
+    }
+
+    /// Check if this block needs to be flushed before eviction.
+    fn needs_flush(&self) -> bool {
+        self.needs_flush.load(Ordering::Acquire)
+    }
+
+    /// Mark this block as flushed (no longer needs flush before eviction).
+    fn mark_flushed(&self) {
+        self.needs_flush.store(false, Ordering::Release);
+    }
+
+    /// Mark this block as needing flush.
+    fn mark_needs_flush(&self) {
+        self.needs_flush.store(true, Ordering::Release);
     }
 
     /// Get the size of this block in bytes.
@@ -190,6 +344,7 @@ impl fmt::Debug for PoolBlock {
             .field("key", &self.key)
             .field("size", &self.data.len())
             .field("ref_count", &self.ref_count.load(Ordering::Relaxed))
+            .field("needs_flush", &self.needs_flush.load(Ordering::Relaxed))
             .finish()
     }
 }
@@ -301,17 +456,17 @@ struct MemoryPoolInner {
     /// Configuration for this pool.
     config: MemoryPoolConfig,
     /// All blocks currently in the pool.
-    blocks: HashMap<BlockId, Arc<PoolBlock>>,
+    blocks: HashMap<PoolBlockId, Arc<PoolBlock>>,
     /// Map from content key to block ID for fast lookup.
-    key_index: HashMap<BlockKey, BlockId>,
+    key_index: HashMap<BlockKey, PoolBlockId>,
     /// In-flight fetches to prevent duplicate requests.
     pending_fetches: HashMap<BlockKey, SharedFetch>,
     /// LRU order: front = oldest (evict first), back = newest.
-    lru_order: VecDeque<BlockId>,
+    lru_order: VecDeque<PoolBlockId>,
     /// Current total size of all blocks in bytes.
     current_size: u64,
     /// Next block ID to allocate.
-    next_id: BlockId,
+    next_id: PoolBlockId,
 }
 
 impl MemoryPoolInner {
@@ -339,7 +494,7 @@ impl MemoryPoolInner {
     /// # Returns
     /// The block if found, None otherwise.
     fn lookup(&mut self, key: &BlockKey) -> Option<Arc<PoolBlock>> {
-        let block_id: BlockId = *self.key_index.get(key)?;
+        let block_id: PoolBlockId = *self.key_index.get(key)?;
         let block: Arc<PoolBlock> = self.blocks.get(&block_id)?.clone();
         self.touch_lru(block_id);
         Some(block)
@@ -349,7 +504,7 @@ impl MemoryPoolInner {
     ///
     /// # Arguments
     /// * `block_id` - ID of the block to touch
-    fn touch_lru(&mut self, block_id: BlockId) {
+    fn touch_lru(&mut self, block_id: PoolBlockId) {
         self.lru_order.retain(|&id| id != block_id);
         self.lru_order.push_back(block_id);
     }
@@ -359,19 +514,16 @@ impl MemoryPoolInner {
     /// # Arguments
     /// * `key` - Content key for the block
     /// * `data` - The chunk data wrapped in Arc
+    /// * `needs_flush` - Whether this block needs flush before eviction
     ///
     /// # Returns
     /// The newly created block.
-    fn insert(&mut self, key: BlockKey, data: Arc<Vec<u8>>) -> Arc<PoolBlock> {
-        let block_id: BlockId = self.next_id;
+    fn insert(&mut self, key: BlockKey, data: Arc<Vec<u8>>, needs_flush: bool) -> Arc<PoolBlock> {
+        let block_id: PoolBlockId = self.next_id;
         self.next_id += 1;
 
         let size: u64 = data.len() as u64;
-        let block: Arc<PoolBlock> = Arc::new(PoolBlock {
-            key: key.clone(),
-            data,
-            ref_count: AtomicUsize::new(0),
-        });
+        let block = Arc::new(PoolBlock::new(key.clone(), data, needs_flush));
 
         self.blocks.insert(block_id, block.clone());
         self.key_index.insert(key, block_id);
@@ -382,12 +534,13 @@ impl MemoryPoolInner {
     }
 
     /// Evict blocks until we have room for a new block.
+    /// Only evicts blocks that don't need flushing.
     ///
     /// # Arguments
     /// * `needed_size` - Size in bytes needed for the new block
     fn evict_for_space(&mut self, needed_size: u64) -> Result<(), MemoryPoolError> {
         while self.current_size + needed_size > self.config.max_size {
-            let evicted: bool = self.evict_one()?;
+            let evicted: bool = self.evict_one_clean()?;
             if !evicted {
                 break;
             }
@@ -395,16 +548,21 @@ impl MemoryPoolInner {
         Ok(())
     }
 
-    /// Evict the least recently used block that has no active references.
+    /// Evict the least recently used block that doesn't need flushing.
     ///
     /// # Returns
     /// Ok(true) if a block was evicted, Ok(false) if no evictable blocks,
-    /// Err if pool is exhausted (all blocks in use).
-    fn evict_one(&mut self) -> Result<bool, MemoryPoolError> {
-        let evict_id: Option<BlockId> = self
+    /// Err if pool is exhausted (all blocks in use or need flush).
+    fn evict_one_clean(&mut self) -> Result<bool, MemoryPoolError> {
+        let evict_id: Option<PoolBlockId> = self
             .lru_order
             .iter()
-            .find_map(|&id| self.blocks.get(&id).filter(|b| b.can_evict()).map(|_| id));
+            .find_map(|&id| {
+                self.blocks
+                    .get(&id)
+                    .filter(|b| b.can_evict_without_flush())
+                    .map(|_| id)
+            });
 
         match evict_id {
             Some(id) => {
@@ -425,11 +583,28 @@ impl MemoryPoolInner {
         }
     }
 
+    /// Find the oldest evictable block (may need flush).
+    ///
+    /// # Returns
+    /// Block ID and whether it needs flush, or None if no evictable blocks.
+    #[allow(dead_code)] // Will be used in Phase 2 force-flush eviction
+    fn find_oldest_evictable(&self) -> Option<(PoolBlockId, bool)> {
+        self.lru_order.iter().find_map(|&id| {
+            self.blocks.get(&id).and_then(|b| {
+                if b.can_evict() {
+                    Some((id, b.needs_flush()))
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
     /// Remove a block from the pool.
     ///
     /// # Arguments
     /// * `block_id` - ID of the block to remove
-    fn remove_block(&mut self, block_id: BlockId) {
+    fn remove_block(&mut self, block_id: PoolBlockId) {
         if let Some(block) = self.blocks.remove(&block_id) {
             self.key_index.remove(&block.key);
             self.lru_order.retain(|&id| id != block_id);
@@ -437,12 +612,72 @@ impl MemoryPoolInner {
         }
     }
 
+    /// Remove all blocks matching a hash (for invalidation).
+    ///
+    /// # Arguments
+    /// * `hash` - Content hash to invalidate
+    ///
+    /// # Returns
+    /// Number of blocks removed.
+    fn invalidate_hash(&mut self, hash: &str) -> usize {
+        let to_remove: Vec<PoolBlockId> = self
+            .key_index
+            .iter()
+            .filter_map(|(key, &block_id)| {
+                if key.id.as_hash() == Some(hash) {
+                    // Only remove if not in use
+                    if let Some(block) = self.blocks.get(&block_id) {
+                        if block.can_evict() {
+                            return Some(block_id);
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+
+        let count: usize = to_remove.len();
+        for block_id in to_remove {
+            self.remove_block(block_id);
+        }
+        count
+    }
+
+    /// Remove all blocks for an inode.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID to remove
+    ///
+    /// # Returns
+    /// Number of blocks removed.
+    fn remove_inode_blocks(&mut self, inode_id: u64) -> usize {
+        let to_remove: Vec<PoolBlockId> = self
+            .key_index
+            .iter()
+            .filter_map(|(key, &block_id)| {
+                if key.id.as_inode() == Some(inode_id) {
+                    Some(block_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let count: usize = to_remove.len();
+        for block_id in to_remove {
+            self.remove_block(block_id);
+        }
+        count
+    }
+
     /// Get pool statistics.
     fn stats(&self) -> MemoryPoolStats {
         let in_use_blocks: usize = self.blocks.values().filter(|b| !b.can_evict()).count();
+        let dirty_blocks: usize = self.blocks.values().filter(|b| b.needs_flush()).count();
         MemoryPoolStats {
             total_blocks: self.blocks.len(),
             in_use_blocks,
+            dirty_blocks,
             current_size: self.current_size,
             max_size: self.config.max_size,
             pending_fetches: self.pending_fetches.len(),
@@ -462,6 +697,8 @@ pub struct MemoryPoolStats {
     pub total_blocks: usize,
     /// Number of blocks currently in use (ref_count > 0).
     pub in_use_blocks: usize,
+    /// Number of blocks that need flushing before eviction.
+    pub dirty_blocks: usize,
     /// Current total size of all blocks in bytes.
     pub current_size: u64,
     /// Maximum pool size in bytes.
@@ -483,6 +720,11 @@ impl MemoryPoolStats {
     /// Number of free blocks (not in use).
     pub fn free_blocks(&self) -> usize {
         self.total_blocks - self.in_use_blocks
+    }
+
+    /// Number of clean blocks (don't need flush).
+    pub fn clean_blocks(&self) -> usize {
+        self.total_blocks - self.dirty_blocks
     }
 }
 
@@ -666,8 +908,8 @@ impl MemoryPool {
                 let data_size: u64 = data.len() as u64;
                 inner.evict_for_space(data_size)?;
 
-                // Insert new block
-                let block: Arc<PoolBlock> = inner.insert(key.clone(), data);
+                // Insert new block (read-only blocks don't need flush)
+                let block: Arc<PoolBlock> = inner.insert(key.clone(), data, false);
                 block.acquire();
                 self.allocation_count.fetch_add(1, Ordering::Relaxed);
 
@@ -701,11 +943,8 @@ impl MemoryPool {
                 } else {
                     // Block was evicted before we could get it - create handle from shared data
                     // This is a rare edge case
-                    let block: Arc<PoolBlock> = Arc::new(PoolBlock {
-                        key: key.clone(),
-                        data,
-                        ref_count: AtomicUsize::new(1),
-                    });
+                    let block = Arc::new(PoolBlock::new(key.clone(), data, false));
+                    block.acquire();
                     Ok(BlockHandle {
                         data: block.data.clone(),
                         block,
@@ -781,6 +1020,194 @@ impl MemoryPool {
         inner.current_size = 0;
         Ok(())
     }
+
+    // ========================================================================
+    // Phase 3: Dirty Block Management Methods
+    // ========================================================================
+
+    /// Invalidate all read-only blocks for a given hash.
+    ///
+    /// Called when a file is modified to prevent stale reads.
+    /// Only removes blocks that are not currently in use.
+    ///
+    /// # Arguments
+    /// * `hash` - Content hash to invalidate
+    ///
+    /// # Returns
+    /// Number of blocks invalidated.
+    pub fn invalidate_hash(&self, hash: &str) -> usize {
+        let mut inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
+        inner.invalidate_hash(hash)
+    }
+
+    /// Insert or update a dirty block.
+    ///
+    /// Dirty blocks are marked as needing flush before eviction.
+    /// If a block with the same key already exists, it is replaced.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID of the dirty file
+    /// * `chunk_index` - Chunk index within the file
+    /// * `data` - The dirty chunk data
+    ///
+    /// # Returns
+    /// Handle to the dirty block.
+    pub fn insert_dirty(
+        &self,
+        inode_id: u64,
+        chunk_index: u32,
+        data: Vec<u8>,
+    ) -> Result<BlockHandle, MemoryPoolError> {
+        let key = BlockKey::from_inode(inode_id, chunk_index);
+        let data_size: u64 = data.len() as u64;
+
+        let mut inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
+
+        // Remove existing block if present
+        if let Some(&block_id) = inner.key_index.get(&key) {
+            inner.remove_block(block_id);
+        }
+
+        // Evict if necessary (only clean blocks)
+        inner.evict_for_space(data_size)?;
+
+        // Insert new dirty block
+        let block: Arc<PoolBlock> = inner.insert(key, Arc::new(data), true);
+        block.acquire();
+        self.allocation_count.fetch_add(1, Ordering::Relaxed);
+
+        Ok(BlockHandle {
+            data: block.data.clone(),
+            block,
+        })
+    }
+
+    /// Update an existing dirty block's data.
+    ///
+    /// If the block doesn't exist, creates a new one.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID of the dirty file
+    /// * `chunk_index` - Chunk index within the file
+    /// * `data` - The updated chunk data
+    ///
+    /// # Returns
+    /// Handle to the dirty block.
+    pub fn update_dirty(
+        &self,
+        inode_id: u64,
+        chunk_index: u32,
+        data: Vec<u8>,
+    ) -> Result<BlockHandle, MemoryPoolError> {
+        // For now, update is the same as insert (replace)
+        self.insert_dirty(inode_id, chunk_index, data)
+    }
+
+    /// Mark a dirty block as flushed (no longer needs flush before eviction).
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID
+    /// * `chunk_index` - Chunk index
+    ///
+    /// # Returns
+    /// true if block was found and marked, false if not found.
+    pub fn mark_flushed(&self, inode_id: u64, chunk_index: u32) -> bool {
+        let key = BlockKey::from_inode(inode_id, chunk_index);
+        let inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
+
+        if let Some(&block_id) = inner.key_index.get(&key) {
+            if let Some(block) = inner.blocks.get(&block_id) {
+                block.mark_flushed();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Mark a dirty block as needing flush again.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID
+    /// * `chunk_index` - Chunk index
+    ///
+    /// # Returns
+    /// true if block was found and marked, false if not found.
+    pub fn mark_needs_flush(&self, inode_id: u64, chunk_index: u32) -> bool {
+        let key = BlockKey::from_inode(inode_id, chunk_index);
+        let inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
+
+        if let Some(&block_id) = inner.key_index.get(&key) {
+            if let Some(block) = inner.blocks.get(&block_id) {
+                block.mark_needs_flush();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get a dirty block if it exists.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID
+    /// * `chunk_index` - Chunk index
+    ///
+    /// # Returns
+    /// Handle to the block if found, None otherwise.
+    pub fn get_dirty(&self, inode_id: u64, chunk_index: u32) -> Option<BlockHandle> {
+        let key = BlockKey::from_inode(inode_id, chunk_index);
+        let mut inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
+
+        let block: Arc<PoolBlock> = inner.lookup(&key)?;
+        block.acquire();
+        self.hit_count.fetch_add(1, Ordering::Relaxed);
+
+        Some(BlockHandle {
+            data: block.data.clone(),
+            block,
+        })
+    }
+
+    /// Remove all blocks for an inode (clean up on file delete).
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID to remove
+    ///
+    /// # Returns
+    /// Number of blocks removed.
+    pub fn remove_inode_blocks(&self, inode_id: u64) -> usize {
+        let mut inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
+        inner.remove_inode_blocks(inode_id)
+    }
+
+    /// Check if a dirty block exists.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID
+    /// * `chunk_index` - Chunk index
+    ///
+    /// # Returns
+    /// true if block exists, false otherwise.
+    pub fn has_dirty(&self, inode_id: u64, chunk_index: u32) -> bool {
+        let key = BlockKey::from_inode(inode_id, chunk_index);
+        let inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
+        inner.key_index.contains_key(&key)
+    }
+
+    /// Get the number of dirty blocks for an inode.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID
+    ///
+    /// # Returns
+    /// Number of dirty blocks for this inode.
+    pub fn dirty_block_count(&self, inode_id: u64) -> usize {
+        let inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
+        inner
+            .key_index
+            .keys()
+            .filter(|k| k.id.as_inode() == Some(inode_id))
+            .count()
+    }
 }
 
 impl Default for MemoryPool {
@@ -827,10 +1254,285 @@ mod tests {
         }
     }
 
+    // ========================================================================
+    // Phase 1: BlockKey and ContentId Tests
+    // ========================================================================
+
+    #[test]
+    fn test_content_id_hash() {
+        let id = ContentId::Hash("abc123".to_string());
+        assert!(id.is_hash());
+        assert!(!id.is_inode());
+        assert_eq!(id.as_hash(), Some("abc123"));
+        assert_eq!(id.as_inode(), None);
+        assert_eq!(format!("{}", id), "hash:abc123");
+    }
+
+    #[test]
+    fn test_content_id_inode() {
+        let id = ContentId::Inode(42);
+        assert!(!id.is_hash());
+        assert!(id.is_inode());
+        assert_eq!(id.as_hash(), None);
+        assert_eq!(id.as_inode(), Some(42));
+        assert_eq!(format!("{}", id), "inode:42");
+    }
+
+    #[test]
+    fn test_block_key_from_hash() {
+        let key = BlockKey::from_hash("abc123", 5);
+        assert!(key.is_read_only());
+        assert!(!key.is_dirty());
+        assert_eq!(key.hash(), Some("abc123"));
+        assert_eq!(key.inode_id(), None);
+        assert_eq!(key.chunk_index, 5);
+        assert_eq!(format!("{}", key), "hash:abc123:5");
+    }
+
+    #[test]
+    fn test_block_key_from_inode() {
+        let key = BlockKey::from_inode(42, 3);
+        assert!(!key.is_read_only());
+        assert!(key.is_dirty());
+        assert_eq!(key.hash(), None);
+        assert_eq!(key.inode_id(), Some(42));
+        assert_eq!(key.chunk_index, 3);
+        assert_eq!(format!("{}", key), "inode:42:3");
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn test_block_key_backward_compat() {
+        // Test deprecated methods still work
+        let key = BlockKey::new("hash123", 0);
+        assert_eq!(key.hash(), Some("hash123"));
+
+        let key2 = BlockKey::single("single_hash");
+        assert_eq!(key2.hash(), Some("single_hash"));
+        assert_eq!(key2.chunk_index, 0);
+    }
+
+    // ========================================================================
+    // Phase 2: Flush Flag Tests
+    // ========================================================================
+
+    #[test]
+    fn test_pool_block_needs_flush() {
+        let block = PoolBlock::new(
+            BlockKey::from_inode(1, 0),
+            Arc::new(vec![1, 2, 3]),
+            true,
+        );
+        assert!(block.needs_flush());
+        assert!(!block.can_evict_without_flush());
+        assert!(block.can_evict()); // can evict if we flush first
+
+        block.mark_flushed();
+        assert!(!block.needs_flush());
+        assert!(block.can_evict_without_flush());
+    }
+
+    #[test]
+    fn test_pool_block_clean() {
+        let block = PoolBlock::new(
+            BlockKey::from_hash("hash", 0),
+            Arc::new(vec![1, 2, 3]),
+            false,
+        );
+        assert!(!block.needs_flush());
+        assert!(block.can_evict_without_flush());
+        assert!(block.can_evict());
+    }
+
+    // ========================================================================
+    // Phase 3: Dirty Block Management Tests
+    // ========================================================================
+
+    #[test]
+    fn test_insert_dirty() {
+        let pool = MemoryPool::new(small_config());
+
+        let handle: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3, 4]).unwrap();
+        assert_eq!(handle.data(), &[1, 2, 3, 4]);
+
+        let stats: MemoryPoolStats = pool.stats();
+        assert_eq!(stats.total_blocks, 1);
+        assert_eq!(stats.dirty_blocks, 1);
+        assert_eq!(stats.in_use_blocks, 1);
+
+        drop(handle);
+
+        let stats: MemoryPoolStats = pool.stats();
+        assert_eq!(stats.in_use_blocks, 0);
+        assert_eq!(stats.dirty_blocks, 1); // still dirty
+    }
+
+    #[test]
+    fn test_get_dirty() {
+        let pool = MemoryPool::new(small_config());
+
+        // Insert dirty block
+        let _h: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        drop(_h);
+
+        // Get it back
+        let handle: Option<BlockHandle> = pool.get_dirty(42, 0);
+        assert!(handle.is_some());
+        assert_eq!(handle.unwrap().data(), &[1, 2, 3]);
+
+        // Non-existent
+        assert!(pool.get_dirty(99, 0).is_none());
+        assert!(pool.get_dirty(42, 1).is_none());
+    }
+
+    #[test]
+    fn test_has_dirty() {
+        let pool = MemoryPool::new(small_config());
+
+        assert!(!pool.has_dirty(42, 0));
+
+        let _h: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+
+        assert!(pool.has_dirty(42, 0));
+        assert!(!pool.has_dirty(42, 1));
+        assert!(!pool.has_dirty(99, 0));
+    }
+
+    #[test]
+    fn test_mark_flushed() {
+        let pool = MemoryPool::new(small_config());
+
+        let _h: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        drop(_h);
+
+        assert_eq!(pool.stats().dirty_blocks, 1);
+
+        let result: bool = pool.mark_flushed(42, 0);
+        assert!(result);
+
+        assert_eq!(pool.stats().dirty_blocks, 0);
+
+        // Non-existent block
+        let result: bool = pool.mark_flushed(99, 0);
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_mark_needs_flush() {
+        let pool = MemoryPool::new(small_config());
+
+        let _h: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        drop(_h);
+
+        pool.mark_flushed(42, 0);
+        assert_eq!(pool.stats().dirty_blocks, 0);
+
+        let result: bool = pool.mark_needs_flush(42, 0);
+        assert!(result);
+        assert_eq!(pool.stats().dirty_blocks, 1);
+    }
+
+    #[test]
+    fn test_remove_inode_blocks() {
+        let pool = MemoryPool::new(small_config());
+
+        // Insert multiple chunks for same inode
+        let _h1: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        let _h2: BlockHandle = pool.insert_dirty(42, 1, vec![4, 5, 6]).unwrap();
+        let _h3: BlockHandle = pool.insert_dirty(99, 0, vec![7, 8, 9]).unwrap();
+        drop(_h1);
+        drop(_h2);
+        drop(_h3);
+
+        assert_eq!(pool.stats().total_blocks, 3);
+        assert_eq!(pool.dirty_block_count(42), 2);
+        assert_eq!(pool.dirty_block_count(99), 1);
+
+        let removed: usize = pool.remove_inode_blocks(42);
+        assert_eq!(removed, 2);
+
+        assert_eq!(pool.stats().total_blocks, 1);
+        assert_eq!(pool.dirty_block_count(42), 0);
+        assert_eq!(pool.dirty_block_count(99), 1);
+    }
+
+    #[test]
+    fn test_invalidate_hash() {
+        let pool = MemoryPool::new(small_config());
+
+        // We need to use the async acquire to insert hash-based blocks
+        // For this test, we'll use the inner directly
+        {
+            let mut inner = pool.inner.lock().unwrap();
+            inner.insert(BlockKey::from_hash("hash1", 0), Arc::new(vec![1, 2, 3]), false);
+            inner.insert(BlockKey::from_hash("hash1", 1), Arc::new(vec![4, 5, 6]), false);
+            inner.insert(BlockKey::from_hash("hash2", 0), Arc::new(vec![7, 8, 9]), false);
+        }
+
+        assert_eq!(pool.stats().total_blocks, 3);
+
+        let removed: usize = pool.invalidate_hash("hash1");
+        assert_eq!(removed, 2);
+
+        assert_eq!(pool.stats().total_blocks, 1);
+    }
+
+    #[test]
+    fn test_dirty_blocks_not_evicted_for_clean() {
+        let config = MemoryPoolConfig {
+            max_size: 200,
+            block_size: 100,
+        };
+        let pool = MemoryPool::new(config);
+
+        // Insert a dirty block
+        let _h1: BlockHandle = pool.insert_dirty(42, 0, vec![0; 100]).unwrap();
+        drop(_h1);
+
+        // Insert a clean block directly
+        {
+            let mut inner = pool.inner.lock().unwrap();
+            inner.insert(BlockKey::from_hash("clean", 0), Arc::new(vec![0; 100]), false);
+        }
+
+        assert_eq!(pool.stats().total_blocks, 2);
+        assert_eq!(pool.stats().dirty_blocks, 1);
+
+        // Try to insert another clean block - should evict the clean one, not dirty
+        {
+            let mut inner = pool.inner.lock().unwrap();
+            inner.evict_for_space(100).unwrap();
+            inner.insert(BlockKey::from_hash("clean2", 0), Arc::new(vec![0; 100]), false);
+        }
+
+        // Dirty block should still be there
+        assert!(pool.has_dirty(42, 0));
+        assert_eq!(pool.stats().dirty_blocks, 1);
+    }
+
+    #[test]
+    fn test_update_dirty_replaces() {
+        let pool = MemoryPool::new(small_config());
+
+        let _h1: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        drop(_h1);
+
+        // Update with new data
+        let h2: BlockHandle = pool.update_dirty(42, 0, vec![4, 5, 6, 7]).unwrap();
+        assert_eq!(h2.data(), &[4, 5, 6, 7]);
+
+        // Should still be just one block
+        assert_eq!(pool.stats().total_blocks, 1);
+    }
+
+    // ========================================================================
+    // Original Tests (updated for new API)
+    // ========================================================================
+
     #[tokio::test]
     async fn test_acquire_and_release() {
-        let pool: MemoryPool = MemoryPool::new(small_config());
-        let key: BlockKey = BlockKey::new("hash123", 0);
+        let pool = MemoryPool::new(small_config());
+        let key = BlockKey::from_hash("hash123", 0);
         let data: Vec<u8> = vec![1, 2, 3, 4];
 
         let handle: BlockHandle = pool
@@ -852,8 +1554,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_hit() {
-        let pool: MemoryPool = MemoryPool::new(small_config());
-        let key: BlockKey = BlockKey::new("hash123", 0);
+        let pool = MemoryPool::new(small_config());
+        let key = BlockKey::from_hash("hash123", 0);
 
         let _h1: BlockHandle = pool
             .acquire(&key, || async move { Ok(vec![1, 2, 3]) })
@@ -874,15 +1576,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_lru_eviction() {
-        let config: MemoryPoolConfig = MemoryPoolConfig {
+        let config = MemoryPoolConfig {
             max_size: 300,
             block_size: 100,
         };
-        let pool: MemoryPool = MemoryPool::new(config);
+        let pool = MemoryPool::new(config);
 
-        let k1: BlockKey = BlockKey::new("h1", 0);
-        let k2: BlockKey = BlockKey::new("h2", 0);
-        let k3: BlockKey = BlockKey::new("h3", 0);
+        let k1 = BlockKey::from_hash("h1", 0);
+        let k2 = BlockKey::from_hash("h2", 0);
+        let k3 = BlockKey::from_hash("h3", 0);
 
         let h1: BlockHandle = pool.acquire(&k1, || async move { Ok(vec![0; 100]) }).await.unwrap();
         drop(h1);
@@ -895,7 +1597,7 @@ mod tests {
 
         assert_eq!(pool.stats().total_blocks, 3);
 
-        let k4: BlockKey = BlockKey::new("h4", 0);
+        let k4 = BlockKey::from_hash("h4", 0);
         let _h4: BlockHandle = pool.acquire(&k4, || async move { Ok(vec![0; 100]) }).await.unwrap();
 
         assert_eq!(pool.stats().total_blocks, 3);
@@ -905,15 +1607,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_pool_exhausted() {
-        let config: MemoryPoolConfig = MemoryPoolConfig {
+        let config = MemoryPoolConfig {
             max_size: 200,
             block_size: 100,
         };
-        let pool: MemoryPool = MemoryPool::new(config);
+        let pool = MemoryPool::new(config);
 
-        let k1: BlockKey = BlockKey::new("h1", 0);
-        let k2: BlockKey = BlockKey::new("h2", 0);
-        let k3: BlockKey = BlockKey::new("h3", 0);
+        let k1 = BlockKey::from_hash("h1", 0);
+        let k2 = BlockKey::from_hash("h2", 0);
+        let k3 = BlockKey::from_hash("h3", 0);
 
         let _h1: BlockHandle = pool.acquire(&k1, || async move { Ok(vec![0; 100]) }).await.unwrap();
         let _h2: BlockHandle = pool.acquire(&k2, || async move { Ok(vec![0; 100]) }).await.unwrap();
@@ -925,9 +1627,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_coordination() {
-        // Test that concurrent requests for the same key only fetch once
         let pool: Arc<MemoryPool> = Arc::new(MemoryPool::new(small_config()));
-        let key: BlockKey = BlockKey::new("shared_key", 0);
+        let key = BlockKey::from_hash("shared_key", 0);
         let fetch_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
 
         let mut handles: Vec<tokio::task::JoinHandle<BlockHandle>> = Vec::new();
@@ -959,29 +1660,24 @@ mod tests {
             .map(|r| r.unwrap())
             .collect();
 
-        // All handles should have the same data
         for h in &results {
             assert_eq!(h.data(), &vec![42; 100]);
         }
 
-        // Fetch should have been called only once (or at most twice due to race)
         let count: usize = fetch_count.load(Ordering::SeqCst);
         assert!(count <= 2, "Expected at most 2 fetches, got {}", count);
     }
 
     #[tokio::test]
     async fn test_lock_free_reads() {
-        // Test that multiple readers can access data simultaneously
         let pool: Arc<MemoryPool> = Arc::new(MemoryPool::new(small_config()));
-        let key: BlockKey = BlockKey::new("read_test", 0);
+        let key = BlockKey::from_hash("read_test", 0);
 
-        // Insert a block
         let _: BlockHandle = pool
             .acquire(&key, || async { Ok(vec![1, 2, 3, 4, 5]) })
             .await
             .unwrap();
 
-        // Spawn multiple readers
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         for _ in 0..10 {
             let pool_clone: Arc<MemoryPool> = pool.clone();
@@ -989,7 +1685,6 @@ mod tests {
 
             let handle: tokio::task::JoinHandle<()> = tokio::spawn(async move {
                 let h: BlockHandle = pool_clone.try_get(&key_clone).unwrap();
-                // Simulate reading data
                 assert_eq!(h.data(), &[1, 2, 3, 4, 5]);
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 assert_eq!(h.data(), &[1, 2, 3, 4, 5]);
@@ -1002,20 +1697,22 @@ mod tests {
 
     #[test]
     fn test_block_key_display() {
-        let key: BlockKey = BlockKey::new("abc123", 5);
-        assert_eq!(format!("{}", key), "abc123:5");
+        let key = BlockKey::from_hash("abc123", 5);
+        assert_eq!(format!("{}", key), "hash:abc123:5");
     }
 
     #[test]
     fn test_stats_utilization() {
-        let stats: MemoryPoolStats = MemoryPoolStats {
+        let stats = MemoryPoolStats {
             total_blocks: 4,
             in_use_blocks: 2,
+            dirty_blocks: 1,
             current_size: 512,
             max_size: 1024,
             pending_fetches: 0,
         };
         assert_eq!(stats.utilization(), 50.0);
         assert_eq!(stats.free_blocks(), 2);
+        assert_eq!(stats.clean_blocks(), 3);
     }
 }
