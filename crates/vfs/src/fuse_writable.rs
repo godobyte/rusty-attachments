@@ -941,6 +941,26 @@ mod impl_fuse {
                 return;
             }
 
+            // Build the directory path for cleanup
+            let dir_path: String = match self.inodes.get(parent) {
+                Some(parent_inode) => {
+                    let parent_path: &str = parent_inode.path();
+                    if parent_path.is_empty() {
+                        name_str.to_string()
+                    } else {
+                        format!("{}/{}", parent_path, name_str)
+                    }
+                }
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            };
+
+            // Clean up any new files created under this directory
+            // This must happen before delete_dir which checks if directory is empty
+            let _removed_count: usize = self.dirty_manager.remove_new_files_under_path(&dir_path);
+
             // Delete directory
             match self.dirty_dir_manager.delete_dir(parent, name_str) {
                 Ok(()) => {

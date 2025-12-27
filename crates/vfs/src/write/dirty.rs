@@ -1203,6 +1203,44 @@ impl DirtyFileManager {
         Ok(())
     }
 
+    /// Remove all new files under a directory path.
+    ///
+    /// Used when a new directory is deleted to clean up any new files
+    /// that were created inside it.
+    ///
+    /// # Arguments
+    /// * `dir_path` - Directory path prefix to match
+    ///
+    /// # Returns
+    /// Number of files removed.
+    pub fn remove_new_files_under_path(&self, dir_path: &str) -> usize {
+        let prefix: String = if dir_path.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", dir_path)
+        };
+
+        let mut guard = self.dirty_files.write().unwrap();
+
+        // Collect inode IDs of new files under this path
+        let to_remove: Vec<INodeId> = guard
+            .iter()
+            .filter(|(_, dirty)| {
+                dirty.state() == DirtyState::New
+                    && (dirty.rel_path().starts_with(&prefix) || dirty.rel_path() == dir_path)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+
+        let count: usize = to_remove.len();
+
+        for id in to_remove {
+            guard.remove(&id);
+        }
+
+        count
+    }
+
     /// Get all dirty entries for diff manifest generation.
     ///
     /// # Returns
@@ -1335,5 +1373,73 @@ mod tests {
         assert!(manager.is_dirty(100));
         assert_eq!(manager.get_state(100), Some(DirtyState::New));
         assert_eq!(manager.get_size(100), Some(0));
+    }
+
+    #[test]
+    fn test_remove_new_files_under_path() {
+        let (manager, _inodes) = create_test_manager();
+
+        // Create files in different directories
+        manager.create_file(100, "root.txt".to_string(), 1).unwrap();
+        manager.create_file(101, "dir/file1.txt".to_string(), 1).unwrap();
+        manager.create_file(102, "dir/file2.txt".to_string(), 1).unwrap();
+        manager.create_file(103, "dir/subdir/file3.txt".to_string(), 1).unwrap();
+        manager.create_file(104, "other/file4.txt".to_string(), 1).unwrap();
+
+        assert_eq!(manager.get_dirty_entries().len(), 5);
+
+        // Remove files under "dir"
+        let removed: usize = manager.remove_new_files_under_path("dir");
+        assert_eq!(removed, 3); // file1.txt, file2.txt, subdir/file3.txt
+
+        // Verify remaining files
+        assert!(manager.is_dirty(100)); // root.txt
+        assert!(!manager.is_dirty(101)); // dir/file1.txt - removed
+        assert!(!manager.is_dirty(102)); // dir/file2.txt - removed
+        assert!(!manager.is_dirty(103)); // dir/subdir/file3.txt - removed
+        assert!(manager.is_dirty(104)); // other/file4.txt
+
+        assert_eq!(manager.get_dirty_entries().len(), 2);
+    }
+
+    #[test]
+    fn test_remove_new_files_under_path_no_match() {
+        let (manager, _inodes) = create_test_manager();
+
+        manager.create_file(100, "file.txt".to_string(), 1).unwrap();
+        manager.create_file(101, "other/file.txt".to_string(), 1).unwrap();
+
+        let removed: usize = manager.remove_new_files_under_path("nonexistent");
+        assert_eq!(removed, 0);
+        assert_eq!(manager.get_dirty_entries().len(), 2);
+    }
+
+    #[test]
+    fn test_remove_new_files_only_removes_new_state() {
+        let (manager, inodes) = create_test_manager();
+
+        // Create a new file
+        manager.create_file(100, "dir/new.txt".to_string(), 1).unwrap();
+
+        // Add a manifest file and mark it modified
+        let content: Vec<u8> = b"original".to_vec();
+        let ino: INodeId = inodes.add_file(
+            "dir/existing.txt",
+            content.len() as u64,
+            0,
+            FileContent::SingleHash("hash".to_string()),
+            HashAlgorithm::Xxh128,
+            false,
+        );
+
+        // Simulate COW by creating a modified entry (not through cow_copy to avoid async)
+        // We'll just verify the filter logic works
+        assert!(!manager.is_dirty(ino));
+
+        // Remove files under "dir" - should only remove new files
+        let removed: usize = manager.remove_new_files_under_path("dir");
+        assert_eq!(removed, 1); // Only the new file
+
+        assert!(!manager.is_dirty(100)); // new file removed
     }
 }

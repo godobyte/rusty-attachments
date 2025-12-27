@@ -1326,3 +1326,240 @@ mod realistic_chunked {
         assert_eq!(&full_read[10..22], b"SECOND_WRITE");
     }
 }
+
+
+// =============================================================================
+// DIRECTORY DELETION WITH FILE CLEANUP TESTS
+// =============================================================================
+
+mod directory_file_cleanup {
+    use super::*;
+    use rusty_attachments_vfs::write::DirtyDirManager;
+    use std::collections::HashSet;
+
+    /// Helper to create a test environment with both file and directory managers.
+    fn create_dir_test_env() -> (
+        Arc<DirtyFileManager>,
+        Arc<DirtyDirManager>,
+        Arc<INodeManager>,
+    ) {
+        let cache = Arc::new(MemoryWriteCache::new());
+        let store = Arc::new(TestFileStore::new());
+        let inodes = Arc::new(INodeManager::new());
+        let file_manager = Arc::new(DirtyFileManager::new(
+            cache,
+            store,
+            inodes.clone(),
+        ));
+        let dir_manager = Arc::new(DirtyDirManager::new(
+            inodes.clone(),
+            HashSet::new(),
+        ));
+        (file_manager, dir_manager, inodes)
+    }
+
+    /// Test that deleting a new directory also cleans up new files inside it.
+    ///
+    /// Scenario:
+    /// 1. Create directory "newdir"
+    /// 2. Create file "newdir/file.txt"
+    /// 3. Delete directory "newdir"
+    /// 4. Verify file is no longer tracked
+    #[test]
+    fn test_delete_new_dir_cleans_up_child_file() {
+        let (file_manager, dir_manager, _inodes) = create_dir_test_env();
+
+        // Create a new directory
+        let dir_id: u64 = dir_manager.create_dir(1, "newdir").unwrap();
+        assert!(dir_manager.is_new_dir(dir_id));
+
+        // Create a new file inside the directory
+        let file_id: u64 = 1000;
+        file_manager
+            .create_file(file_id, "newdir/file.txt".to_string(), dir_id)
+            .unwrap();
+        assert!(file_manager.is_dirty(file_id));
+        assert_eq!(file_manager.get_state(file_id), Some(DirtyState::New));
+
+        // Clean up files under the directory path before deleting
+        let removed: usize = file_manager.remove_new_files_under_path("newdir");
+        assert_eq!(removed, 1);
+
+        // Delete the directory
+        dir_manager.delete_dir(1, "newdir").unwrap();
+
+        // Verify file is no longer tracked
+        assert!(!file_manager.is_dirty(file_id));
+        assert_eq!(file_manager.get_state(file_id), None);
+
+        // Verify directory is no longer tracked (new dir deleted = no change)
+        assert!(!dir_manager.is_dirty(dir_id));
+    }
+
+    /// Test that deleting a nested directory structure cleans up all descendant files.
+    ///
+    /// Scenario:
+    /// 1. Create directory "parent"
+    /// 2. Create directory "parent/child"
+    /// 3. Create file "parent/child/leaf.txt"
+    /// 4. Delete directory "parent"
+    /// 5. Verify all files and directories are cleaned up
+    #[test]
+    fn test_delete_nested_dirs_cleans_up_leaf_file() {
+        let (file_manager, dir_manager, _inodes) = create_dir_test_env();
+
+        // Create parent directory
+        let parent_id: u64 = dir_manager.create_dir(1, "parent").unwrap();
+        assert!(dir_manager.is_new_dir(parent_id));
+
+        // Create child directory inside parent
+        let child_id: u64 = dir_manager.create_dir(parent_id, "child").unwrap();
+        assert!(dir_manager.is_new_dir(child_id));
+
+        // Create a file at the leaf level
+        let file_id: u64 = 2000;
+        file_manager
+            .create_file(file_id, "parent/child/leaf.txt".to_string(), child_id)
+            .unwrap();
+        assert!(file_manager.is_dirty(file_id));
+        assert_eq!(file_manager.get_state(file_id), Some(DirtyState::New));
+
+        // Verify we have 2 dirty directories and 1 dirty file
+        assert_eq!(dir_manager.get_dirty_dir_entries().len(), 2);
+        assert_eq!(file_manager.get_dirty_entries().len(), 1);
+
+        // Clean up files under "parent" path (includes parent/child/leaf.txt)
+        let removed: usize = file_manager.remove_new_files_under_path("parent");
+        assert_eq!(removed, 1);
+
+        // Delete child directory first (must delete bottom-up)
+        dir_manager.delete_dir(parent_id, "child").unwrap();
+
+        // Delete parent directory
+        dir_manager.delete_dir(1, "parent").unwrap();
+
+        // Verify file is no longer tracked
+        assert!(!file_manager.is_dirty(file_id));
+        assert_eq!(file_manager.get_state(file_id), None);
+
+        // Verify directories are no longer tracked
+        assert!(!dir_manager.is_dirty(parent_id));
+        assert!(!dir_manager.is_dirty(child_id));
+
+        // Verify no dirty entries remain
+        assert_eq!(dir_manager.get_dirty_dir_entries().len(), 0);
+        assert_eq!(file_manager.get_dirty_entries().len(), 0);
+    }
+
+    /// Test that deleting a directory with multiple files cleans up all of them.
+    #[test]
+    fn test_delete_dir_cleans_up_multiple_files() {
+        let (file_manager, dir_manager, _inodes) = create_dir_test_env();
+
+        // Create directory
+        let dir_id: u64 = dir_manager.create_dir(1, "multi").unwrap();
+
+        // Create multiple files in the directory
+        let file_ids: Vec<u64> = vec![3000, 3001, 3002];
+        for (i, &fid) in file_ids.iter().enumerate() {
+            file_manager
+                .create_file(fid, format!("multi/file{}.txt", i), dir_id)
+                .unwrap();
+        }
+
+        // Verify all files are tracked
+        assert_eq!(file_manager.get_dirty_entries().len(), 3);
+        for &fid in &file_ids {
+            assert!(file_manager.is_dirty(fid));
+        }
+
+        // Clean up files under directory
+        let removed: usize = file_manager.remove_new_files_under_path("multi");
+        assert_eq!(removed, 3);
+
+        // Delete directory
+        dir_manager.delete_dir(1, "multi").unwrap();
+
+        // Verify all files are cleaned up
+        for &fid in &file_ids {
+            assert!(!file_manager.is_dirty(fid));
+        }
+        assert_eq!(file_manager.get_dirty_entries().len(), 0);
+    }
+
+    /// Test that files outside the deleted directory are not affected.
+    #[test]
+    fn test_delete_dir_does_not_affect_sibling_files() {
+        let (file_manager, dir_manager, _inodes) = create_dir_test_env();
+
+        // Create two directories
+        let dir1_id: u64 = dir_manager.create_dir(1, "dir1").unwrap();
+        let dir2_id: u64 = dir_manager.create_dir(1, "dir2").unwrap();
+
+        // Create files in both directories
+        file_manager
+            .create_file(4000, "dir1/file.txt".to_string(), dir1_id)
+            .unwrap();
+        file_manager
+            .create_file(4001, "dir2/file.txt".to_string(), dir2_id)
+            .unwrap();
+
+        // Also create a file at root level
+        file_manager
+            .create_file(4002, "root_file.txt".to_string(), 1)
+            .unwrap();
+
+        assert_eq!(file_manager.get_dirty_entries().len(), 3);
+
+        // Clean up and delete only dir1
+        let removed: usize = file_manager.remove_new_files_under_path("dir1");
+        assert_eq!(removed, 1);
+        dir_manager.delete_dir(1, "dir1").unwrap();
+
+        // Verify dir1's file is gone
+        assert!(!file_manager.is_dirty(4000));
+
+        // Verify dir2's file and root file are still tracked
+        assert!(file_manager.is_dirty(4001));
+        assert!(file_manager.is_dirty(4002));
+        assert_eq!(file_manager.get_dirty_entries().len(), 2);
+    }
+
+    /// Test cleanup with deeply nested structure (3 levels).
+    #[test]
+    fn test_delete_deeply_nested_structure() {
+        let (file_manager, dir_manager, _inodes) = create_dir_test_env();
+
+        // Create a/b/c hierarchy
+        let a_id: u64 = dir_manager.create_dir(1, "a").unwrap();
+        let b_id: u64 = dir_manager.create_dir(a_id, "b").unwrap();
+        let c_id: u64 = dir_manager.create_dir(b_id, "c").unwrap();
+
+        // Create files at each level
+        file_manager
+            .create_file(5000, "a/file_a.txt".to_string(), a_id)
+            .unwrap();
+        file_manager
+            .create_file(5001, "a/b/file_b.txt".to_string(), b_id)
+            .unwrap();
+        file_manager
+            .create_file(5002, "a/b/c/file_c.txt".to_string(), c_id)
+            .unwrap();
+
+        assert_eq!(file_manager.get_dirty_entries().len(), 3);
+        assert_eq!(dir_manager.get_dirty_dir_entries().len(), 3);
+
+        // Clean up all files under "a"
+        let removed: usize = file_manager.remove_new_files_under_path("a");
+        assert_eq!(removed, 3);
+
+        // Delete directories bottom-up
+        dir_manager.delete_dir(b_id, "c").unwrap();
+        dir_manager.delete_dir(a_id, "b").unwrap();
+        dir_manager.delete_dir(1, "a").unwrap();
+
+        // Verify everything is cleaned up
+        assert_eq!(file_manager.get_dirty_entries().len(), 0);
+        assert_eq!(dir_manager.get_dirty_dir_entries().len(), 0);
+    }
+}
