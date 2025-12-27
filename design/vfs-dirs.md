@@ -1,6 +1,6 @@
 # Rusty Attachments: VFS Directory Operations Design
 
-**Status: 📋 DESIGN**
+**Status: ✅ IMPLEMENTED**
 
 ## Overview
 
@@ -868,18 +868,37 @@ async fn test_mkdir_rmdir_fuse_operations() {
 
 ## Implementation Checklist
 
-- [ ] Add `DirtyDirState` enum to `write/dirty_dir.rs`
-- [ ] Add `DirtyDir` struct to `write/dirty_dir.rs`
-- [ ] Add `DirtyDirEntry` struct to `write/dirty_dir.rs`
-- [ ] Add `DirtyDirManager` to `write/dirty_dir.rs`
-- [ ] Add `remove_child()` to `INodeDir`
-- [ ] Add `remove_child()` to `INodeManager`
-- [ ] Add `remove_inode()` to `INodeManager`
-- [ ] Add new error variants to `VfsError`
-- [ ] Implement `mkdir()` in `WritableVfs`
-- [ ] Implement `rmdir()` in `WritableVfs`
-- [ ] Update `DirtySummary` with directory counts
-- [ ] Update `export_diff_manifest()` to include directories
-- [ ] Update `clear_dirty()` to clear directory state
-- [ ] Add unit tests for `DirtyDirManager`
+- [x] Add `DirtyDirState` enum to `write/dirty_dir.rs`
+- [x] Add `DirtyDir` struct to `write/dirty_dir.rs`
+- [x] Add `DirtyDirEntry` struct to `write/dirty_dir.rs`
+- [x] Add `DirtyDirManager` to `write/dirty_dir.rs`
+- [x] Add `remove_child()` to `INodeDir`
+- [x] Add `remove_child()` to `INodeManager`
+- [x] Add `remove_inode()` to `INodeManager`
+- [x] Add new error variants to `VfsError`
+- [x] Implement `mkdir()` in `WritableVfs`
+- [x] Implement `rmdir()` in `WritableVfs`
+- [x] Update `DirtySummary` with directory counts
+- [x] Update `clear_dirty()` to clear directory state
+- [x] Add unit tests for `DirtyDirManager`
 - [ ] Add integration tests for FUSE operations
+- [ ] Update `export_diff_manifest()` to include directories (currently returns error "not yet implemented")
+
+---
+
+## Implementation Notes
+
+### Differences from Design
+
+1. **DirtyDirManager additional methods**: The implementation includes extra helper methods not in the original design:
+   - `is_new_dir(inode_id)` - Check if an inode is a newly created directory
+   - `get_new_dirs_in_parent(parent_id)` - Get new directories in a parent for readdir
+   - `lookup_new_dir(parent_id, name)` - Look up a new directory by parent and name
+
+2. **Recreate deleted directory handling**: The implementation handles the case where a deleted original directory is recreated by looking for existing deleted entries by path (not just by inode ID), since the recreated directory gets a new inode ID.
+
+3. **DiffManifestExporter**: The `export_diff_manifest()` method is not yet fully implemented - it returns an error "Diff manifest export not yet implemented". The `dirty_summary()` method correctly includes directory counts.
+
+4. **FUSE lookup integration**: The `lookup()` method in `WritableVfs` checks for new directories via `lookup_new_dir()` and deleted directories via `get_state()`.
+
+5. **FUSE readdir integration**: The `readdir()` method includes new directories via `get_new_dirs_in_parent()` and filters out deleted directories.

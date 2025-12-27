@@ -369,6 +369,61 @@ impl INodeManager {
             self.inodes.read().unwrap();
         inodes.len()
     }
+
+    /// Remove a child from a parent directory.
+    ///
+    /// # Arguments
+    /// * `parent_id` - Parent directory inode ID
+    /// * `name` - Child name to remove
+    ///
+    /// # Returns
+    /// Ok if removed, Err if parent not found or not a directory.
+    pub fn remove_child(&self, parent_id: INodeId, name: &str) -> Result<(), crate::VfsError> {
+        let parent: Arc<dyn INode> = self
+            .get(parent_id)
+            .ok_or(crate::VfsError::InodeNotFound(parent_id))?;
+
+        let parent_dir: &INodeDir = parent
+            .as_any()
+            .downcast_ref::<INodeDir>()
+            .ok_or(crate::VfsError::NotADirectory(parent_id))?;
+
+        parent_dir.remove_child(name);
+        Ok(())
+    }
+
+    /// Remove an inode from the manager.
+    ///
+    /// # Arguments
+    /// * `id` - Inode ID to remove
+    ///
+    /// # Returns
+    /// Ok if removed, Err if not found.
+    pub fn remove_inode(&self, id: INodeId) -> Result<(), crate::VfsError> {
+        // Get path before removing
+        let path: String = {
+            let inode: Arc<dyn INode> = self
+                .get(id)
+                .ok_or(crate::VfsError::InodeNotFound(id))?;
+            inode.path().to_string()
+        };
+
+        // Remove from inodes map
+        {
+            let mut inodes: std::sync::RwLockWriteGuard<'_, HashMap<INodeId, Arc<dyn INode>>> =
+                self.inodes.write().unwrap();
+            inodes.remove(&id);
+        }
+
+        // Remove from path index
+        {
+            let mut path_index: std::sync::RwLockWriteGuard<'_, HashMap<String, INodeId>> =
+                self.path_index.write().unwrap();
+            path_index.remove(&path);
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for INodeManager {
@@ -480,5 +535,78 @@ mod tests {
     fn test_micros_to_system_time() {
         let time: SystemTime = micros_to_system_time(1_000_000);
         assert_eq!(time, UNIX_EPOCH + Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_remove_child() {
+        let manager: INodeManager = INodeManager::new();
+
+        // Add a directory with a file
+        manager.add_directory("parent");
+        manager.add_file(
+            "parent/file.txt",
+            100,
+            0,
+            FileContent::SingleHash("hash".to_string()),
+            HashAlgorithm::Xxh128,
+            false,
+        );
+
+        // Verify file exists
+        let parent: Arc<dyn INode> = manager.get_by_path("parent").unwrap();
+        let parent_dir: &INodeDir = parent.as_any().downcast_ref::<INodeDir>().unwrap();
+        assert_eq!(parent_dir.child_count(), 1);
+
+        // Remove the child
+        manager.remove_child(parent.id(), "file.txt").unwrap();
+
+        // Verify child is removed from parent
+        assert_eq!(parent_dir.child_count(), 0);
+    }
+
+    #[test]
+    fn test_remove_inode() {
+        let manager: INodeManager = INodeManager::new();
+
+        // Add a directory
+        let dir_id: INodeId = manager.add_directory("test_dir");
+
+        // Verify it exists
+        assert!(manager.get(dir_id).is_some());
+        assert!(manager.get_by_path("test_dir").is_some());
+
+        // Remove the inode
+        manager.remove_inode(dir_id).unwrap();
+
+        // Verify it's gone from both maps
+        assert!(manager.get(dir_id).is_none());
+        assert!(manager.get_by_path("test_dir").is_none());
+    }
+
+    #[test]
+    fn test_remove_child_not_a_directory() {
+        let manager: INodeManager = INodeManager::new();
+
+        let file_id: INodeId = manager.add_file(
+            "file.txt",
+            100,
+            0,
+            FileContent::SingleHash("hash".to_string()),
+            HashAlgorithm::Xxh128,
+            false,
+        );
+
+        // Try to remove child from a file - should fail
+        let result = manager.remove_child(file_id, "child");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_remove_inode_not_found() {
+        let manager: INodeManager = INodeManager::new();
+
+        // Try to remove non-existent inode
+        let result = manager.remove_inode(99999);
+        assert!(result.is_err());
     }
 }

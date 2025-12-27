@@ -43,6 +43,15 @@ pub enum VfsError {
 
     /// Read-only filesystem.
     ReadOnly,
+
+    /// Path already exists.
+    AlreadyExists(String),
+
+    /// Directory not empty.
+    DirectoryNotEmpty(String),
+
+    /// Not found.
+    NotFound(String),
 }
 
 impl fmt::Display for VfsError {
@@ -66,6 +75,9 @@ impl fmt::Display for VfsError {
             VfsError::Io(e) => write!(f, "IO error: {}", e),
             VfsError::FileExists(path) => write!(f, "File already exists: {}", path),
             VfsError::ReadOnly => write!(f, "Read-only filesystem"),
+            VfsError::AlreadyExists(path) => write!(f, "Path already exists: {}", path),
+            VfsError::DirectoryNotEmpty(path) => write!(f, "Directory not empty: {}", path),
+            VfsError::NotFound(name) => write!(f, "Not found: {}", name),
         }
     }
 }

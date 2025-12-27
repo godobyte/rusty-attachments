@@ -25,8 +25,8 @@ mod impl_fuse {
     use crate::memory_pool::MemoryPool;
     use crate::options::VfsOptions;
     use crate::write::{
-        DiffManifestExporter, DirtyFileManager, DirtyState, DirtySummary, MaterializedCache,
-        WriteCache, WritableVfsStatsCollector,
+        DiffManifestExporter, DirtyDirManager, DirtyDirState, DirtyFileManager, DirtyState,
+        DirtySummary, MaterializedCache, WriteCache, WritableVfsStatsCollector,
     };
     use crate::VfsError;
 
@@ -68,6 +68,8 @@ mod impl_fuse {
         pool: Arc<MemoryPool>,
         /// Dirty file manager (COW layer).
         dirty_manager: Arc<DirtyFileManager>,
+        /// Dirty directory manager.
+        dirty_dir_manager: Arc<DirtyDirManager>,
         /// Original directories from manifest (for diff tracking).
         #[allow(dead_code)]
         original_dirs: HashSet<String>,
@@ -121,6 +123,12 @@ mod impl_fuse {
                 Manifest::V2023_03_03(_) => HashSet::new(),
             };
 
+            // Create dirty directory manager with original dirs
+            let dirty_dir_manager = Arc::new(DirtyDirManager::new(
+                inodes.clone(),
+                original_dirs.clone(),
+            ));
+
             let runtime: Handle = Handle::try_current()
                 .map_err(|e| VfsError::MountFailed(format!("No tokio runtime: {}", e)))?;
 
@@ -129,6 +137,7 @@ mod impl_fuse {
                 store,
                 pool,
                 dirty_manager,
+                dirty_dir_manager,
                 original_dirs,
                 options,
                 write_options,
@@ -141,6 +150,11 @@ mod impl_fuse {
         /// Get the dirty file manager.
         pub fn dirty_manager(&self) -> &Arc<DirtyFileManager> {
             &self.dirty_manager
+        }
+
+        /// Get the dirty directory manager.
+        pub fn dirty_dir_manager(&self) -> &Arc<DirtyDirManager> {
+            &self.dirty_dir_manager
         }
 
         /// Get a stats collector for this writable VFS.
@@ -227,8 +241,12 @@ mod impl_fuse {
 
             // First check if it's an existing file from the manifest
             if let Some(child) = self.inodes.get_by_path(&path) {
-                // Check if deleted
+                // Check if deleted (file or directory)
                 if self.dirty_manager.get_state(child.id()) == Some(DirtyState::Deleted) {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+                if self.dirty_dir_manager.get_state(child.id()) == Some(DirtyDirState::Deleted) {
                     reply.error(libc::ENOENT);
                     return;
                 }
@@ -275,14 +293,42 @@ mod impl_fuse {
                 return;
             }
 
+            // Check if it's a new directory created in this session
+            if let Some(new_ino) = self.dirty_dir_manager.lookup_new_dir(parent, name_str) {
+                let attr = FileAttr {
+                    ino: new_ino,
+                    size: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    crtime: SystemTime::now(),
+                    kind: FileType::Directory,
+                    perm: 0o755,
+                    nlink: 2,
+                    uid: unsafe { libc::getuid() },
+                    gid: unsafe { libc::getgid() },
+                    rdev: 0,
+                    blksize: 512,
+                    flags: 0,
+                };
+
+                reply.entry(&self.ttl(), &attr, 0);
+                return;
+            }
+
             reply.error(libc::ENOENT);
         }
 
         fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
             // First check if it's an existing inode from the manifest
             if let Some(inode) = self.inodes.get(ino) {
-                // Check if deleted
+                // Check if deleted (file or directory)
                 if self.dirty_manager.get_state(ino) == Some(DirtyState::Deleted) {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+                if self.dirty_dir_manager.get_state(ino) == Some(DirtyDirState::Deleted) {
                     reply.error(libc::ENOENT);
                     return;
                 }
@@ -318,6 +364,30 @@ mod impl_fuse {
                     kind: FileType::RegularFile,
                     perm: 0o644,
                     nlink: 1,
+                    uid: unsafe { libc::getuid() },
+                    gid: unsafe { libc::getgid() },
+                    rdev: 0,
+                    blksize: 512,
+                    flags: 0,
+                };
+
+                reply.attr(&self.ttl(), &attr);
+                return;
+            }
+
+            // Check if it's a new directory created in this session
+            if self.dirty_dir_manager.is_new_dir(ino) {
+                let attr = FileAttr {
+                    ino,
+                    size: 0,
+                    blocks: 0,
+                    atime: SystemTime::now(),
+                    mtime: SystemTime::now(),
+                    ctime: SystemTime::now(),
+                    crtime: SystemTime::now(),
+                    kind: FileType::Directory,
+                    perm: 0o755,
+                    nlink: 2,
                     uid: unsafe { libc::getuid() },
                     gid: unsafe { libc::getgid() },
                     rdev: 0,
@@ -366,6 +436,10 @@ mod impl_fuse {
                         if self.dirty_manager.get_state(cid) == Some(DirtyState::Deleted) {
                             continue;
                         }
+                        // Skip deleted directories
+                        if self.dirty_dir_manager.get_state(cid) == Some(DirtyDirState::Deleted) {
+                            continue;
+                        }
 
                         let k: FileType = match c.inode_type() {
                             INodeType::File => FileType::RegularFile,
@@ -381,6 +455,12 @@ mod impl_fuse {
             let new_files: Vec<(u64, String)> = self.dirty_manager.get_new_files_in_dir(ino);
             for (new_ino, name) in new_files {
                 entries.push((new_ino, FileType::RegularFile, name));
+            }
+
+            // Add new directories created in this directory
+            let new_dirs: Vec<(u64, String)> = self.dirty_dir_manager.get_new_dirs_in_parent(ino);
+            for (new_ino, name) in new_dirs {
+                entries.push((new_ino, FileType::Directory, name));
             }
 
             for (i, (e_ino, kind, name)) in entries.iter().enumerate().skip(offset as usize) {
@@ -782,6 +862,108 @@ mod impl_fuse {
                 None => reply.error(libc::EINVAL),
             }
         }
+
+        fn mkdir(
+            &mut self,
+            req: &Request,
+            parent: u64,
+            name: &OsStr,
+            mode: u32,
+            _umask: u32,
+            reply: ReplyEntry,
+        ) {
+            let name_str: &str = match name.to_str() {
+                Some(s) => s,
+                None => {
+                    reply.error(libc::EINVAL);
+                    return;
+                }
+            };
+
+            // Validate name
+            if name_str.is_empty() || name_str.contains('/') {
+                reply.error(libc::EINVAL);
+                return;
+            }
+
+            // Create directory
+            match self.dirty_dir_manager.create_dir(parent, name_str) {
+                Ok(new_id) => {
+                    // Build file attributes
+                    let attr = FileAttr {
+                        ino: new_id,
+                        size: 0,
+                        blocks: 0,
+                        atime: SystemTime::now(),
+                        mtime: SystemTime::now(),
+                        ctime: SystemTime::now(),
+                        crtime: SystemTime::now(),
+                        kind: FileType::Directory,
+                        perm: (mode & 0o7777) as u16,
+                        nlink: 2,
+                        uid: req.uid(),
+                        gid: req.gid(),
+                        rdev: 0,
+                        blksize: 512,
+                        flags: 0,
+                    };
+
+                    reply.entry(&TTL, &attr, 0);
+                }
+                Err(VfsError::AlreadyExists(_)) => {
+                    reply.error(libc::EEXIST);
+                }
+                Err(VfsError::NotADirectory(_)) => {
+                    reply.error(libc::ENOTDIR);
+                }
+                Err(VfsError::InodeNotFound(_)) => {
+                    reply.error(libc::ENOENT);
+                }
+                Err(e) => {
+                    tracing::error!("mkdir failed: {}", e);
+                    reply.error(libc::EIO);
+                }
+            }
+        }
+
+        fn rmdir(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+            let name_str: &str = match name.to_str() {
+                Some(s) => s,
+                None => {
+                    reply.error(libc::EINVAL);
+                    return;
+                }
+            };
+
+            // Validate name
+            if name_str.is_empty() || name_str == "." || name_str == ".." {
+                reply.error(libc::EINVAL);
+                return;
+            }
+
+            // Delete directory
+            match self.dirty_dir_manager.delete_dir(parent, name_str) {
+                Ok(()) => {
+                    reply.ok();
+                }
+                Err(VfsError::NotFound(_)) => {
+                    reply.error(libc::ENOENT);
+                }
+                Err(VfsError::NotADirectory(_)) => {
+                    reply.error(libc::ENOTDIR);
+                }
+                Err(VfsError::DirectoryNotEmpty(_)) => {
+                    reply.error(libc::ENOTEMPTY);
+                }
+                Err(VfsError::InodeNotFound(_)) => {
+                    reply.error(libc::ENOENT);
+                }
+                Err(e) => {
+                    tracing::error!("rmdir failed: {}", e);
+                    reply.error(libc::EIO);
+                }
+            }
+        }
     }
 
 
@@ -801,11 +983,14 @@ mod impl_fuse {
 
         fn clear_dirty(&self) -> Result<(), VfsError> {
             self.dirty_manager.clear();
+            self.dirty_dir_manager.clear();
             Ok(())
         }
 
         fn dirty_summary(&self) -> DirtySummary {
             let entries = self.dirty_manager.get_dirty_entries();
+            let dir_entries = self.dirty_dir_manager.get_dirty_dir_entries();
+
             let mut summary = DirtySummary::default();
 
             for entry in entries {
@@ -813,6 +998,13 @@ mod impl_fuse {
                     DirtyState::New => summary.new_count += 1,
                     DirtyState::Modified => summary.modified_count += 1,
                     DirtyState::Deleted => summary.deleted_count += 1,
+                }
+            }
+
+            for dir_entry in dir_entries {
+                match dir_entry.state {
+                    DirtyDirState::New => summary.new_dir_count += 1,
+                    DirtyDirState::Deleted => summary.deleted_dir_count += 1,
                 }
             }
 

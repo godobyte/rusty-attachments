@@ -86,6 +86,19 @@ impl INodeDir {
             self.children.read().unwrap();
         children.len()
     }
+
+    /// Remove a child entry from this directory.
+    ///
+    /// # Arguments
+    /// * `name` - Child entry name to remove
+    ///
+    /// # Returns
+    /// The removed child inode ID, or None if not found.
+    pub fn remove_child(&self, name: &str) -> Option<INodeId> {
+        let mut children: std::sync::RwLockWriteGuard<'_, HashMap<String, INodeId>> =
+            self.children.write().unwrap();
+        children.remove(name)
+    }
 }
 
 impl INode for INodeDir {
@@ -157,5 +170,27 @@ mod tests {
 
         let children: Vec<(String, INodeId)> = dir.children();
         assert_eq!(children.len(), 2);
+    }
+
+    #[test]
+    fn test_inode_dir_remove_child() {
+        let dir: INodeDir = INodeDir::new(1, 1, "root".to_string(), "".to_string());
+
+        dir.add_child("file1.txt".to_string(), 2);
+        dir.add_child("file2.txt".to_string(), 3);
+
+        assert_eq!(dir.child_count(), 2);
+
+        // Remove existing child
+        let removed: Option<INodeId> = dir.remove_child("file1.txt");
+        assert_eq!(removed, Some(2));
+        assert_eq!(dir.child_count(), 1);
+        assert_eq!(dir.get_child("file1.txt"), None);
+        assert_eq!(dir.get_child("file2.txt"), Some(3));
+
+        // Remove non-existent child
+        let not_found: Option<INodeId> = dir.remove_child("nonexistent");
+        assert_eq!(not_found, None);
+        assert_eq!(dir.child_count(), 1);
     }
 }

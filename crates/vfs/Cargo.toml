@@ -24,15 +24,13 @@ tracing = "0.1"
 # Internal crates
 rusty-attachments-common = { path = "../common" }
 rusty-attachments-model = { path = "../model" }
+rusty-attachments-storage = { path = "../storage" }
+rusty-attachments-storage-crt = { path = "../storage-crt" }
 
 [dev-dependencies]
 ctrlc = "3.4"
 dirs = "5.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
-
-# For mount_vfs example - uses existing storage infrastructure
-rusty-attachments-storage = { path = "../storage" }
-rusty-attachments-storage-crt = { path = "../storage-crt" }
 
 [[example]]
 name = "mount_vfs"

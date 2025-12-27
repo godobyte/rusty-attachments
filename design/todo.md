@@ -16,11 +16,21 @@
 ## Implementation TODO
 
 ### Core
-- [ ] Implement `common` crate with shared utilities
+- [x] Implement `common` crate with shared utilities
 - [ ] Implement business logic to upload a manifest
 - [ ] Implement logic to upload the manifest file
 - [ ] File folder scanning, snapshot folder, diff a folder
 - [ ] Manifest utilities: diff manifest, merge manifest
+
+### VFS (Virtual File System)
+- [x] Read-only FUSE VFS (`crates/vfs/src/fuse.rs`)
+- [x] Writable FUSE VFS with COW (`crates/vfs/src/fuse_writable.rs`)
+- [x] DirtyFileManager for file modifications (`crates/vfs/src/write/dirty.rs`)
+- [x] DirtyDirManager for directory operations (`crates/vfs/src/write/dirty_dir.rs`)
+- [x] WriteCache trait and implementations (`crates/vfs/src/write/cache.rs`)
+- [x] DiffManifestExporter trait (`crates/vfs/src/write/export.rs`)
+- [ ] Full diff manifest export implementation (currently returns "not yet implemented")
+- [ ] FUSE integration tests for mkdir/rmdir
 
 ### Caches
 - [ ] Hash cache SQLite backend

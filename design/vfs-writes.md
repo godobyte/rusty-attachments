@@ -1,6 +1,6 @@
 # Rusty Attachments: VFS Write Support Design
 
-**Status: 📋 DESIGN**
+**Status: ✅ CORE IMPLEMENTED | 🚧 DIFF EXPORT PENDING**
 
 ## Overview
 
@@ -4125,3 +4125,58 @@ pub async fn delete_file(&self, inode_id: INodeId) -> Result<(), VfsError> {
 - [vfs.md](vfs.md) - Read-only VFS design (base implementation)
 - [model-design.md](model-design.md) - Manifest data structures
 - [manifest-utils.md](manifest-utils.md) - Diff manifest creation utilities
+
+
+---
+
+## Implementation Status
+
+### Completed ✅
+
+| Component | Location | Notes |
+|-----------|----------|-------|
+| `DirtyState` enum | `src/write/dirty.rs` | Modified, New, Deleted states |
+| `DirtyContent` enum | `src/write/dirty.rs` | Small (Vec) and Chunked (sparse) variants |
+| `DirtyFile` struct | `src/write/dirty.rs` | COW file tracking with content |
+| `DirtyEntry` struct | `src/write/dirty.rs` | Summary for export |
+| `DirtyFileManager` | `src/write/dirty.rs` | Full implementation with COW, read, write, truncate, delete |
+| `WriteCache` trait | `src/write/cache.rs` | Abstraction for disk storage |
+| `MaterializedCache` | `src/write/cache.rs` | Disk-based cache with tombstones |
+| `MemoryWriteCache` | `src/write/cache.rs` | In-memory cache for testing |
+| `ChunkedFileMeta` | `src/write/cache.rs` | Metadata for chunked files |
+| `DiffManifestExporter` trait | `src/write/export.rs` | Interface for diff export |
+| `DirtySummary` | `src/write/export.rs` | File and directory counts |
+| `DirtyFileInfo` | `src/write/export.rs` | File info for stats |
+| `WritableVfsStats` | `src/write/stats.rs` | Extended stats with dirty tracking |
+| `WritableVfsStatsCollector` | `src/write/stats.rs` | Thread-safe stats collection |
+| `WritableVfs` | `src/fuse_writable.rs` | FUSE implementation |
+| `WriteOptions` | `src/fuse_writable.rs` | Configuration for write behavior |
+| FUSE `write()` | `src/fuse_writable.rs` | Write with COW |
+| FUSE `create()` | `src/fuse_writable.rs` | Create new files |
+| FUSE `unlink()` | `src/fuse_writable.rs` | Delete files |
+| FUSE `setattr()` | `src/fuse_writable.rs` | Truncate support |
+| FUSE `fsync()` | `src/fuse_writable.rs` | Flush to disk |
+| FUSE `mkdir()` | `src/fuse_writable.rs` | Create directories |
+| FUSE `rmdir()` | `src/fuse_writable.rs` | Delete directories |
+
+### Pending 🚧
+
+| Component | Notes |
+|-----------|-------|
+| `export_diff_manifest()` | Returns "not yet implemented" error |
+| Disk cache read tier | `CachedFileStore` not implemented |
+| Hash verification | Post-download verification not implemented |
+| Background eviction sweeper | `EvictionSweeper` not implemented |
+| COW race prevention | `pending_cow` map not implemented |
+
+### Design vs Implementation Differences
+
+1. **Simplified flush**: The implementation assembles full files on flush rather than writing individual chunks. This is simpler but less efficient for very large files.
+
+2. **No pending COW coordination**: The design includes a `pending_cow` map to prevent duplicate fetches during concurrent COW operations. The implementation uses simpler locking.
+
+3. **No disk read cache**: The `CachedFileStore` wrapper for disk caching is not implemented. Reads go directly to S3.
+
+4. **No background eviction**: The `EvictionSweeper` for time-based memory pool eviction is not implemented.
+
+5. **DirtyDirManager integration**: The implementation includes additional helper methods (`is_new_dir`, `get_new_dirs_in_parent`, `lookup_new_dir`) not in the original design, needed for FUSE integration.

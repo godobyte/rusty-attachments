@@ -111,6 +111,8 @@ impl WritableVfsStatsCollector {
             new_count: new_files.len(),
             modified_count: modified_files.len(),
             deleted_count: deleted_files.len(),
+            new_dir_count: 0,
+            deleted_dir_count: 0,
         };
 
         let pool_stats: MemoryPoolStats = self.pool.stats();

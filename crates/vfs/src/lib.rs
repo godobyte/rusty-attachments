@@ -51,6 +51,11 @@ pub use builder::build_from_manifest;
 pub use content::{FileStore, StorageClientAdapter};
 pub use inode::{FileContent, INode, INodeFile, INodeId, INodeManager, INodeType, ROOT_INODE};
 
+// Re-export CRT storage client for convenience
+pub use rusty_attachments_storage_crt::{CrtError, CrtStorageClient};
+// Re-export commonly used storage types
+pub use rusty_attachments_storage::{S3Location, StorageSettings};
+
 pub use write::{
     DiffManifestExporter, DirtyContent, DirtyEntry, DirtyFile, DirtyFileInfo, DirtyFileManager,
     DirtyState, DirtySummary, MaterializedCache, MemoryWriteCache, WritableVfsStats,

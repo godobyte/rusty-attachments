@@ -8,7 +8,7 @@ use rusty_attachments_model::Manifest;
 
 use crate::VfsError;
 
-/// Summary of dirty file counts.
+/// Summary of dirty file and directory counts.
 #[derive(Debug, Clone, Default)]
 pub struct DirtySummary {
     /// Number of new files.
@@ -17,6 +17,10 @@ pub struct DirtySummary {
     pub modified_count: usize,
     /// Number of deleted files.
     pub deleted_count: usize,
+    /// Number of new directories.
+    pub new_dir_count: usize,
+    /// Number of deleted directories.
+    pub deleted_dir_count: usize,
 }
 
 /// Information about a single dirty file.
@@ -30,11 +34,21 @@ pub struct DirtyFileInfo {
 
 impl DirtySummary {
     /// Total number of dirty files.
-    pub fn total(&self) -> usize {
+    pub fn total_files(&self) -> usize {
         self.new_count + self.modified_count + self.deleted_count
     }
 
-    /// Returns true if there are any dirty files.
+    /// Total number of dirty directories.
+    pub fn total_dirs(&self) -> usize {
+        self.new_dir_count + self.deleted_dir_count
+    }
+
+    /// Total number of dirty entries (files + directories).
+    pub fn total(&self) -> usize {
+        self.total_files() + self.total_dirs()
+    }
+
+    /// Returns true if there are any dirty files or directories.
     pub fn has_changes(&self) -> bool {
         self.total() > 0
     }
@@ -84,18 +98,54 @@ mod tests {
     #[test]
     fn test_dirty_summary_default() {
         let summary = DirtySummary::default();
+        assert_eq!(summary.total_files(), 0);
+        assert_eq!(summary.total_dirs(), 0);
         assert_eq!(summary.total(), 0);
         assert!(!summary.has_changes());
     }
 
     #[test]
-    fn test_dirty_summary_with_changes() {
+    fn test_dirty_summary_with_file_changes() {
         let summary = DirtySummary {
             new_count: 2,
             modified_count: 3,
             deleted_count: 1,
+            new_dir_count: 0,
+            deleted_dir_count: 0,
         };
+        assert_eq!(summary.total_files(), 6);
+        assert_eq!(summary.total_dirs(), 0);
         assert_eq!(summary.total(), 6);
+        assert!(summary.has_changes());
+    }
+
+    #[test]
+    fn test_dirty_summary_with_dir_changes() {
+        let summary = DirtySummary {
+            new_count: 0,
+            modified_count: 0,
+            deleted_count: 0,
+            new_dir_count: 2,
+            deleted_dir_count: 1,
+        };
+        assert_eq!(summary.total_files(), 0);
+        assert_eq!(summary.total_dirs(), 3);
+        assert_eq!(summary.total(), 3);
+        assert!(summary.has_changes());
+    }
+
+    #[test]
+    fn test_dirty_summary_with_mixed_changes() {
+        let summary = DirtySummary {
+            new_count: 1,
+            modified_count: 2,
+            deleted_count: 1,
+            new_dir_count: 3,
+            deleted_dir_count: 2,
+        };
+        assert_eq!(summary.total_files(), 4);
+        assert_eq!(summary.total_dirs(), 5);
+        assert_eq!(summary.total(), 9);
         assert!(summary.has_changes());
     }
 }
