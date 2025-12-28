@@ -26,6 +26,7 @@
 
 pub mod builder;
 pub mod content;
+pub mod diskcache;
 pub mod error;
 pub mod inode;
 pub mod memory_pool;
@@ -44,7 +45,8 @@ pub use memory_pool::{
     MemoryPoolStats,
 };
 pub use options::{
-    KernelCacheOptions, PrefetchStrategy, ReadAheadOptions, TimeoutOptions, VfsOptions,
+    KernelCacheOptions, PrefetchStrategy, ReadAheadOptions, ReadCacheConfig, TimeoutOptions,
+    VfsOptions,
 };
 
 pub use builder::build_from_manifest;
@@ -56,10 +58,15 @@ pub use rusty_attachments_storage_crt::{CrtError, CrtStorageClient};
 // Re-export commonly used storage types
 pub use rusty_attachments_storage::{S3Location, StorageSettings};
 
+// Disk cache exports
+pub use diskcache::{
+    ChunkedFileMeta, DiskCacheError, MaterializedCache, MemoryWriteCache, ReadCache,
+    ReadCacheOptions, WriteCache,
+};
+
 pub use write::{
     DiffManifestExporter, DirtyEntry, DirtyFileInfo, DirtyFileManager, DirtyFileMetadata,
-    DirtyState, DirtySummary, MaterializedCache, MemoryWriteCache, WritableVfsStats,
-    WritableVfsStatsCollector, WriteCache, WriteCacheError,
+    DirtyState, DirtySummary, WritableVfsStats, WritableVfsStatsCollector,
 };
 
 #[cfg(feature = "fuse")]

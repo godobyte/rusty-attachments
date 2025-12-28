@@ -1,139 +1,11 @@
-//! Write cache implementations for COW disk storage.
-//!
-//! Provides both disk-based (MaterializedCache) and in-memory (MemoryWriteCache)
-//! implementations of the WriteCache trait.
+//! Disk-based cache for dirty (modified) files.
 
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
-/// Errors from write cache operations.
-#[derive(Debug, Error)]
-pub enum WriteCacheError {
-    /// IO error.
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    /// File not found.
-    #[error("File not found: {0}")]
-    NotFound(String),
-
-    /// Cache full.
-    #[error("Cache full")]
-    CacheFull,
-
-    /// JSON serialization error.
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-}
-
-/// Trait for COW disk cache implementations.
-///
-/// Allows swapping cache backends for testing or alternative storage.
-#[async_trait]
-pub trait WriteCache: Send + Sync {
-    /// Write file content to cache.
-    ///
-    /// # Arguments
-    /// * `rel_path` - Relative path within VFS
-    /// * `data` - File content to write
-    async fn write_file(&self, rel_path: &str, data: &[u8]) -> Result<(), WriteCacheError>;
-
-    /// Read file content from cache.
-    ///
-    /// # Arguments
-    /// * `rel_path` - Relative path within VFS
-    ///
-    /// # Returns
-    /// File content, or None if not in cache.
-    async fn read_file(&self, rel_path: &str) -> Result<Option<Vec<u8>>, WriteCacheError>;
-
-    /// Mark file as deleted (create tombstone).
-    ///
-    /// # Arguments
-    /// * `rel_path` - Relative path within VFS
-    async fn delete_file(&self, rel_path: &str) -> Result<(), WriteCacheError>;
-
-    /// Check if file is marked as deleted.
-    ///
-    /// # Arguments
-    /// * `rel_path` - Relative path within VFS
-    fn is_deleted(&self, rel_path: &str) -> bool;
-
-    /// List all cached files (excluding deleted).
-    ///
-    /// # Returns
-    /// Vector of relative paths.
-    async fn list_files(&self) -> Result<Vec<String>, WriteCacheError>;
-
-    /// Get cache directory path (for inspection/debugging).
-    fn cache_dir(&self) -> &Path;
-}
-
-
-/// In-memory write cache for testing.
-///
-/// Stores all data in memory, no disk I/O.
-pub struct MemoryWriteCache {
-    /// Files by relative path.
-    files: RwLock<HashMap<String, Vec<u8>>>,
-    /// Deleted file paths.
-    deleted: RwLock<HashSet<String>>,
-}
-
-impl MemoryWriteCache {
-    /// Create a new empty memory cache.
-    pub fn new() -> Self {
-        Self {
-            files: RwLock::new(HashMap::new()),
-            deleted: RwLock::new(HashSet::new()),
-        }
-    }
-}
-
-impl Default for MemoryWriteCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl WriteCache for MemoryWriteCache {
-    async fn write_file(&self, rel_path: &str, data: &[u8]) -> Result<(), WriteCacheError> {
-        self.deleted.write().unwrap().remove(rel_path);
-        self.files
-            .write()
-            .unwrap()
-            .insert(rel_path.to_string(), data.to_vec());
-        Ok(())
-    }
-
-    async fn read_file(&self, rel_path: &str) -> Result<Option<Vec<u8>>, WriteCacheError> {
-        Ok(self.files.read().unwrap().get(rel_path).cloned())
-    }
-
-    async fn delete_file(&self, rel_path: &str) -> Result<(), WriteCacheError> {
-        self.files.write().unwrap().remove(rel_path);
-        self.deleted.write().unwrap().insert(rel_path.to_string());
-        Ok(())
-    }
-
-    fn is_deleted(&self, rel_path: &str) -> bool {
-        self.deleted.read().unwrap().contains(rel_path)
-    }
-
-    async fn list_files(&self) -> Result<Vec<String>, WriteCacheError> {
-        Ok(self.files.read().unwrap().keys().cloned().collect())
-    }
-
-    fn cache_dir(&self) -> &Path {
-        Path::new("/dev/null")
-    }
-}
+use super::{DiskCacheError, WriteCache};
 
 /// Metadata for a chunked file in the cache.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,7 +20,7 @@ pub struct ChunkedFileMeta {
     pub total_size: u64,
 }
 
-/// Disk cache with hybrid storage strategy.
+/// Disk cache for dirty (modified) files with hybrid storage strategy.
 ///
 /// - Small files (single chunk): stored by relative path
 /// - Large file chunks: stored as `{path}.part{N}` (only dirty chunks)
@@ -227,6 +99,9 @@ impl MaterializedCache {
     /// # Arguments
     /// * `rel_path` - Relative path of the file
     /// * `chunk_index` - Chunk index
+    ///
+    /// # Returns
+    /// Chunk data if found, None otherwise.
     pub fn read_chunk(
         &self,
         rel_path: &str,
@@ -260,7 +135,7 @@ impl MaterializedCache {
         &self,
         rel_path: &str,
         meta: &ChunkedFileMeta,
-    ) -> Result<(), WriteCacheError> {
+    ) -> Result<(), DiskCacheError> {
         let meta_path: PathBuf = self.meta_dir.join(format!("{}.json", rel_path));
 
         if let Some(parent) = meta_path.parent() {
@@ -277,7 +152,13 @@ impl MaterializedCache {
     ///
     /// # Arguments
     /// * `rel_path` - Relative path of the file
-    pub fn read_chunked_meta(&self, rel_path: &str) -> Result<Option<ChunkedFileMeta>, WriteCacheError> {
+    ///
+    /// # Returns
+    /// Chunk metadata if found, None otherwise.
+    pub fn read_chunked_meta(
+        &self,
+        rel_path: &str,
+    ) -> Result<Option<ChunkedFileMeta>, DiskCacheError> {
         let meta_path: PathBuf = self.meta_dir.join(format!("{}.json", rel_path));
 
         if meta_path.exists() {
@@ -293,6 +174,9 @@ impl MaterializedCache {
     ///
     /// # Arguments
     /// * `rel_path` - Relative path of the file
+    ///
+    /// # Returns
+    /// Sorted vector of chunk indices.
     pub fn list_dirty_chunks(&self, rel_path: &str) -> std::io::Result<Vec<u32>> {
         let parent: PathBuf = self
             .cache_dir
@@ -325,6 +209,11 @@ impl MaterializedCache {
     }
 
     /// Recursively walk directory collecting file paths.
+    ///
+    /// # Arguments
+    /// * `dir` - Directory to walk
+    /// * `prefix` - Path prefix for relative paths
+    /// * `files` - Output vector to collect paths
     fn walk_dir(&self, dir: &Path, prefix: &str, files: &mut Vec<String>) -> std::io::Result<()> {
         if !dir.exists() {
             return Ok(());
@@ -358,7 +247,7 @@ impl MaterializedCache {
 
 #[async_trait]
 impl WriteCache for MaterializedCache {
-    async fn write_file(&self, rel_path: &str, data: &[u8]) -> Result<(), WriteCacheError> {
+    async fn write_file(&self, rel_path: &str, data: &[u8]) -> Result<(), DiskCacheError> {
         let full_path: PathBuf = self.cache_dir.join(rel_path);
 
         // Create parent directories
@@ -380,7 +269,7 @@ impl WriteCache for MaterializedCache {
         Ok(())
     }
 
-    async fn read_file(&self, rel_path: &str) -> Result<Option<Vec<u8>>, WriteCacheError> {
+    async fn read_file(&self, rel_path: &str) -> Result<Option<Vec<u8>>, DiskCacheError> {
         let full_path: PathBuf = self.cache_dir.join(rel_path);
 
         if full_path.exists() {
@@ -390,7 +279,7 @@ impl WriteCache for MaterializedCache {
         }
     }
 
-    async fn delete_file(&self, rel_path: &str) -> Result<(), WriteCacheError> {
+    async fn delete_file(&self, rel_path: &str) -> Result<(), DiskCacheError> {
         // Remove actual file if exists
         let full_path: PathBuf = self.cache_dir.join(rel_path);
         if full_path.exists() {
@@ -411,7 +300,7 @@ impl WriteCache for MaterializedCache {
         self.deleted_dir.join(rel_path).exists()
     }
 
-    async fn list_files(&self) -> Result<Vec<String>, WriteCacheError> {
+    async fn list_files(&self) -> Result<Vec<String>, DiskCacheError> {
         let mut files: Vec<String> = Vec::new();
         self.walk_dir(&self.cache_dir, "", &mut files)?;
         Ok(files)
@@ -419,43 +308,5 @@ impl WriteCache for MaterializedCache {
 
     fn cache_dir(&self) -> &Path {
         &self.cache_dir
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_memory_cache_write_read() {
-        let cache: MemoryWriteCache = MemoryWriteCache::new();
-
-        cache.write_file("test.txt", b"hello").await.unwrap();
-        let data: Option<Vec<u8>> = cache.read_file("test.txt").await.unwrap();
-
-        assert_eq!(data, Some(b"hello".to_vec()));
-    }
-
-    #[tokio::test]
-    async fn test_memory_cache_delete() {
-        let cache: MemoryWriteCache = MemoryWriteCache::new();
-
-        cache.write_file("test.txt", b"hello").await.unwrap();
-        assert!(!cache.is_deleted("test.txt"));
-
-        cache.delete_file("test.txt").await.unwrap();
-        assert!(cache.is_deleted("test.txt"));
-        assert!(cache.read_file("test.txt").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_memory_cache_list_files() {
-        let cache: MemoryWriteCache = MemoryWriteCache::new();
-
-        cache.write_file("a.txt", b"a").await.unwrap();
-        cache.write_file("b.txt", b"b").await.unwrap();
-
-        let files: Vec<String> = cache.list_files().await.unwrap();
-        assert_eq!(files.len(), 2);
     }
 }

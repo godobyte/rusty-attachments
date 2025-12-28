@@ -26,7 +26,7 @@ use crate::inode::{FileContent, INode, INodeId, INodeManager, INodeType};
 use crate::memory_pool::MemoryPool;
 use crate::VfsError;
 
-use super::cache::WriteCache;
+use crate::diskcache::WriteCache;
 
 /// State of a dirty file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,6 +322,8 @@ pub struct DirtyFileManager {
     cache: Arc<dyn WriteCache>,
     /// Reference to read-only file store (for COW source).
     read_store: Arc<dyn FileStore>,
+    /// Optional read cache for immutable content.
+    read_cache: Option<Arc<crate::diskcache::ReadCache>>,
     /// Reference to inode manager (for path lookup).
     inodes: Arc<INodeManager>,
 }
@@ -345,6 +347,7 @@ impl DirtyFileManager {
             pool,
             cache,
             read_store,
+            read_cache: None,
             inodes,
         }
     }
@@ -365,6 +368,14 @@ impl DirtyFileManager {
         pool: Arc<MemoryPool>,
     ) -> Self {
         Self::new(cache, read_store, inodes, pool)
+    }
+
+    /// Set the read cache for immutable content.
+    ///
+    /// # Arguments
+    /// * `read_cache` - Read cache instance
+    pub fn set_read_cache(&mut self, read_cache: Arc<crate::diskcache::ReadCache>) {
+        self.read_cache = Some(read_cache);
     }
 
     /// Get reference to the memory pool.
@@ -601,7 +612,7 @@ impl DirtyFileManager {
 
     /// Ensure a chunk is loaded into the pool.
     ///
-    /// Checks pool first, then fetches from S3 if needed.
+    /// Checks pool first, then disk cache, then fetches from S3.
     ///
     /// # Arguments
     /// * `inode_id` - Inode ID
@@ -621,11 +632,9 @@ impl DirtyFileManager {
             meta.original_hash(chunk_index).map(|s| s.to_string())
         };
 
-        // Fetch from S3 if we have an original hash
+        // Fetch content if we have an original hash
         let chunk_data: Vec<u8> = if let Some(hash) = original_hash {
-            self.read_store
-                .retrieve(&hash, HashAlgorithm::Xxh128)
-                .await?
+            self.fetch_with_cache(&hash).await?
         } else {
             // New chunk - start empty
             Vec::new()
@@ -639,6 +648,33 @@ impl DirtyFileManager {
         self.pool.mark_flushed(inode_id, chunk_index);
 
         Ok(())
+    }
+
+    /// Fetch content with disk cache support.
+    ///
+    /// Checks disk cache first, then fetches from S3 and writes through.
+    ///
+    /// # Arguments
+    /// * `hash` - Content hash to fetch
+    async fn fetch_with_cache(&self, hash: &str) -> Result<Vec<u8>, VfsError> {
+        // Check disk cache first
+        if let Some(ref cache) = self.read_cache {
+            if let Ok(Some(data)) = cache.get(hash) {
+                return Ok(data);
+            }
+        }
+
+        // Fetch from S3
+        let data: Vec<u8> = self.read_store
+            .retrieve(hash, HashAlgorithm::Xxh128)
+            .await?;
+
+        // Write through to disk cache (ignore errors - cache is best-effort)
+        if let Some(ref cache) = self.read_cache {
+            let _ = cache.put(hash, &data);
+        }
+
+        Ok(data)
     }
 
 
@@ -1218,8 +1254,8 @@ impl DirtyFileManager {
 mod tests {
     use super::*;
     use crate::content::MemoryFileStore;
+    use crate::diskcache::MemoryWriteCache;
     use crate::memory_pool::MemoryPoolConfig;
-    use crate::write::cache::MemoryWriteCache;
 
     fn create_test_manager() -> (DirtyFileManager, Arc<INodeManager>, Arc<MemoryPool>) {
         let cache = Arc::new(MemoryWriteCache::new());

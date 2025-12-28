@@ -214,25 +214,6 @@ impl BlockKey {
         }
     }
 
-    /// Create a block key for a non-chunked file (chunk_index = 0).
-    ///
-    /// # Arguments
-    /// * `hash` - Content hash of the entire file
-    #[deprecated(since = "0.2.0", note = "Use from_hash() instead")]
-    pub fn single(hash: impl Into<String>) -> Self {
-        Self::from_hash(hash, 0)
-    }
-
-    /// Create a block key (backward compatible with old API).
-    ///
-    /// # Arguments
-    /// * `hash` - Content hash identifying the chunk
-    /// * `chunk_index` - Zero-based chunk index within the file
-    #[deprecated(since = "0.2.0", note = "Use from_hash() instead")]
-    pub fn new(hash: impl Into<String>, chunk_index: u32) -> Self {
-        Self::from_hash(hash, chunk_index)
-    }
-
     /// Check if this is a read-only (hash-based) block key.
     pub fn is_read_only(&self) -> bool {
         self.id.is_hash()
@@ -1298,18 +1279,6 @@ mod tests {
         assert_eq!(key.inode_id(), Some(42));
         assert_eq!(key.chunk_index, 3);
         assert_eq!(format!("{}", key), "inode:42:3");
-    }
-
-    #[allow(deprecated)]
-    #[test]
-    fn test_block_key_backward_compat() {
-        // Test deprecated methods still work
-        let key = BlockKey::new("hash123", 0);
-        assert_eq!(key.hash(), Some("hash123"));
-
-        let key2 = BlockKey::single("single_hash");
-        assert_eq!(key2.hash(), Some("single_hash"));
-        assert_eq!(key2.chunk_index, 0);
     }
 
     // ========================================================================

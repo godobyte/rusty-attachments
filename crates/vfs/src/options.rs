@@ -3,6 +3,8 @@
 //! This module provides configuration for VFS behavior including caching,
 //! prefetching, and performance tuning.
 
+use std::path::PathBuf;
+
 use crate::memory_pool::MemoryPoolConfig;
 
 /// Configuration options for the VFS.
@@ -30,6 +32,8 @@ pub struct VfsOptions {
     pub read_ahead: ReadAheadOptions,
     /// Timeout settings.
     pub timeouts: TimeoutOptions,
+    /// Read cache configuration (disk cache for immutable content).
+    pub read_cache: ReadCacheConfig,
 }
 
 impl Default for VfsOptions {
@@ -40,6 +44,7 @@ impl Default for VfsOptions {
             kernel_cache: KernelCacheOptions::default(),
             read_ahead: ReadAheadOptions::default(),
             timeouts: TimeoutOptions::default(),
+            read_cache: ReadCacheConfig::default(),
         }
     }
 }
@@ -88,6 +93,64 @@ impl VfsOptions {
     pub fn with_timeouts(mut self, timeouts: TimeoutOptions) -> Self {
         self.timeouts = timeouts;
         self
+    }
+
+    /// Set read cache configuration.
+    ///
+    /// # Arguments
+    /// * `read_cache` - Read cache configuration
+    pub fn with_read_cache(mut self, read_cache: ReadCacheConfig) -> Self {
+        self.read_cache = read_cache;
+        self
+    }
+}
+
+// ============================================================================
+// Read Cache Configuration
+// ============================================================================
+
+/// Configuration for the disk-based read cache.
+///
+/// Controls caching of immutable CAS content to disk.
+#[derive(Debug, Clone)]
+pub struct ReadCacheConfig {
+    /// Whether disk caching is enabled.
+    pub enabled: bool,
+    /// Directory for CAS cache storage.
+    pub cache_dir: PathBuf,
+    /// Whether to write through to disk on S3 fetch.
+    pub write_through: bool,
+}
+
+impl Default for ReadCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cache_dir: PathBuf::from("/tmp/vfs-cache/cas"),
+            write_through: true,
+        }
+    }
+}
+
+impl ReadCacheConfig {
+    /// Create an enabled read cache with the specified directory.
+    ///
+    /// # Arguments
+    /// * `cache_dir` - Directory for CAS cache storage
+    pub fn enabled(cache_dir: PathBuf) -> Self {
+        Self {
+            enabled: true,
+            cache_dir,
+            write_through: true,
+        }
+    }
+
+    /// Create a disabled read cache configuration.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Default::default()
+        }
     }
 }
 

@@ -84,6 +84,8 @@ mod impl_fuse {
         next_handle: AtomicU64,
         /// VFS creation time for uptime tracking.
         start_time: Instant,
+        /// Optional read cache for immutable content.
+        read_cache: Option<Arc<crate::diskcache::ReadCache>>,
     }
 
     impl WritableVfs {
@@ -104,18 +106,39 @@ mod impl_fuse {
 
             let pool = Arc::new(MemoryPool::new(options.pool.clone()));
 
+            // Initialize read cache if enabled
+            let read_cache: Option<Arc<crate::diskcache::ReadCache>> = if options.read_cache.enabled {
+                let cache_options = crate::diskcache::ReadCacheOptions {
+                    cache_dir: options.read_cache.cache_dir.clone(),
+                    write_through: options.read_cache.write_through,
+                };
+                Some(Arc::new(
+                    crate::diskcache::ReadCache::new(cache_options)
+                        .map_err(|e| VfsError::MountFailed(format!("Failed to init read cache: {}", e)))?,
+                ))
+            } else {
+                None
+            };
+
             let cache: Arc<dyn WriteCache> = Arc::new(
                 MaterializedCache::new(write_options.cache_dir.clone())
                     .map_err(|e| VfsError::WriteCacheError(e.to_string()))?,
             );
 
             // Use pool-based DirtyFileManager for unified memory management
-            let dirty_manager = Arc::new(DirtyFileManager::with_pool(
+            let mut dirty_manager = DirtyFileManager::with_pool(
                 cache,
                 store.clone(),
                 inodes.clone(),
                 pool.clone(),
-            ));
+            );
+
+            // Set read cache if enabled
+            if let Some(ref rc) = read_cache {
+                dirty_manager.set_read_cache(rc.clone());
+            }
+
+            let dirty_manager = Arc::new(dirty_manager);
 
             // Collect original directories for diff tracking
             let original_dirs: HashSet<String> = match manifest {
@@ -138,6 +161,7 @@ mod impl_fuse {
                 inodes,
                 store,
                 pool,
+                read_cache,
                 dirty_manager,
                 dirty_dir_manager,
                 original_dirs,
