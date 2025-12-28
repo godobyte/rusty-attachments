@@ -313,6 +313,15 @@ pub struct DirtyEntry {
 ///
 /// Coordinates between in-memory dirty files and disk cache.
 /// Content is stored in the unified memory pool for global memory management.
+///
+/// # Lock Safety
+///
+/// This struct uses `RwLock` for internal synchronization. Lock operations use
+/// `unwrap()` because:
+/// - Lock poisoning only occurs if a thread panics while holding the lock
+/// - The operations inside locks are infallible (simple HashMap operations)
+/// - A poisoned lock indicates corrupted internal state with no meaningful recovery
+/// - This follows the standard library's recommended pattern for non-recoverable locks
 pub struct DirtyFileManager {
     /// Map of inode ID to dirty file metadata (content in pool).
     dirty_metadata: RwLock<HashMap<INodeId, DirtyFileMetadata>>,
@@ -350,24 +359,6 @@ impl DirtyFileManager {
             read_cache: None,
             inodes,
         }
-    }
-
-    /// Create a new dirty file manager with unified memory pool.
-    ///
-    /// This is an alias for `new()` for backward compatibility.
-    ///
-    /// # Arguments
-    /// * `cache` - Write cache implementation (disk or memory)
-    /// * `read_store` - Read-only file store for COW source
-    /// * `inodes` - Inode manager for metadata
-    /// * `pool` - Unified memory pool for content storage
-    pub fn with_pool(
-        cache: Arc<dyn WriteCache>,
-        read_store: Arc<dyn FileStore>,
-        inodes: Arc<INodeManager>,
-        pool: Arc<MemoryPool>,
-    ) -> Self {
-        Self::new(cache, read_store, inodes, pool)
     }
 
     /// Set the read cache for immutable content.

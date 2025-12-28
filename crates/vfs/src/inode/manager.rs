@@ -15,6 +15,12 @@ use super::types::{INode, INodeId, INodeType, ROOT_INODE};
 /// Manages inode allocation and lookup.
 ///
 /// Provides thread-safe access to inodes by ID or path.
+///
+/// # Lock Safety
+///
+/// This struct uses `RwLock` for internal synchronization. Lock operations use
+/// `unwrap()` because lock poisoning indicates unrecoverable internal state
+/// corruption (a thread panicked while modifying the inode table).
 pub struct INodeManager {
     /// Next inode ID to allocate.
     next_id: AtomicU64,
@@ -87,38 +93,6 @@ impl INodeManager {
     /// Get the root directory.
     pub fn root(&self) -> Arc<dyn INode> {
         self.get(ROOT_INODE).expect("Root inode must exist")
-    }
-
-    /// Get an inode as a directory using downcasting.
-    ///
-    /// # Arguments
-    /// * `id` - Inode ID
-    ///
-    /// # Returns
-    /// The directory inode if found and is a directory.
-    pub fn get_as_dir(&self, id: INodeId) -> Option<Arc<dyn INode>> {
-        let inode: Arc<dyn INode> = self.get(id)?;
-        if inode.inode_type() == INodeType::Directory {
-            Some(inode)
-        } else {
-            None
-        }
-    }
-
-    /// Get an inode as a file using downcasting.
-    ///
-    /// # Arguments
-    /// * `id` - Inode ID
-    ///
-    /// # Returns
-    /// The file inode if found and is a file.
-    pub fn get_as_file(&self, id: INodeId) -> Option<Arc<dyn INode>> {
-        let inode: Arc<dyn INode> = self.get(id)?;
-        if inode.inode_type() == INodeType::File {
-            Some(inode)
-        } else {
-            None
-        }
     }
 
     /// Get file content for an inode.

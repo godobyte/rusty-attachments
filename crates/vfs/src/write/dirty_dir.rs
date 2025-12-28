@@ -90,6 +90,12 @@ pub struct DirtyDirEntry {
 /// Manages dirty (created/deleted) directories.
 ///
 /// Tracks directory changes for diff manifest generation.
+///
+/// # Lock Safety
+///
+/// This struct uses `RwLock` for internal synchronization. Lock operations use
+/// `unwrap()` because lock poisoning indicates unrecoverable internal state
+/// corruption. See `DirtyFileManager` documentation for details.
 pub struct DirtyDirManager {
     /// Map of inode ID to dirty directory.
     dirty_dirs: RwLock<HashMap<INodeId, DirtyDir>>,

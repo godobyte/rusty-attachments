@@ -125,8 +125,8 @@ mod impl_fuse {
                     .map_err(|e| VfsError::WriteCacheError(e.to_string()))?,
             );
 
-            // Use pool-based DirtyFileManager for unified memory management
-            let mut dirty_manager = DirtyFileManager::with_pool(
+            // Create DirtyFileManager with unified memory pool
+            let mut dirty_manager = DirtyFileManager::new(
                 cache,
                 store.clone(),
                 inodes.clone(),
