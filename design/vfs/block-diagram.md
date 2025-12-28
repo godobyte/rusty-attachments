@@ -559,3 +559,251 @@
 | `DirtyDirManager` | Created/deleted dirs | `dirty_dirs`, `original_dirs` |
 | `ReadCache` | Disk cache for S3 content | `cache_dir`, `current_size` |
 | `MaterializedCache` | Disk cache for dirty files | `cache_dir`, `deleted_dir`, `meta_dir` |
+
+
+---
+
+## Block Diagram 8: Read-Only File Flow (Open + Read with Caching)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                    DATA FLOW: READ-ONLY FILE (OPEN + READ + CACHING)                     │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+                                    ┌─────────────────┐
+                                    │   Application   │
+                                    │  (e.g., cat)    │
+                                    └────────┬────────┘
+                                             │
+                    ┌────────────────────────┼────────────────────────┐
+                    │                        │                        │
+                    ▼                        ▼                        ▼
+            ┌───────────────┐        ┌───────────────┐        ┌───────────────┐
+            │  open(path)   │        │ read(fd,buf,n)│        │   close(fd)   │
+            └───────┬───────┘        └───────┬───────┘        └───────┬───────┘
+                    │                        │                        │
+════════════════════╪════════════════════════╪════════════════════════╪═══════════════════
+                    │              FUSE KERNEL INTERFACE              │
+════════════════════╪════════════════════════╪════════════════════════╪═══════════════════
+                    │                        │                        │
+                    ▼                        ▼                        ▼
+            ┌───────────────┐        ┌───────────────┐        ┌───────────────┐
+            │ DeadlineVfs   │        │ DeadlineVfs   │        │ DeadlineVfs   │
+            │ ::open()      │        │ ::read()      │        │ ::release()   │
+            └───────┬───────┘        └───────┬───────┘        └───────┬───────┘
+                    │                        │                        │
+                    ▼                        │                        ▼
+┌───────────────────────────────────┐        │                ┌───────────────┐
+│           OPEN FLOW               │        │                │ Remove handle │
+│                                   │        │                │ from handles  │
+│  1. INodeManager.get(ino)         │        │                │ HashMap       │
+│     └─▶ Verify file exists        │        │                └───────────────┘
+│                                   │        │
+│  2. Check inode_type == File      │        │
+│     └─▶ Return EISDIR if not      │        │
+│                                   │        │
+│  3. Check flags (reject O_WRONLY) │        │
+│     └─▶ Return EROFS if write     │        │
+│                                   │        │
+│  4. INodeManager.get_file_content │        │
+│     └─▶ Get FileContent enum      │        │
+│                                   │        │
+│  5. Allocate file handle (fh)     │        │
+│     └─▶ next_handle.fetch_add(1)  │        │
+│                                   │        │
+│  6. Store in handles HashMap:     │        │
+│     handles[fh] = OpenHandle {    │        │
+│       inode, path, content, size  │        │
+│     }                             │        │
+│                                   │        │
+│  7. Return fh to kernel           │        │
+└───────────────────────────────────┘        │
+                                             │
+                                             ▼
+                    ┌─────────────────────────────────────────────────────────┐
+                    │                      READ FLOW                          │
+                    │                                                         │
+                    │  1. Look up OpenHandle by fh                            │
+                    │     └─▶ Get content (FileContent) and file_size         │
+                    │                                                         │
+                    │  2. Dispatch based on FileContent variant:              │
+                    │     ├─▶ SingleHash(hash) → read_single_hash()           │
+                    │     └─▶ Chunked(hashes) → read_chunked()                │
+                    └─────────────────────────────────────────────────────────┘
+                                             │
+                    ┌────────────────────────┴────────────────────────┐
+                    │                                                 │
+                    ▼                                                 ▼
+    ┌───────────────────────────────────┐         ┌───────────────────────────────────┐
+    │     SINGLE HASH READ              │         │     CHUNKED READ                  │
+    │     (files < 256MB)               │         │     (files > 256MB)               │
+    │                                   │         │                                   │
+    │  BlockKey::from_hash(hash, 0)     │         │  For each chunk in range:         │
+    │           │                       │         │    start = offset / CHUNK_SIZE    │
+    │           ▼                       │         │    end = (offset+size) / CHUNK_SZ │
+    │  MemoryPool.acquire(key, fetch)   │         │                                   │
+    │           │                       │         │  BlockKey::from_hash(hash[i], i)  │
+    │           ▼                       │         │           │                       │
+    │  [See CACHING FLOW below]         │         │           ▼                       │
+    │           │                       │         │  MemoryPool.acquire(key, fetch)   │
+    │           ▼                       │         │           │                       │
+    │  Slice data[offset..offset+size]  │         │  [See CACHING FLOW below]         │
+    │           │                       │         │           │                       │
+    │           ▼                       │         │           ▼                       │
+    │  Return bytes to kernel           │         │  Assemble chunks into result      │
+    └───────────────────────────────────┘         └───────────────────────────────────┘
+                    │                                                 │
+                    └────────────────────────┬────────────────────────┘
+                                             │
+                                             ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                              CACHING FLOW (MemoryPool.acquire)                           │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+    MemoryPool.acquire(key, fetch_fn)
+                │
+                ▼
+    ┌───────────────────────┐
+    │ 1. Check blocks cache │
+    │    key_index.get(key) │
+    └───────────┬───────────┘
+                │
+        ┌───────┴───────┐
+        │               │
+        ▼               ▼
+    ┌───────┐       ┌───────┐
+    │  HIT  │       │ MISS  │
+    └───┬───┘       └───┬───┘
+        │               │
+        ▼               ▼
+┌───────────────┐   ┌───────────────────────────────────────────────────────────────┐
+│ 2. Touch LRU  │   │ 2. Check pending_fetches (thundering herd prevention)         │
+│    (move to   │   │    └─▶ If another thread fetching same key, wait for it       │
+│     back)     │   │                                                               │
+│               │   │ 3. Check ReadCache (disk cache)                               │
+│ 3. Increment  │   │    cache.get(hash)                                            │
+│    ref_count  │   │         │                                                     │
+│               │   │    ┌────┴────┐                                                │
+│ 4. Return     │   │    │         │                                                │
+│    BlockHandle│   │    ▼         ▼                                                │
+│    (lock-free │   │ ┌──────┐  ┌──────┐                                            │
+│     access)   │   │ │ HIT  │  │ MISS │                                            │
+└───────────────┘   │ └──┬───┘  └──┬───┘                                            │
+                    │    │         │                                                │
+                    │    │         ▼                                                │
+                    │    │    ┌─────────────────────────────────────────────────┐   │
+                    │    │    │ 4. Fetch from S3 via FileStore.retrieve()       │   │
+                    │    │    │                                                 │   │
+                    │    │    │    StorageClientAdapter                         │   │
+                    │    │    │         │                                       │   │
+                    │    │    │         ▼                                       │   │
+                    │    │    │    S3 GET s3://bucket/Data/{hash}.xxh128        │   │
+                    │    │    │         │                                       │   │
+                    │    │    │         ▼                                       │   │
+                    │    │    │    Return Vec<u8> (up to 256MB)                 │   │
+                    │    │    └─────────────────────────────────────────────────┘   │
+                    │    │         │                                                │
+                    │    │         ▼                                                │
+                    │    │    ┌─────────────────────────────────────────────────┐   │
+                    │    │    │ 5. Write-through to ReadCache                   │   │
+                    │    │    │    cache.put(hash, data)                        │   │
+                    │    │    │    └─▶ Atomic write: temp file + rename         │   │
+                    │    │    └─────────────────────────────────────────────────┘   │
+                    │    │         │                                                │
+                    │    └─────────┤                                                │
+                    │              ▼                                                │
+                    │    ┌─────────────────────────────────────────────────────┐   │
+                    │    │ 6. Evict if needed (LRU)                            │   │
+                    │    │    while current_size + new_size > max_size:        │   │
+                    │    │      evict oldest block with ref_count == 0         │   │
+                    │    └─────────────────────────────────────────────────────┘   │
+                    │              │                                                │
+                    │              ▼                                                │
+                    │    ┌─────────────────────────────────────────────────────┐   │
+                    │    │ 7. Insert into MemoryPool                           │   │
+                    │    │    blocks[id] = PoolBlock { key, data, ref_count=1 }│   │
+                    │    │    key_index[key] = id                              │   │
+                    │    │    lru_order.push_back(id)                          │   │
+                    │    └─────────────────────────────────────────────────────┘   │
+                    │              │                                                │
+                    │              ▼                                                │
+                    │    ┌─────────────────────────────────────────────────────┐   │
+                    │    │ 8. Return BlockHandle                               │   │
+                    │    │    - data: Arc<Vec<u8>> (lock-free read access)     │   │
+                    │    │    - Drops ref_count on Drop                        │   │
+                    │    └─────────────────────────────────────────────────────┘   │
+                    └───────────────────────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                              CACHE HIERARCHY SUMMARY                                     │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+    ┌─────────────────────────────────────────────────────────────────────────────────┐
+    │  L1: MemoryPool (in-process)                                                    │
+    │  ─────────────────────────────                                                  │
+    │  • Capacity: Configurable (default 8GB)                                         │
+    │  • Latency: ~nanoseconds (lock-free Arc<Vec<u8>> access)                        │
+    │  • Eviction: LRU when full                                                      │
+    │  • Key: BlockKey { hash, chunk_index }                                          │
+    │  • Deduplication: Same hash = same block (content-addressed)                    │
+    └─────────────────────────────────────────────────────────────────────────────────┘
+                                         │
+                                         │ MISS
+                                         ▼
+    ┌─────────────────────────────────────────────────────────────────────────────────┐
+    │  L2: ReadCache (disk)                                                           │
+    │  ────────────────────                                                           │
+    │  • Location: /tmp/vfs-cache/cas/ (configurable)                                 │
+    │  • Latency: ~milliseconds (disk I/O)                                            │
+    │  • Persistence: Survives process restart                                        │
+    │  • Key: hash (flat files, hash as filename)                                     │
+    │  • Write-through: Populated on S3 fetch                                         │
+    └─────────────────────────────────────────────────────────────────────────────────┘
+                                         │
+                                         │ MISS
+                                         ▼
+    ┌─────────────────────────────────────────────────────────────────────────────────┐
+    │  L3: S3 CAS (remote)                                                            │
+    │  ───────────────────                                                            │
+    │  • Location: s3://{bucket}/{root}/Data/{hash}.{algorithm}                       │
+    │  • Latency: ~100ms+ (network)                                                   │
+    │  • Source of truth for manifest content                                         │
+    │  • Content-addressable: hash guarantees integrity                               │
+    └─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Numbered Data Transactions (Read-Only Open + Read):
+
+**OPEN:**
+1. FUSE `open(path, flags)` syscall received
+2. `INodeManager.get(ino)` - verify inode exists
+3. Check `inode.inode_type() == File` - reject directories with `EISDIR`
+4. Check flags - reject `O_WRONLY`/`O_RDWR` with `EROFS` (read-only filesystem)
+5. `INodeManager.get_file_content(ino)` - get `FileContent` enum (hash references)
+6. Allocate file handle `fh` via atomic counter
+7. Store `OpenHandle { inode, path, content, size }` in `handles` HashMap
+8. Return `fh` to kernel
+
+**READ:**
+1. Look up `OpenHandle` by `fh` from `handles` HashMap
+2. Extract `FileContent` and `file_size` from handle
+3. For `SingleHash`: create single `BlockKey`, call `MemoryPool.acquire()`
+4. For `Chunked`: calculate chunk range, iterate calling `MemoryPool.acquire()` per chunk
+5. **L1 Cache (MemoryPool)**: Check `key_index` for existing block
+   - HIT: Touch LRU, increment ref_count, return `BlockHandle`
+   - MISS: Continue to L2
+6. **L2 Cache (ReadCache)**: Check disk cache `cache.get(hash)`
+   - HIT: Load from disk, insert into MemoryPool, return
+   - MISS: Continue to L3
+7. **L3 (S3)**: `FileStore.retrieve(hash, algorithm)` - fetch from S3
+8. Write-through to ReadCache (atomic: temp file + rename)
+9. Evict LRU blocks if MemoryPool full
+10. Insert new block into MemoryPool
+11. Return `BlockHandle` with `Arc<Vec<u8>>` for lock-free data access
+12. Slice data for requested `offset..offset+size`
+13. Return bytes to kernel → application
+
+**RELEASE:**
+1. Remove `OpenHandle` from `handles` HashMap
+2. Note: MemoryPool blocks are NOT released on close (LRU eviction handles cleanup)
