@@ -9,3 +9,19 @@ build/
 *.whl
 pkg/
 node_modules/
+
+# Tauri
+crates/example/tauri/target/
+crates/example/tauri/Cargo.lock
+crates/example/tauri/src-tauri/target/
+crates/example/tauri/src-tauri/Cargo.lock
+
+# macOS
+.DS_Store
+*.dSYM/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -6,7 +6,7 @@
     "distDir": "ui"
   },
   "package": {
-    "productName": "Tauri Example",
+    "productName": "Job Attachment Uploader",
     "version": "0.1.0"
   },
   "tauri": {
@@ -14,13 +14,16 @@
       "all": false,
       "shell": {
         "open": true
+      },
+      "dialog": {
+        "open": true
       }
     },
     "bundle": {
       "active": true,
       "icon": [],
-      "identifier": "com.example.tauri",
-      "targets": "all"
+      "identifier": "com.deadline.attachment-uploader",
+      "targets": []
     },
     "security": {
       "csp": null
@@ -28,10 +31,10 @@
     "windows": [
       {
         "fullscreen": false,
-        "height": 600,
+        "height": 800,
+        "width": 1200,
         "resizable": true,
-        "title": "Tauri Example",
-        "width": 800
+        "title": "Job Attachment Uploader"
       }
     ]
   }

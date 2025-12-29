@@ -3,38 +3,26 @@
     windows_subsystem = "windows"
 )]
 
-use serde::{Deserialize, Serialize};
+mod commands;
+mod error;
+mod progress;
+mod types;
 
-/// Response from the greet command.
-#[derive(Debug, Serialize, Deserialize)]
-struct GreetResponse {
-    message: String,
-    timestamp: u64,
-}
-
-/// Greet the user by name.
-///
-/// # Arguments
-/// * `name` - The name to greet
-///
-/// # Returns
-/// A greeting message with timestamp.
-#[tauri::command]
-fn greet(name: &str) -> GreetResponse {
-    let timestamp: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    GreetResponse {
-        message: format!("Hello, {}! Welcome to Tauri.", name),
-        timestamp,
-    }
-}
+use commands::{
+    browse_directory, browse_s3_prefix, cancel_operation, create_snapshot, fetch_manifest,
+    submit_bundle,
+};
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            browse_directory,
+            browse_s3_prefix,
+            fetch_manifest,
+            create_snapshot,
+            submit_bundle,
+            cancel_operation,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

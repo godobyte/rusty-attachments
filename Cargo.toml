@@ -12,6 +12,9 @@ members = [
     "crates/vfs",
     "crates/wasm",
 ]
+exclude = [
+    "crates/example/tauri",
+]
 
 [workspace.package]
 version = "0.1.0"

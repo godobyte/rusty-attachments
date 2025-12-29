@@ -1,111 +1,426 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tauri Example</title>
+  <title>Job Attachment Manager</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.2/dist/cyborg/bootstrap.min.css">
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .container {
-      background: white;
-      padding: 2rem;
-      border-radius: 12px;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-      text-align: center;
-      max-width: 400px;
-      width: 90%;
-    }
-    h1 {
-      color: #333;
-      margin-bottom: 1.5rem;
-    }
-    input {
-      width: 100%;
-      padding: 0.75rem;
-      border: 2px solid #ddd;
-      border-radius: 8px;
-      font-size: 1rem;
-      margin-bottom: 1rem;
-    }
-    input:focus {
-      outline: none;
-      border-color: #667eea;
-    }
-    button {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      border: none;
-      padding: 0.75rem 2rem;
-      border-radius: 8px;
-      font-size: 1rem;
-      cursor: pointer;
-      transition: transform 0.2s;
-    }
-    button:hover {
-      transform: scale(1.05);
-    }
-    #result {
-      margin-top: 1.5rem;
-      padding: 1rem;
-      background: #f8f9fa;
-      border-radius: 8px;
-      display: none;
-    }
-    #result.show {
-      display: block;
-    }
-    .message {
-      color: #333;
-      font-size: 1.1rem;
-    }
-    .timestamp {
-      color: #888;
-      font-size: 0.85rem;
-      margin-top: 0.5rem;
-    }
+    body { min-height: 100vh; }
+    .file-browser { height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.85rem; }
+    .file-item { padding: 0.25rem 0.5rem; cursor: pointer; border-bottom: 1px solid #2a2a2a; }
+    .file-item:hover { background: #2a2a2a; }
+    .file-item.selected { background: #0d6efd; }
+    .manifest-tree { height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; }
+    .manifest-tree-item { padding: 0.2rem 0.5rem; border-bottom: 1px solid #222; }
+    .breadcrumb-nav { font-size: 0.85rem; }
+    .breadcrumb-nav a { cursor: pointer; }
+    .stat-badge { font-size: 0.7rem; }
+    .config-panel { font-size: 0.9rem; }
+    .config-panel .form-label { font-size: 0.8rem; margin-bottom: 0.25rem; }
+    .config-panel .form-control, .config-panel .form-select { font-size: 0.85rem; padding: 0.3rem 0.5rem; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>🦀 Tauri Example</h1>
-    <input type="text" id="name" placeholder="Enter your name" />
-    <button onclick="greet()">Greet Me!</button>
-    <div id="result">
-      <div class="message" id="message"></div>
-      <div class="timestamp" id="timestamp"></div>
+  <div class="container-fluid py-3">
+    <h4 class="mb-3">🦀 Job Attachment Manager</h4>
+
+    <!-- AWS Config (shared) -->
+    <div class="card mb-3 config-panel">
+      <div class="card-body py-2">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-2">
+            <label class="form-label">Region</label>
+            <select id="region" class="form-select">
+              <option value="us-west-2" selected>us-west-2</option>
+              <option value="us-east-1">us-east-1</option>
+              <option value="eu-west-1">eu-west-1</option>
+            </select>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Bucket</label>
+            <input type="text" id="bucket" class="form-control" placeholder="my-bucket">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Root Prefix</label>
+            <input type="text" id="root-prefix" class="form-control" value="DeadlineCloud">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Farm ID</label>
+            <input type="text" id="farm-id" class="form-control" placeholder="farm-xxx">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Queue ID</label>
+            <input type="text" id="queue-id" class="form-control" placeholder="queue-xxx">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Manifest Version</label>
+            <select id="manifest-version" class="form-select">
+              <option value="v2025-12-04-beta" selected>v2025-12-04-beta</option>
+              <option value="v2023-03-03">v2023-03-03</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <ul class="nav nav-tabs" role="tablist">
+      <li class="nav-item">
+        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-upload" type="button">
+          📤 Upload Files
+        </button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-browse" type="button">
+          📂 Browse Manifests
+        </button>
+      </li>
+    </ul>
+
+    <div class="tab-content">
+      <!-- Tab 1: Upload Files -->
+      <div class="tab-pane fade show active" id="tab-upload">
+        <div class="card border-top-0 rounded-top-0">
+          <div class="card-body">
+            <div class="row">
+              <div class="col-md-6">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <span class="breadcrumb-nav" id="local-breadcrumb">/</span>
+                  <button class="btn btn-sm btn-outline-secondary" onclick="localGoUp()">⬆ Up</button>
+                </div>
+                <div class="file-browser bg-dark rounded" id="local-file-list"></div>
+                <div class="mt-2">
+                  <label class="form-label small">Exclude Patterns</label>
+                  <input type="text" id="exclude-patterns" class="form-control form-control-sm" 
+                         value="**/*.tmp,**/__pycache__/**,**/.git/**">
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="mb-2">
+                  <strong>Selected:</strong> <span id="selected-path">None</span>
+                </div>
+                <div class="d-grid gap-2">
+                  <button class="btn btn-primary" onclick="uploadSelected()">Upload to CAS</button>
+                  <button class="btn btn-outline-secondary" onclick="previewSnapshot()">Preview Snapshot</button>
+                </div>
+                <div id="upload-progress" class="mt-3" style="display:none;">
+                  <div class="progress mb-2">
+                    <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%">0%</div>
+                  </div>
+                  <small id="progress-status" class="text-muted"></small>
+                </div>
+                <div id="upload-result" class="mt-3" style="display:none;">
+                  <div class="alert alert-success">
+                    <strong>Upload Complete!</strong>
+                    <div class="small mt-1">
+                      Files: <span id="result-files">0</span> |
+                      Uploaded: <span id="result-uploaded">0</span> |
+                      Skipped: <span id="result-skipped">0</span>
+                    </div>
+                  </div>
+                  <button class="btn btn-sm btn-outline-secondary" onclick="copyAttachments()">Copy Attachments JSON</button>
+                  <pre id="attachments-json" class="bg-dark p-2 rounded mt-2 small" style="max-height:150px;overflow:auto;"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: Browse Manifests -->
+      <div class="tab-pane fade" id="tab-browse">
+        <div class="card border-top-0 rounded-top-0">
+          <div class="card-body">
+            <div class="row">
+              <div class="col-md-5">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <span class="breadcrumb-nav" id="s3-breadcrumb">Manifests/</span>
+                  <div>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="s3GoUp()">⬆ Up</button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="refreshS3()">🔄 Refresh</button>
+                  </div>
+                </div>
+                <div class="file-browser bg-dark rounded" id="s3-file-list">
+                  <div class="text-muted text-center py-4">Enter bucket and click Refresh</div>
+                </div>
+              </div>
+              <div class="col-md-7">
+                <div id="manifest-info" style="display:none;">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <strong>Manifest: <span id="manifest-name"></span></strong>
+                    <div>
+                      <span class="badge bg-primary stat-badge" id="manifest-version-badge"></span>
+                      <span class="badge bg-secondary stat-badge" id="manifest-files-badge"></span>
+                      <span class="badge bg-info stat-badge" id="manifest-size-badge"></span>
+                    </div>
+                  </div>
+                  <div class="small text-muted mb-2">
+                    Asset Root: <code id="manifest-asset-root">-</code>
+                  </div>
+                  <div class="manifest-tree bg-dark rounded" id="manifest-tree"></div>
+                </div>
+                <div id="manifest-placeholder" class="text-muted text-center py-5">
+                  Select a manifest file to view its contents
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    async function greet() {
-      const name = document.getElementById('name').value || 'World';
-      
-      // Call the Rust backend
-      const response = await window.__TAURI__.invoke('greet', { name });
-      
-      // Display result
-      document.getElementById('message').textContent = response.message;
-      document.getElementById('timestamp').textContent = 
-        `Timestamp: ${new Date(response.timestamp * 1000).toLocaleString()}`;
-      document.getElementById('result').classList.add('show');
+    // State
+    let localCurrentPath = '';
+    let s3CurrentPrefix = '';
+    let selectedLocalPath = null;
+    let attachmentsResult = null;
+
+    // Helpers
+    function formatBytes(bytes) {
+      if (!bytes) return '-';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
     }
 
-    // Allow Enter key to trigger greet
-    document.getElementById('name').addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') greet();
-    });
+    function formatTimestamp(ts) {
+      if (!ts) return '-';
+      return new Date(ts * 1000).toLocaleString();
+    }
+
+    function getConfig() {
+      return {
+        region: document.getElementById('region').value,
+        bucket: document.getElementById('bucket').value,
+        rootPrefix: document.getElementById('root-prefix').value,
+        farmId: document.getElementById('farm-id').value,
+        queueId: document.getElementById('queue-id').value,
+      };
+    }
+
+    // Local file browser
+    async function browseLocal(path) {
+      try {
+        const entries = await window.__TAURI__.invoke('browse_directory', { path: path || '' });
+        localCurrentPath = path || entries[0]?.path.split('/').slice(0, -1).join('/') || '/';
+        document.getElementById('local-breadcrumb').textContent = localCurrentPath || '/';
+        
+        const list = document.getElementById('local-file-list');
+        list.innerHTML = entries.map(e => `
+          <div class="file-item" onclick="localItemClick('${e.path.replace(/'/g, "\\'")}', ${e.isDir})">
+            ${e.isDir ? '📁' : '📄'} ${e.name}
+            <span class="float-end text-muted small">${e.isDir ? '' : formatBytes(e.size)}</span>
+          </div>
+        `).join('');
+      } catch (err) {
+        console.error('Browse error:', err);
+      }
+    }
+
+    function localItemClick(path, isDir) {
+      if (isDir) {
+        browseLocal(path);
+      } else {
+        // Select file's parent directory
+        const parentPath = path.split('/').slice(0, -1).join('/');
+        selectLocalPath(parentPath);
+      }
+      // Also allow selecting directories
+      if (isDir) {
+        selectLocalPath(path);
+      }
+    }
+
+    function selectLocalPath(path) {
+      selectedLocalPath = path;
+      document.getElementById('selected-path').textContent = path;
+      // Highlight in list
+      document.querySelectorAll('#local-file-list .file-item').forEach(el => {
+        el.classList.toggle('selected', el.textContent.includes(path.split('/').pop()));
+      });
+    }
+
+    function localGoUp() {
+      if (localCurrentPath && localCurrentPath !== '/') {
+        const parent = localCurrentPath.split('/').slice(0, -1).join('/') || '/';
+        browseLocal(parent);
+      }
+    }
+
+    // S3 browser
+    async function browseS3(prefix) {
+      const config = getConfig();
+      if (!config.bucket) {
+        alert('Please enter a bucket name');
+        return;
+      }
+
+      try {
+        const entries = await window.__TAURI__.invoke('browse_s3_prefix', { config, prefix: prefix || '' });
+        s3CurrentPrefix = prefix || `${config.rootPrefix}/Manifests/`;
+        document.getElementById('s3-breadcrumb').textContent = s3CurrentPrefix;
+        
+        const list = document.getElementById('s3-file-list');
+        list.innerHTML = entries.map(e => `
+          <div class="file-item ${e.isManifest ? 'text-warning' : ''}" 
+               onclick="s3ItemClick('${e.key.replace(/'/g, "\\'")}', ${e.isPrefix}, ${e.isManifest})">
+            ${e.isPrefix ? '📁' : (e.isManifest ? '📋' : '📄')} ${e.name}
+            <span class="float-end text-muted small">${e.isPrefix ? '' : formatBytes(e.size)}</span>
+          </div>
+        `).join('') || '<div class="text-muted text-center py-3">No objects found</div>';
+      } catch (err) {
+        console.error('S3 browse error:', err);
+        document.getElementById('s3-file-list').innerHTML = `<div class="text-danger p-2">${err}</div>`;
+      }
+    }
+
+    function s3ItemClick(key, isPrefix, isManifest) {
+      if (isPrefix) {
+        browseS3(key);
+      } else if (isManifest) {
+        loadManifest(key);
+      }
+    }
+
+    function s3GoUp() {
+      if (s3CurrentPrefix) {
+        const parts = s3CurrentPrefix.replace(/\/$/, '').split('/');
+        parts.pop();
+        const parent = parts.length > 0 ? parts.join('/') + '/' : '';
+        browseS3(parent);
+      }
+    }
+
+    function refreshS3() {
+      browseS3(s3CurrentPrefix);
+    }
+
+    // Manifest viewer
+    async function loadManifest(s3Key) {
+      const config = getConfig();
+      try {
+        const manifest = await window.__TAURI__.invoke('fetch_manifest', { config, s3Key });
+        
+        document.getElementById('manifest-placeholder').style.display = 'none';
+        document.getElementById('manifest-info').style.display = 'block';
+        
+        document.getElementById('manifest-name').textContent = s3Key.split('/').pop();
+        document.getElementById('manifest-version-badge').textContent = manifest.version;
+        document.getElementById('manifest-files-badge').textContent = `${manifest.fileCount} files`;
+        document.getElementById('manifest-size-badge').textContent = formatBytes(manifest.totalSize);
+        document.getElementById('manifest-asset-root').textContent = manifest.assetRoot || '-';
+        
+        const tree = document.getElementById('manifest-tree');
+        tree.innerHTML = manifest.files.map(f => {
+          const icon = f.entryType === 'symlink' ? '🔗' : (f.entryType === 'deleted' ? '❌' : (f.executable ? '⚡' : '📄'));
+          const chunks = f.chunkCount ? `[${f.chunkCount} chunks]` : '';
+          const mtime = f.mtime ? formatTimestamp(Math.floor(f.mtime / 1000000)) : '-';
+          return `
+            <div class="manifest-tree-item">
+              <span>${icon} ${f.path}</span>
+              <span class="float-end text-muted">
+                ${formatBytes(f.size)} | ${mtime} ${chunks}
+              </span>
+            </div>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error('Load manifest error:', err);
+        alert('Failed to load manifest: ' + err);
+      }
+    }
+
+    // Upload
+    async function uploadSelected() {
+      if (!selectedLocalPath) {
+        alert('Please select a directory to upload');
+        return;
+      }
+      const config = getConfig();
+      if (!config.bucket) {
+        alert('Please enter a bucket name');
+        return;
+      }
+
+      document.getElementById('upload-progress').style.display = 'block';
+      document.getElementById('upload-result').style.display = 'none';
+
+      const unlisten = await window.__TAURI__.event.listen('upload-progress', (event) => {
+        const p = event.payload;
+        const pct = p.percent || 0;
+        document.getElementById('progress-bar').style.width = pct + '%';
+        document.getElementById('progress-bar').textContent = Math.round(pct) + '%';
+        document.getElementById('progress-status').textContent = `${p.phase}: ${p.currentPath || ''}`;
+      });
+
+      try {
+        const excludePatterns = document.getElementById('exclude-patterns').value
+          .split(',').map(p => p.trim()).filter(p => p);
+
+        const result = await window.__TAURI__.invoke('submit_bundle', {
+          jaConfig: config,
+          snapshotConfig: {
+            rootPath: selectedLocalPath,
+            inputFiles: [],
+            includePatterns: [],
+            excludePatterns,
+            manifestVersion: document.getElementById('manifest-version').value,
+          },
+          outputDirectories: [],
+        });
+
+        attachmentsResult = result.attachmentsJson;
+        document.getElementById('result-files').textContent = result.hashingStats.filesProcessed;
+        document.getElementById('result-uploaded').textContent = result.uploadStats.filesTransferred;
+        document.getElementById('result-skipped').textContent = result.uploadStats.filesSkipped;
+        document.getElementById('attachments-json').textContent = JSON.stringify(JSON.parse(result.attachmentsJson), null, 2);
+        document.getElementById('upload-result').style.display = 'block';
+      } catch (err) {
+        alert('Upload failed: ' + err);
+      } finally {
+        unlisten();
+        document.getElementById('upload-progress').style.display = 'none';
+      }
+    }
+
+    async function previewSnapshot() {
+      if (!selectedLocalPath) {
+        alert('Please select a directory');
+        return;
+      }
+      try {
+        const excludePatterns = document.getElementById('exclude-patterns').value
+          .split(',').map(p => p.trim()).filter(p => p);
+
+        const result = await window.__TAURI__.invoke('create_snapshot', {
+          config: {
+            rootPath: selectedLocalPath,
+            inputFiles: [],
+            includePatterns: [],
+            excludePatterns,
+            manifestVersion: document.getElementById('manifest-version').value,
+          },
+        });
+        alert(`Snapshot: ${result.fileCount} files, ${formatBytes(result.totalSize)}`);
+      } catch (err) {
+        alert('Snapshot failed: ' + err);
+      }
+    }
+
+    function copyAttachments() {
+      if (attachmentsResult) {
+        navigator.clipboard.writeText(attachmentsResult);
+        alert('Copied!');
+      }
+    }
+
+    // Init
+    browseLocal('');
   </script>
 </body>
 </html>
