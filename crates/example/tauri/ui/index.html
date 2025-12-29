@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tauri Example</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      background: white;
+      padding: 2rem;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      text-align: center;
+      max-width: 400px;
+      width: 90%;
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 1.5rem;
+    }
+    input {
+      width: 100%;
+      padding: 0.75rem;
+      border: 2px solid #ddd;
+      border-radius: 8px;
+      font-size: 1rem;
+      margin-bottom: 1rem;
+    }
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    button {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 0.75rem 2rem;
+      border-radius: 8px;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+    button:hover {
+      transform: scale(1.05);
+    }
+    #result {
+      margin-top: 1.5rem;
+      padding: 1rem;
+      background: #f8f9fa;
+      border-radius: 8px;
+      display: none;
+    }
+    #result.show {
+      display: block;
+    }
+    .message {
+      color: #333;
+      font-size: 1.1rem;
+    }
+    .timestamp {
+      color: #888;
+      font-size: 0.85rem;
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🦀 Tauri Example</h1>
+    <input type="text" id="name" placeholder="Enter your name" />
+    <button onclick="greet()">Greet Me!</button>
+    <div id="result">
+      <div class="message" id="message"></div>
+      <div class="timestamp" id="timestamp"></div>
+    </div>
+  </div>
+
+  <script>
+    async function greet() {
+      const name = document.getElementById('name').value || 'World';
+      
+      // Call the Rust backend
+      const response = await window.__TAURI__.invoke('greet', { name });
+      
+      // Display result
+      document.getElementById('message').textContent = response.message;
+      document.getElementById('timestamp').textContent = 
+        `Timestamp: ${new Date(response.timestamp * 1000).toLocaleString()}`;
+      document.getElementById('result').classList.add('show');
+    }
+
+    // Allow Enter key to trigger greet
+    document.getElementById('name').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') greet();
+    });
+  </script>
+</body>
+</html>
