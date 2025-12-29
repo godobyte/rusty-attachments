@@ -24,7 +24,7 @@
 | MemoryWriteCache (test) | ✅ | `src/write/cache.rs` |
 | DirtyFileManager (COW) | ✅ | `src/write/dirty.rs` |
 | DiffManifestExporter | ✅ | `src/write/export.rs` |
-| CachedStore (read cache) | ❌ | Future work |
+| ReadCache (disk cache) | ✅ | `src/diskcache/read_cache.rs` |
 | Hash Verification | ❌ | Future work |
 
 ---
@@ -357,8 +357,8 @@ let session = fuser::spawn_mount2(filesystem, "/mnt/vfs", &[MountOption::RO])?;
 crates/vfs/src/
 ├── lib.rs                # Public API exports
 ├── error.rs              # VfsError enum
-├── options.rs            # VfsOptions, PrefetchStrategy, etc.
-├── memory_pool.rs        # Layer 1: Memory pool for V2 chunks
+├── options.rs            # VfsOptions, PrefetchStrategy, ReadCacheConfig, etc.
+├── memory_pool.rs        # Layer 1: Memory pool for V2 chunks (unified for read/write)
 ├── builder.rs            # Layer 2: Build INode tree from Manifest
 │
 ├── inode/                # Layer 1: INode primitives
@@ -374,10 +374,18 @@ crates/vfs/src/
 │   ├── store.rs          # FileStore trait, MemoryFileStore
 │   └── s3_adapter.rs     # StorageClientAdapter<C: StorageClient>
 │
+├── diskcache/            # Layer 1: Disk cache implementations
+│   ├── mod.rs
+│   ├── error.rs          # DiskCacheError
+│   ├── traits.rs         # WriteCache trait
+│   ├── materialized.rs   # MaterializedCache (dirty files), ChunkedFileMeta
+│   ├── memory_cache.rs   # MemoryWriteCache (test impl)
+│   └── read_cache.rs     # ReadCache (immutable CAS content)
+│
 ├── write/                # Layer 2: Write support (COW)
 │   ├── mod.rs
-│   ├── cache.rs          # WriteCache trait, MaterializedCache, MemoryWriteCache
-│   ├── dirty.rs          # DirtyFile, DirtyFileManager, DirtyContent
+│   ├── dirty.rs          # DirtyFileMetadata, DirtyFileManager (content in MemoryPool)
+│   ├── dirty_dir.rs      # DirtyDir, DirtyDirManager
 │   ├── export.rs         # DiffManifestExporter trait, DirtySummary
 │   └── stats.rs          # WritableVfsStats, WritableVfsStatsCollector
 │
@@ -646,10 +654,25 @@ PoolBlock:
 #### Core Types
 
 ```rust
-/// Key identifying a unique block (hash + chunk_index).
+/// Identifier for block content - either hash-based or inode-based.
+pub enum ContentId {
+    /// Hash-based ID for read-only content (can be re-fetched from S3).
+    Hash(String),
+    /// Inode-based ID for dirty content (must be flushed before eviction).
+    Inode(u64),
+}
+
+/// Key identifying a unique block (content ID + chunk_index).
 pub struct BlockKey {
-    pub hash: String,
+    pub id: ContentId,
     pub chunk_index: u32,
+}
+
+impl BlockKey {
+    /// Create a block key from a content hash.
+    pub fn from_hash(hash: impl Into<String>, chunk_index: u32) -> Self;
+    /// Create a block key from an inode ID (for dirty blocks).
+    pub fn from_inode(inode_id: u64, chunk_index: u32) -> Self;
 }
 
 /// Configuration for the memory pool.
@@ -749,6 +772,28 @@ impl MemoryPool {
     
     /// Get pool statistics.
     pub fn stats(&self) -> MemoryPoolStats;
+    
+    // Dirty block management (unified memory pool)
+    
+    /// Invalidate all read-only blocks for a given hash.
+    /// Called when a file is modified to prevent stale reads.
+    pub fn invalidate_hash(&self, hash: &str) -> usize;
+    
+    /// Insert or update a dirty block.
+    pub fn insert_dirty(&self, inode_id: u64, chunk_index: u32, data: Vec<u8>) 
+        -> Result<BlockHandle, MemoryPoolError>;
+    
+    /// Mark a dirty block as flushed (no longer needs flush before eviction).
+    pub fn mark_flushed(&self, inode_id: u64, chunk_index: u32) -> bool;
+    
+    /// Get a dirty block if it exists.
+    pub fn get_dirty(&self, inode_id: u64, chunk_index: u32) -> Option<BlockHandle>;
+    
+    /// Remove all blocks for an inode (clean up on file delete).
+    pub fn remove_inode_blocks(&self, inode_id: u64) -> usize;
+    
+    /// Check if a dirty block exists.
+    pub fn has_dirty(&self, inode_id: u64, chunk_index: u32) -> bool;
 }
 ```
 

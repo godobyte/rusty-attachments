@@ -148,7 +148,7 @@ impl MemoryPool {
 ```rust
 pub struct DirtyFileManager {
     /// Metadata about dirty files (content stored in pool).
-    dirty_files: RwLock<HashMap<INodeId, DirtyFileMetadata>>,
+    dirty_metadata: RwLock<HashMap<INodeId, DirtyFileMetadata>>,
     /// Shared memory pool for content storage.
     pool: Arc<MemoryPool>,
     /// Disk cache for persistence.

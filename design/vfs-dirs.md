@@ -38,7 +38,8 @@ This document extends the writable VFS design with support for directory creatio
 │  └─────────────────────────────────────────────────────────────────────┘    │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
 │  │  DirtyFileManager (existing)                                        │    │
-│  │    - dirty_files: HashMap<INodeId, DirtyFile>                       │    │
+│  │    - dirty_metadata: HashMap<INodeId, DirtyFileMetadata>            │    │
+│  │    - pool: Arc<MemoryPool>  (unified content storage)               │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
