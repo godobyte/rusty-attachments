@@ -1,41 +1,27 @@
 {
+  "productName": "Job Attachment Manager",
+  "version": "0.1.0",
+  "identifier": "com.deadline.attachment-manager",
   "build": {
-    "beforeDevCommand": "",
-    "beforeBuildCommand": "",
-    "devPath": "ui",
-    "distDir": "ui"
+    "frontendDist": "ui"
   },
-  "package": {
-    "productName": "Job Attachment Uploader",
-    "version": "0.1.0"
-  },
-  "tauri": {
-    "allowlist": {
-      "all": false,
-      "shell": {
-        "open": true
-      },
-      "dialog": {
-        "open": true
-      }
-    },
-    "bundle": {
-      "active": true,
-      "icon": [],
-      "identifier": "com.deadline.attachment-uploader",
-      "targets": []
-    },
+  "app": {
+    "withGlobalTauri": true,
     "security": {
       "csp": null
     },
     "windows": [
       {
-        "fullscreen": false,
-        "height": 800,
+        "title": "Job Attachment Manager",
         "width": 1200,
-        "resizable": true,
-        "title": "Job Attachment Uploader"
+        "height": 800
       }
     ]
-  }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png"]
+  },
+  "plugins": {}
 }

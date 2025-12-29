@@ -1,7 +1,7 @@
 //! Progress reporting for Tauri events.
 
 use serde::Serialize;
-use tauri::Window;
+use tauri::{Emitter, Window};
 
 use rusty_attachments_common::ProgressCallback;
 use rusty_attachments_filesystem::ScanProgress;
