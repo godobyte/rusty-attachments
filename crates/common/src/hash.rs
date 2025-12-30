@@ -95,6 +95,63 @@ impl Default for Xxh3Hasher {
     }
 }
 
+// ============================================================================
+// Hash Folding for Memory Efficiency
+// ============================================================================
+
+/// Fold a 128-bit XXH3 hash into a 64-bit integer for compact storage.
+///
+/// Uses XOR folding to preserve hash distribution while reducing size.
+/// This is suitable for hash tables and memory-efficient storage where
+/// the full 128-bit hash isn't required.
+///
+/// # Arguments
+/// * `hash_hex` - 32-character hex string (128-bit hash)
+///
+/// # Returns
+/// 64-bit folded hash value
+///
+/// # Panics
+/// Panics if hash_hex is not exactly 32 hex characters
+pub fn fold_hash_to_u64(hash_hex: &str) -> u64 {
+    assert_eq!(hash_hex.len(), 32, "Hash must be 32 hex characters");
+    
+    // Parse as u128, then fold upper and lower 64 bits
+    let full_hash: u128 = u128::from_str_radix(hash_hex, 16)
+        .expect("Invalid hex hash");
+    
+    let upper: u64 = (full_hash >> 64) as u64;
+    let lower: u64 = full_hash as u64;
+    
+    // XOR fold preserves distribution
+    upper ^ lower
+}
+
+/// Compute XXH128 hash and return folded 64-bit value.
+///
+/// # Arguments
+/// * `data` - Bytes to hash
+///
+/// # Returns
+/// 64-bit folded hash value
+pub fn hash_bytes_folded(data: &[u8]) -> u64 {
+    let hash_hex: String = hash_bytes(data);
+    fold_hash_to_u64(&hash_hex)
+}
+
+impl Xxh3Hasher {
+    /// Finalize and return folded 64-bit hash.
+    ///
+    /// # Returns
+    /// 64-bit folded hash value
+    pub fn finish_folded(&self) -> u64 {
+        let full_hash: u128 = self.finish();
+        let upper: u64 = (full_hash >> 64) as u64;
+        let lower: u64 = full_hash as u64;
+        upper ^ lower
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +222,62 @@ mod tests {
     fn test_hash_file_not_found() {
         let result: Result<String, std::io::Error> = hash_file(Path::new("/nonexistent/file.txt"));
         assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // Hash Folding Tests
+    // ========================================================================
+
+    #[test]
+    fn test_hash_folding_deterministic() {
+        let hash: String = hash_bytes(b"test data");
+        let folded1: u64 = fold_hash_to_u64(&hash);
+        let folded2: u64 = fold_hash_to_u64(&hash);
+        assert_eq!(folded1, folded2);
+    }
+
+    #[test]
+    fn test_hash_folding_different_inputs() {
+        // Use actual hashes from real data
+        let hash1: String = hash_bytes(b"hello");
+        let hash2: String = hash_bytes(b"world");
+        let folded1: u64 = fold_hash_to_u64(&hash1);
+        let folded2: u64 = fold_hash_to_u64(&hash2);
+        assert_ne!(folded1, folded2);
+    }
+
+    #[test]
+    fn test_hash_bytes_folded() {
+        let data: &[u8] = b"hello world";
+        let folded1: u64 = hash_bytes_folded(data);
+        let folded2: u64 = hash_bytes_folded(data);
+        assert_eq!(folded1, folded2);
+
+        let different_data: &[u8] = b"goodbye world";
+        let folded3: u64 = hash_bytes_folded(different_data);
+        assert_ne!(folded1, folded3);
+    }
+
+    #[test]
+    fn test_xxh3_hasher_finish_folded() {
+        let mut hasher: Xxh3Hasher = Xxh3Hasher::new();
+        hasher.update(b"hello ");
+        hasher.update(b"world");
+        let folded: u64 = hasher.finish_folded();
+
+        let direct_folded: u64 = hash_bytes_folded(b"hello world");
+        assert_eq!(folded, direct_folded);
+    }
+
+    #[test]
+    #[should_panic(expected = "Hash must be 32 hex characters")]
+    fn test_fold_hash_invalid_length() {
+        fold_hash_to_u64("abc123");
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid hex hash")]
+    fn test_fold_hash_invalid_hex() {
+        fold_hash_to_u64("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
     }
 }
