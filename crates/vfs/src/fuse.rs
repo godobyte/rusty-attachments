@@ -263,7 +263,7 @@ mod impl_fuse {
 
         /// Read content for a single-hash (non-chunked) file.
         fn read_single_hash(&self, hash: &str, offset: u64, size: u64) -> Result<Vec<u8>, VfsError> {
-            let key = BlockKey::from_hash(hash, 0);
+            let key = BlockKey::from_hash_hex(hash, 0);
             let hash_owned: String = hash.to_string();
             let store: Arc<dyn FileStore> = self.store.clone();
             let alg: HashAlgorithm = self.hash_algorithm;
@@ -309,7 +309,7 @@ mod impl_fuse {
                 }
 
                 let hash: String = hashes[idx].clone();
-                let key = BlockKey::from_hash(&hash, idx as u32);
+                let key = BlockKey::from_hash_hex(&hash, idx as u32);
                 let hash_owned: String = hash.clone();
                 let store: Arc<dyn FileStore> = self.store.clone();
                 let alg: HashAlgorithm = self.hash_algorithm;
