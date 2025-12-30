@@ -12,15 +12,17 @@ Rust implementation of the Job Attachments manifest model for AWS Deadline Cloud
 ```
 rusty-attachments/
 ├── crates/
-│   ├── common/     # Shared utilities (path, hash, progress)
-│   ├── model/      # Core manifest model
-│   ├── filesystem/ # Directory scanning, diff operations
-│   ├── profiles/   # Storage profiles, path grouping
-│   ├── storage/    # S3 storage abstraction, caching layers
-│   ├── storage-crt/# AWS SDK S3 backend implementation
-│   ├── python/     # PyO3 bindings
-│   └── wasm/       # WASM bindings
-└── design/         # Design documents
+│   ├── common/          # Shared utilities (path, hash, progress)
+│   ├── model/           # Core manifest model
+│   ├── filesystem/      # Directory scanning, diff operations
+│   ├── profiles/        # Storage profiles, path grouping
+│   ├── storage/         # S3 storage abstraction, caching layers
+│   ├── storage-crt/     # AWS SDK S3 backend implementation
+│   ├── ja-deadline-utils/# High-level Deadline Cloud utilities
+│   ├── vfs/             # FUSE virtual filesystem
+│   ├── python/          # PyO3 bindings
+│   └── wasm/            # WASM bindings
+└── design/              # Design documents
 ```
 
 ## Crates
@@ -33,6 +35,10 @@ rusty-attachments/
 | `rusty-attachments-profiles` | Storage profiles, path grouping, asset root management |
 | `rusty-attachments-storage` | S3 storage traits, upload/download orchestration, caching |
 | `rusty-attachments-storage-crt` | AWS SDK S3 backend (`StorageClient` implementation) |
+| `ja-deadline-utils` | High-level utilities for Deadline Cloud job attachment workflows |
+| `rusty-attachments-vfs` | FUSE-based virtual filesystem for mounting manifests (Linux/macOS) |
+| `rusty-attachments-python` | Python bindings via PyO3 |
+| `rusty-attachments-wasm` | WebAssembly bindings |
 
 ## Building
 
@@ -40,13 +46,20 @@ rusty-attachments/
 # Build all crates
 cargo build
 
-# Build a specific crate
+# Build specific crates
 cargo build -p rusty-attachments-common
 cargo build -p rusty-attachments-model
 cargo build -p rusty-attachments-filesystem
 cargo build -p rusty-attachments-profiles
 cargo build -p rusty-attachments-storage
 cargo build -p rusty-attachments-storage-crt
+cargo build -p ja-deadline-utils
+
+# Build VFS (without FUSE support)
+cargo build -p rusty-attachments-vfs
+
+# Build VFS with FUSE support (requires platform setup - see VFS section)
+cargo build -p rusty-attachments-vfs --features fuse
 
 # Check without building (faster)
 cargo check
@@ -58,13 +71,15 @@ cargo check
 # Run all tests
 cargo test
 
-# Test a specific crate
+# Test specific crates
 cargo test -p rusty-attachments-common
 cargo test -p rusty-attachments-model
 cargo test -p rusty-attachments-filesystem
 cargo test -p rusty-attachments-profiles
 cargo test -p rusty-attachments-storage
 cargo test -p rusty-attachments-storage-crt
+cargo test -p ja-deadline-utils
+cargo test -p rusty-attachments-vfs
 
 # Run tests with output
 cargo test -- --nocapture
@@ -110,14 +125,88 @@ println!("Added: {}, Modified: {}, Deleted: {}",
     diff_result.deleted.len());
 ```
 
-## Python/WASM Bindings
+## VFS (Virtual Filesystem)
+
+The VFS crate provides a FUSE-based virtual filesystem for mounting job attachment manifests. Files appear as local files but content is fetched on-demand from S3.
+
+### Platform Setup
+
+#### macOS
+```bash
+# Install macFUSE
+brew install --cask macfuse
+
+# Reboot, then allow kernel extension in System Settings → Privacy & Security
+
+# Set pkg-config path (add to shell profile)
+export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+# Build with FUSE
+cargo build -p rusty-attachments-vfs --features fuse
+```
+
+#### Linux
+```bash
+# Debian/Ubuntu
+sudo apt-get install libfuse-dev pkg-config
+
+# Fedora/RHEL
+sudo dnf install fuse-devel pkg-config
+
+# Arch
+sudo pacman -S fuse2 pkg-config
+
+# Build with FUSE
+cargo build -p rusty-attachments-vfs --features fuse
+```
+
+See `crates/vfs/README.md` for detailed VFS documentation.
+
+## Python Bindings
 
 ```bash
-# Build Python wheel (requires maturin)
-cd crates/python && maturin build
+# Install from PyPI
+pip install rusty_attachments
 
+# Or build from source (requires maturin)
+cd crates/python
+maturin develop
+
+# Run Python tests
+pytest
+```
+
+Example usage:
+```python
+import asyncio
+from rusty_attachments import (
+    S3Location, ManifestLocation, AssetReferences,
+    submit_bundle_attachments_py
+)
+
+async def main():
+    result = await submit_bundle_attachments_py(
+        region="us-west-2",
+        s3_location=S3Location(bucket="my-bucket", root_prefix="DeadlineCloud"),
+        manifest_location=ManifestLocation(bucket="my-bucket", farm_id="farm-xxx"),
+        asset_references=AssetReferences(input_filenames=["/path/to/files"]),
+    )
+    print(result.attachments_json)
+
+asyncio.run(main())
+```
+
+See `crates/python/README.md` for detailed Python documentation.
+
+## WASM Bindings
+
+```bash
 # Build WASM (requires wasm-pack)
-cd crates/wasm && wasm-pack build
+cd crates/wasm
+wasm-pack build
+
+# Run WASM tests
+wasm-pack test --node
 ```
 
 ## License
