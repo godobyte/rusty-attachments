@@ -20,6 +20,8 @@ rusty-attachments/
 │   ├── storage-crt/     # AWS SDK S3 backend implementation
 │   ├── ja-deadline-utils/# High-level Deadline Cloud utilities
 │   ├── vfs/             # FUSE virtual filesystem
+│   ├── example/         # Example applications
+│   │   └── tauri/       # Tauri v2 desktop app
 │   ├── python/          # PyO3 bindings
 │   └── wasm/            # WASM bindings
 └── design/              # Design documents
@@ -37,6 +39,7 @@ rusty-attachments/
 | `rusty-attachments-storage-crt` | AWS SDK S3 backend (`StorageClient` implementation) |
 | `ja-deadline-utils` | High-level utilities for Deadline Cloud job attachment workflows |
 | `rusty-attachments-vfs` | FUSE-based virtual filesystem for mounting manifests (Linux/macOS) |
+| `tauri-example` | Tauri v2 desktop application for managing job attachments |
 | `rusty-attachments-python` | Python bindings via PyO3 |
 | `rusty-attachments-wasm` | WebAssembly bindings |
 
@@ -161,6 +164,33 @@ cargo build -p rusty-attachments-vfs --features fuse
 ```
 
 See `crates/vfs/README.md` for detailed VFS documentation.
+
+## Example Application
+
+A Tauri v2 desktop application demonstrating job attachment management with a two-tab interface for uploading files and browsing manifests.
+
+### Running the Example
+
+```bash
+# Install Tauri CLI v2
+cargo install tauri-cli --version "^2.0" --locked
+
+# Run the desktop app
+cd crates/example/tauri
+cargo tauri dev
+
+# Build production binary
+cargo tauri build
+```
+
+### Features
+- Browse local directories and create snapshots
+- Upload files to S3 CAS with progress tracking
+- Browse S3 manifest folders
+- View manifest contents with file tree visualization
+- Support for v2023-03-03 and v2025-12-04-beta formats
+
+See `crates/example/tauri/README.md` for detailed documentation.
 
 ## Python Bindings
 
