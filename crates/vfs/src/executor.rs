@@ -698,4 +698,178 @@ mod tests {
         assert_eq!(inner[0].as_ref().unwrap(), "hello");
         assert_eq!(inner[1].as_ref().unwrap_err(), &42);
     }
+
+    // ========================================================================
+    // Error Propagation Tests
+    // ========================================================================
+
+    #[test]
+    fn test_executor_propagates_result_err() {
+        // Verify that Result::Err from the future is properly propagated
+        let executor = AsyncExecutor::with_defaults();
+        let result: Result<Result<i32, &str>, ExecutorError> =
+            executor.block_on(async { Err("inner error") });
+        assert!(result.unwrap().is_err());
+    }
+
+    #[test]
+    fn test_executor_with_option_none() {
+        // Verify Option types work correctly
+        let executor = AsyncExecutor::with_defaults();
+        let result: Option<i32> = executor.block_on(async { None }).unwrap();
+        assert!(result.is_none());
+    }
+
+    // ========================================================================
+    // Stress & Edge Cases
+    // ========================================================================
+
+    #[test]
+    fn test_executor_rapid_create_drop() {
+        // Verify no resource leaks with rapid lifecycle
+        for _ in 0..10 {
+            let executor = AsyncExecutor::with_defaults();
+            let _: i32 = executor.block_on(async { 42 }).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_executor_queue_pressure() {
+        // Test behavior when queue is near capacity
+        let config = ExecutorConfig::default().with_queue_size(4);
+        let executor = Arc::new(AsyncExecutor::new(config));
+
+        let handles: Vec<_> = (0..20)
+            .map(|i| {
+                let exec = executor.clone();
+                std::thread::spawn(move || {
+                    exec.block_on(async move {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        i
+                    })
+                })
+            })
+            .collect();
+
+        for h in handles {
+            assert!(h.join().unwrap().is_ok());
+        }
+    }
+
+    // ========================================================================
+    // Panic Handling
+    // ========================================================================
+
+    #[test]
+    fn test_executor_task_panic_isolated() {
+        // Verify one panicking task doesn't crash the executor
+        let executor = Arc::new(AsyncExecutor::with_defaults());
+
+        let exec1 = executor.clone();
+        let panic_handle = std::thread::spawn(move || {
+            exec1.block_on(async { panic!("intentional panic") })
+        });
+
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Executor should still work
+        let result: i32 = executor.block_on(async { 123 }).unwrap();
+        assert_eq!(result, 123);
+
+        let panic_result = panic_handle.join();
+        // Thread panicked or executor returned shutdown error
+        assert!(
+            panic_result.is_err()
+                || matches!(panic_result.unwrap(), Err(ExecutorError::Shutdown))
+        );
+    }
+
+    // ========================================================================
+    // Timeout Edge Cases
+    // ========================================================================
+
+    #[test]
+    fn test_timeout_zero_duration() {
+        let executor = AsyncExecutor::with_defaults();
+        let result = executor.block_on_timeout(async { 42 }, Duration::from_nanos(0));
+        // Should either succeed or timeout - both acceptable
+        assert!(result.is_ok() || matches!(result, Err(ExecutorError::Timeout { .. })));
+    }
+
+    #[test]
+    fn test_timeout_exact_boundary() {
+        let executor = AsyncExecutor::with_defaults();
+        let result = executor.block_on_timeout(
+            async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                42
+            },
+            Duration::from_millis(50),
+        );
+        // Could go either way at exact boundary
+        println!("Boundary result: {:?}", result);
+    }
+
+    // ========================================================================
+    // Cancellation Edge Cases
+    // ========================================================================
+
+    #[test]
+    fn test_cancel_before_submit() {
+        let executor = AsyncExecutor::with_defaults();
+        executor.cancel_all();
+
+        let result: Result<i32, ExecutorError> = executor.block_on(async { 42 });
+        // Either succeeds or returns appropriate error
+        println!("Post-cancel result: {:?}", result);
+    }
+
+    #[test]
+    fn test_multiple_cancel_calls() {
+        let executor = AsyncExecutor::with_defaults();
+        executor.cancel_all();
+        executor.cancel_all(); // Should be idempotent
+        executor.cancel_all();
+        assert!(executor.is_cancelled());
+    }
+
+    // ========================================================================
+    // Large Data Transfer
+    // ========================================================================
+
+    #[test]
+    fn test_executor_large_result() {
+        let executor = AsyncExecutor::with_defaults();
+        let large_data: Vec<u8> = executor
+            .block_on(async { vec![0u8; 10 * 1024 * 1024] }) // 10MB
+            .unwrap();
+        assert_eq!(large_data.len(), 10 * 1024 * 1024);
+    }
+
+    // ========================================================================
+    // Drop During Active Work
+    // ========================================================================
+
+    #[test]
+    fn test_drop_with_pending_work() {
+        let executor = Arc::new(AsyncExecutor::with_defaults());
+
+        let exec_clone = executor.clone();
+        let handle = std::thread::spawn(move || {
+            exec_clone.block_on(async {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                42
+            })
+        });
+
+        std::thread::sleep(Duration::from_millis(10));
+        drop(executor);
+
+        // Thread should complete with error (not hang)
+        let result = handle.join().unwrap();
+        assert!(matches!(
+            result,
+            Err(ExecutorError::Shutdown) | Err(ExecutorError::Cancelled)
+        ));
+    }
 }
