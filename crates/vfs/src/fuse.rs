@@ -13,11 +13,11 @@ mod impl_fuse {
         ReplyEntry, ReplyOpen, Request,
     };
     use rusty_attachments_model::{HashAlgorithm, Manifest};
-    use tokio::runtime::Handle;
 
     use crate::builder::build_from_manifest;
     use crate::content::FileStore;
     use crate::diskcache::{ReadCache, ReadCacheOptions};
+    use crate::executor::AsyncExecutor;
     use crate::inode::{FileContent, INode, INodeManager, INodeType};
     use crate::memory_pool::{BlockKey, MemoryPool, MemoryPoolError, MemoryPoolStats};
     use crate::options::VfsOptions;
@@ -133,8 +133,8 @@ mod impl_fuse {
         next_handle: AtomicU64,
         /// VFS options.
         options: VfsOptions,
-        /// Tokio runtime handle.
-        runtime: Handle,
+        /// Dedicated async executor (replaces runtime: Handle).
+        executor: Arc<AsyncExecutor>,
         /// VFS creation time.
         start_time: Instant,
     }
@@ -152,7 +152,7 @@ mod impl_fuse {
             options: VfsOptions,
         ) -> Result<Self, VfsError> {
             let inodes = build_from_manifest(manifest);
-            let hash_algorithm = manifest.hash_alg();
+            let hash_algorithm: HashAlgorithm = manifest.hash_alg();
             let pool = Arc::new(MemoryPool::new(options.pool.clone()));
 
             // Initialize read cache if enabled
@@ -169,8 +169,8 @@ mod impl_fuse {
                 None
             };
 
-            let runtime = Handle::try_current()
-                .map_err(|e| VfsError::MountFailed(format!("No tokio runtime: {}", e)))?;
+            // Create dedicated executor instead of capturing Handle::current()
+            let executor = Arc::new(AsyncExecutor::new(options.executor.clone()));
 
             Ok(Self {
                 inodes,
@@ -181,7 +181,7 @@ mod impl_fuse {
                 handles: Arc::new(RwLock::new(HashMap::new())),
                 next_handle: AtomicU64::new(1),
                 options,
-                runtime,
+                executor,
                 start_time: Instant::now(),
             })
         }
@@ -262,6 +262,11 @@ mod impl_fuse {
         }
 
         /// Read content for a single-hash (non-chunked) file.
+        ///
+        /// # Arguments
+        /// * `hash` - Content hash
+        /// * `offset` - Byte offset to start reading
+        /// * `size` - Number of bytes to read
         fn read_single_hash(&self, hash: &str, offset: u64, size: u64) -> Result<Vec<u8>, VfsError> {
             let key = BlockKey::from_hash_hex(hash, 0);
             let hash_owned: String = hash.to_string();
@@ -270,15 +275,19 @@ mod impl_fuse {
             let pool: Arc<MemoryPool> = self.pool.clone();
             let read_cache: Option<Arc<ReadCache>> = self.read_cache.clone();
 
-            let handle = self.runtime.block_on(async move {
-                pool.acquire(&key, move || {
-                    let s = store;
-                    let h = hash_owned;
-                    let rc = read_cache;
-                    async move { fetch_with_cache(&h, &s, alg, rc.as_deref()).await }
+            // Use dedicated executor instead of runtime.block_on()
+            let handle = self
+                .executor
+                .block_on(async move {
+                    pool.acquire(&key, move || {
+                        let s: Arc<dyn FileStore> = store;
+                        let h: String = hash_owned;
+                        let rc: Option<Arc<ReadCache>> = read_cache;
+                        async move { fetch_with_cache(&h, &s, alg, rc.as_deref()).await }
+                    })
+                    .await
                 })
-                .await
-            });
+                .map_err(|e| VfsError::ExecutorError(e.to_string()))?;
 
             match handle {
                 Ok(blk) => {
@@ -295,6 +304,11 @@ mod impl_fuse {
         }
 
         /// Read content for a chunked file.
+        ///
+        /// # Arguments
+        /// * `hashes` - Chunk hashes
+        /// * `offset` - Byte offset to start reading
+        /// * `size` - Number of bytes to read
         fn read_chunked(&self, hashes: &[String], offset: u64, size: u64) -> Result<Vec<u8>, VfsError> {
             let chunk_size: u64 = CHUNK_SIZE_V2;
             let start_chunk: usize = (offset / chunk_size) as usize;
@@ -316,15 +330,19 @@ mod impl_fuse {
                 let pool: Arc<MemoryPool> = self.pool.clone();
                 let read_cache: Option<Arc<ReadCache>> = self.read_cache.clone();
 
-                let handle = self.runtime.block_on(async move {
-                    pool.acquire(&key, move || {
-                        let s = store;
-                        let h = hash_owned;
-                        let rc = read_cache;
-                        async move { fetch_with_cache(&h, &s, alg, rc.as_deref()).await }
+                // Use dedicated executor instead of runtime.block_on()
+                let handle = self
+                    .executor
+                    .block_on(async move {
+                        pool.acquire(&key, move || {
+                            let s: Arc<dyn FileStore> = store;
+                            let h: String = hash_owned;
+                            let rc: Option<Arc<ReadCache>> = read_cache;
+                            async move { fetch_with_cache(&h, &s, alg, rc.as_deref()).await }
+                        })
+                        .await
                     })
-                    .await
-                });
+                    .map_err(|e| VfsError::ExecutorError(e.to_string()))?;
 
                 match handle {
                     Ok(blk) => {

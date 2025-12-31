@@ -17,10 +17,10 @@ mod impl_fuse {
         ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request,
     };
     use rusty_attachments_model::Manifest;
-    use tokio::runtime::Handle;
 
     use crate::builder::build_from_manifest;
     use crate::content::FileStore;
+    use crate::executor::AsyncExecutor;
     use crate::inode::{INode, INodeManager, INodeType};
     use crate::memory_pool::MemoryPool;
     use crate::options::VfsOptions;
@@ -78,13 +78,14 @@ mod impl_fuse {
         /// Options for write behavior.
         #[allow(dead_code)]
         write_options: WriteOptions,
-        /// Tokio runtime handle.
-        runtime: Handle,
+        /// Dedicated async executor (replaces runtime: Handle).
+        executor: Arc<AsyncExecutor>,
         /// Next file handle ID.
         next_handle: AtomicU64,
         /// VFS creation time for uptime tracking.
         start_time: Instant,
         /// Optional read cache for immutable content.
+        #[allow(dead_code)]
         read_cache: Option<Arc<crate::diskcache::ReadCache>>,
     }
 
@@ -154,8 +155,8 @@ mod impl_fuse {
                 original_dirs.clone(),
             ));
 
-            let runtime: Handle = Handle::try_current()
-                .map_err(|e| VfsError::MountFailed(format!("No tokio runtime: {}", e)))?;
+            // Create dedicated executor instead of capturing Handle::current()
+            let executor = Arc::new(AsyncExecutor::new(options.executor.clone()));
 
             Ok(Self {
                 inodes,
@@ -167,7 +168,7 @@ mod impl_fuse {
                 original_dirs,
                 options,
                 write_options,
-                runtime,
+                executor,
                 next_handle: AtomicU64::new(1),
                 start_time: Instant::now(),
             })
@@ -543,16 +544,22 @@ mod impl_fuse {
         ) {
             // Check dirty layer first
             if self.dirty_manager.is_dirty(ino) {
-                let rt: Handle = self.runtime.clone();
                 let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
+                let offset_u64: u64 = offset as u64;
 
-                match rt.block_on(dm.read(ino, offset as u64, size)) {
-                    Ok(data) => {
+                let exec_result = self.executor.block_on(async move { dm.read(ino, offset_u64, size).await });
+                match exec_result {
+                    Ok(Ok(data)) => {
                         reply.data(&data);
                         return;
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         tracing::error!("Read from dirty file failed: {}", e);
+                        reply.error(libc::EIO);
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::error!("Executor error during read: {}", e);
                         reply.error(libc::EIO);
                         return;
                     }
@@ -580,19 +587,20 @@ mod impl_fuse {
             let hash_alg = inode.hash_algorithm().unwrap_or(rusty_attachments_model::HashAlgorithm::Xxh128);
 
             // Read from store
-            let rt: Handle = self.runtime.clone();
             let store: Arc<dyn FileStore> = self.store.clone();
+            let offset_i64: i64 = offset;
+            let size_u32: u32 = size;
 
-            let result = rt.block_on(async {
-                match &file_content {
+            let result = self.executor.block_on(async move {
+                match file_content {
                     crate::inode::FileContent::SingleHash(hash) => {
-                        store.retrieve(hash, hash_alg).await
+                        store.retrieve(&hash, hash_alg).await
                     }
                     crate::inode::FileContent::Chunked(hashes) => {
                         // Read relevant chunks
                         let chunk_size: u64 = rusty_attachments_common::CHUNK_SIZE_V2;
-                        let start_chunk: usize = (offset as u64 / chunk_size) as usize;
-                        let end_offset: u64 = (offset as u64 + size as u64).min(file_size);
+                        let start_chunk: usize = (offset_i64 as u64 / chunk_size) as usize;
+                        let end_offset: u64 = (offset_i64 as u64 + size_u32 as u64).min(file_size);
                         let end_chunk: usize = ((end_offset.saturating_sub(1)) / chunk_size) as usize;
 
                         let mut data: Vec<u8> = Vec::new();
@@ -609,7 +617,7 @@ mod impl_fuse {
             });
 
             match result {
-                Ok(data) => {
+                Ok(Ok(data)) => {
                     let off: usize = offset as usize;
                     let end: usize = (off + size as usize).min(data.len());
                     if off < data.len() {
@@ -618,8 +626,12 @@ mod impl_fuse {
                         reply.data(&[]);
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::error!("Read failed: {}", e);
+                    reply.error(libc::EIO);
+                }
+                Err(e) => {
+                    tracing::error!("Executor error during read: {}", e);
                     reply.error(libc::EIO);
                 }
             }
@@ -637,13 +649,19 @@ mod impl_fuse {
             _lock: Option<u64>,
             reply: ReplyWrite,
         ) {
-            let rt: Handle = self.runtime.clone();
             let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
+            let data_vec: Vec<u8> = data.to_vec();
+            let offset_u64: u64 = offset as u64;
 
-            match rt.block_on(dm.write(ino, offset as u64, data)) {
-                Ok(written) => reply.written(written as u32),
-                Err(e) => {
+            let exec_result = self.executor.block_on(async move { dm.write(ino, offset_u64, &data_vec).await });
+            match exec_result {
+                Ok(Ok(written)) => reply.written(written as u32),
+                Ok(Err(e)) => {
                     tracing::error!("Write failed for inode {}: {}", ino, e);
+                    reply.error(libc::EIO);
+                }
+                Err(e) => {
+                    tracing::error!("Executor error during write for inode {}: {}", ino, e);
                     reply.error(libc::EIO);
                 }
             }
@@ -669,13 +687,21 @@ mod impl_fuse {
         ) {
             // Handle truncate (size change)
             if let Some(new_size) = size {
-                let rt: Handle = self.runtime.clone();
                 let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
 
-                if let Err(e) = rt.block_on(dm.truncate(ino, new_size)) {
-                    tracing::error!("Truncate failed: {}", e);
-                    reply.error(libc::EIO);
-                    return;
+                let exec_result = self.executor.block_on(async move { dm.truncate(ino, new_size).await });
+                match exec_result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tracing::error!("Truncate failed: {}", e);
+                        reply.error(libc::EIO);
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::error!("Executor error during truncate: {}", e);
+                        reply.error(libc::EIO);
+                        return;
+                    }
                 }
             }
 
@@ -839,13 +865,21 @@ mod impl_fuse {
             };
 
             // Mark as deleted (or remove if new file)
-            let rt: Handle = self.runtime.clone();
             let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
 
-            if let Err(e) = rt.block_on(dm.delete_file(ino)) {
-                tracing::error!("Failed to delete file: {}", e);
-                reply.error(libc::EIO);
-                return;
+            let exec_result = self.executor.block_on(async move { dm.delete_file(ino).await });
+            match exec_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::error!("Failed to delete file: {}", e);
+                    reply.error(libc::EIO);
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("Executor error during delete: {}", e);
+                    reply.error(libc::EIO);
+                    return;
+                }
             }
 
             reply.ok();
@@ -860,13 +894,21 @@ mod impl_fuse {
             reply: ReplyEmpty,
         ) {
             // Flush dirty file to disk
-            let rt: Handle = self.runtime.clone();
             let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
 
-            if let Err(e) = rt.block_on(dm.flush_to_disk(ino)) {
-                tracing::error!("fsync failed: {}", e);
-                reply.error(libc::EIO);
-                return;
+            let exec_result = self.executor.block_on(async move { dm.flush_to_disk(ino).await });
+            match exec_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::error!("fsync failed: {}", e);
+                    reply.error(libc::EIO);
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("Executor error during fsync: {}", e);
+                    reply.error(libc::EIO);
+                    return;
+                }
             }
 
             reply.ok();

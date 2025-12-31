@@ -55,6 +55,9 @@ pub enum VfsError {
 
     /// Not found.
     NotFound(String),
+
+    /// Async executor error (shutdown, timeout, or cancellation).
+    ExecutorError(String),
 }
 
 impl fmt::Display for VfsError {
@@ -82,6 +85,7 @@ impl fmt::Display for VfsError {
             VfsError::AlreadyExists(path) => write!(f, "Path already exists: {}", path),
             VfsError::DirectoryNotEmpty(path) => write!(f, "Directory not empty: {}", path),
             VfsError::NotFound(name) => write!(f, "Not found: {}", name),
+            VfsError::ExecutorError(msg) => write!(f, "Executor error: {}", msg),
         }
     }
 }

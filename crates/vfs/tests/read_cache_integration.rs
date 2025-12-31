@@ -160,7 +160,7 @@ mod first_read_caches {
 
         // Setup: Add file to store
         let content: Vec<u8> = b"hello world from S3".to_vec();
-        let hash: &str = "test_hash_123";
+        let hash: &str = "00000000000000000000000000001230";
         store.insert(hash, content.clone());
 
         // Add file to inode manager
@@ -197,7 +197,7 @@ mod first_read_caches {
         let (manager, inodes, store, read_cache, temp) = create_test_env_with_cache();
 
         let content: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
-        let hash: &str = "binary_hash";
+        let hash: &str = "0000000000000000000000000000b1a0";
         store.insert(hash, content.clone());
 
         let ino: u64 = inodes.add_file(
@@ -240,7 +240,7 @@ mod disk_cache_hit {
 
         // Pre-populate disk cache
         std::fs::create_dir_all(&cache_dir).unwrap();
-        let hash: &str = "precached_hash";
+        let hash: &str = "0000000000000000000000000000cac0";
         let content: Vec<u8> = b"precached content".to_vec();
         std::fs::write(cache_dir.join(hash), &content).unwrap();
 
@@ -309,7 +309,7 @@ mod write_through_skip {
         let (manager, inodes, store, read_cache, _temp) = create_test_env_with_cache();
 
         let content: Vec<u8> = b"original content".to_vec();
-        let hash: &str = "skip_test_hash";
+        let hash: &str = "000000000000000000000000000051c0";
         store.insert(hash, content.clone());
 
         // Pre-populate cache
@@ -361,7 +361,7 @@ mod write_through_replace {
         let options = ReadCacheOptions::with_cache_dir(cache_dir);
         let cache = ReadCache::new(options).unwrap();
 
-        let hash: &str = "size_mismatch_hash";
+        let hash: &str = "00000000000000000000000000005120";
         let short_content: Vec<u8> = b"short".to_vec();
         let long_content: Vec<u8> = b"longer content here".to_vec();
 
@@ -387,7 +387,7 @@ mod write_through_replace {
         let options = ReadCacheOptions::with_cache_dir(cache_dir.clone());
         let cache = ReadCache::new(options).unwrap();
 
-        let hash: &str = "same_size_hash";
+        let hash: &str = "00000000000000000000000000005130";
         let content1: Vec<u8> = b"content1".to_vec(); // 8 bytes
         let content2: Vec<u8> = b"content2".to_vec(); // 8 bytes (same size)
 
@@ -426,7 +426,7 @@ mod atomic_write {
         let read_cache_options = ReadCacheOptions::with_cache_dir(cache_dir.clone());
         let read_cache = ReadCache::new(read_cache_options).unwrap();
 
-        let hash: &str = "atomic_test";
+        let hash: &str = "00000000000000000000000000a10100";
         let content: Vec<u8> = b"atomic write content".to_vec();
 
         // Write content
@@ -470,7 +470,7 @@ mod empty_file {
         let options = ReadCacheOptions::with_cache_dir(cache_dir);
         let cache = ReadCache::new(options).unwrap();
 
-        let hash: &str = "empty_hash";
+        let hash: &str = "00000000000000000000000000e10100";
         let content: Vec<u8> = Vec::new();
 
         // Put empty content
@@ -494,7 +494,7 @@ mod empty_file {
 
         // Empty file with a hash (some manifests may include this)
         let content: Vec<u8> = Vec::new();
-        let hash: &str = "empty_file_hash";
+        let hash: &str = "00000000000000000000000000e10200";
         store.insert(hash, content.clone());
 
         let ino: u64 = inodes.add_file(
@@ -529,8 +529,8 @@ mod chunked_file {
         // Create multiple chunks
         let chunk0: Vec<u8> = b"chunk zero content here".to_vec();
         let chunk1: Vec<u8> = b"chunk one different data".to_vec();
-        let hash0: &str = "chunk0_hash";
-        let hash1: &str = "chunk1_hash";
+        let hash0: &str = "00000000000000000000000000c00100";
+        let hash1: &str = "00000000000000000000000000c00200";
 
         store.insert(hash0, chunk0.clone());
         store.insert(hash1, chunk1.clone());
@@ -606,7 +606,7 @@ mod cache_size_tracking {
 
         // Add first file
         let content1: Vec<u8> = b"first file".to_vec();
-        let hash1: &str = "hash1";
+        let hash1: &str = "00000000000000000000000000000010";
         store.insert(hash1, content1.clone());
 
         let ino1: u64 = inodes.add_file(
@@ -625,7 +625,7 @@ mod cache_size_tracking {
 
         // Add second file
         let content2: Vec<u8> = b"second file content".to_vec();
-        let hash2: &str = "hash2";
+        let hash2: &str = "00000000000000000000000000000020";
         store.insert(hash2, content2.clone());
 
         let ino2: u64 = inodes.add_file(
@@ -658,7 +658,7 @@ mod no_cache {
         let (manager, inodes, store) = create_test_env_no_cache();
 
         let content: Vec<u8> = b"content without cache".to_vec();
-        let hash: &str = "no_cache_hash";
+        let hash: &str = "00000000000000000000000000a0cac0";
         store.insert(hash, content.clone());
 
         let ino: u64 = inodes.add_file(

@@ -28,6 +28,7 @@ pub mod builder;
 pub mod content;
 pub mod diskcache;
 pub mod error;
+pub mod executor;
 pub mod inode;
 pub mod memory_pool;
 pub mod options;
@@ -40,6 +41,7 @@ pub mod fuse;
 pub mod fuse_writable;
 
 pub use error::VfsError;
+pub use executor::{AsyncExecutor, ExecutorCancelled, ExecutorConfig, ExecutorError};
 pub use memory_pool::{
     BlockContentProvider, BlockHandle, BlockKey, MemoryPool, MemoryPoolConfig, MemoryPoolError,
     MemoryPoolStats,

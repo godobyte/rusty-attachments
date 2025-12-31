@@ -267,7 +267,8 @@ mod cow_file_truncate_extend {
 
         // Add original content to store
         let original_content: Vec<u8> = b"original content".to_vec();
-        let hash: &str = "abc123";
+        // Use a proper 32-character hex hash (128-bit)
+        let hash: &str = "abc123def456789012345678abcdef12";
         store.add_content(hash, original_content.clone());
 
         // Add file to inode manager (simulating manifest file)

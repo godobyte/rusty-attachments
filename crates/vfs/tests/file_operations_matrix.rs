@@ -26,6 +26,19 @@ use rusty_attachments_vfs::write::{
 use rusty_attachments_vfs::memory_pool::{MemoryPool, MemoryPoolConfig};
 use rusty_attachments_vfs::{FileStore, VfsError};
 
+/// Generate a valid 32-character hex hash for testing.
+///
+/// # Arguments
+/// * `seed` - A short string to make the hash unique
+///
+/// # Returns
+/// A 32-character hex string suitable for use as a hash.
+fn test_hash(seed: &str) -> String {
+    // Pad or truncate to create a 32-char hex string
+    let padded: String = format!("{:0<32}", seed.replace("_", "0"));
+    padded.chars().take(32).collect()
+}
+
 /// Helper to create a test environment with manager and inodes.
 fn create_test_env() -> (Arc<DirtyFileManager>, Arc<INodeManager>, Arc<TestFileStore>) {
     let cache = Arc::new(MemoryWriteCache::new());
@@ -140,14 +153,14 @@ mod read_clean {
 
         // Add file to store
         let content: Vec<u8> = b"hello world".to_vec();
-        store.insert("hash123", content.clone());
+        store.insert("00000000000000000000000000001230", content.clone());
 
         // Add file to inodes
         inodes.add_file(
             "test.txt",
             content.len() as u64,
             0,
-            FileContent::SingleHash("hash123".to_string()),
+            FileContent::SingleHash("00000000000000000000000000001230".to_string()),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -163,15 +176,15 @@ mod read_clean {
         // Add chunked file content
         let chunk1: Vec<u8> = vec![1u8; 1024];
         let chunk2: Vec<u8> = vec![2u8; 1024];
-        store.insert("chunk1_hash", chunk1);
-        store.insert("chunk2_hash", chunk2);
+        store.insert("00000000000000000000000000000c10", chunk1);
+        store.insert("00000000000000000000000000000c20", chunk2);
 
         // Add chunked file to inodes
         inodes.add_file(
             "large.bin",
             2048,
             0,
-            FileContent::Chunked(vec!["chunk1_hash".to_string(), "chunk2_hash".to_string()]),
+            FileContent::Chunked(vec!["00000000000000000000000000000c10".to_string(), "00000000000000000000000000000c20".to_string()]),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -235,13 +248,13 @@ mod read_dirty {
 
         // Setup original file
         let original: Vec<u8> = b"original content".to_vec();
-        store.insert("orig_hash", original);
+        store.insert("000000000000000000000000000a0100", original);
 
         let ino = inodes.add_file(
             "test.txt",
             16,
             0,
-            FileContent::SingleHash("orig_hash".to_string()),
+            FileContent::SingleHash("000000000000000000000000000a0100".to_string()),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -320,13 +333,13 @@ mod write {
 
         // Setup original file
         let original: Vec<u8> = b"original".to_vec();
-        store.insert("orig_hash", original);
+        store.insert("000000000000000000000000000a0200", original);
 
         let ino = inodes.add_file(
             "test.txt",
             8,
             0,
-            FileContent::SingleHash("orig_hash".to_string()),
+            FileContent::SingleHash("000000000000000000000000000a0200".to_string()),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -381,13 +394,13 @@ mod truncate_shrink {
         let (manager, inodes, store) = create_test_env();
 
         let original: Vec<u8> = b"original content here".to_vec();
-        store.insert("orig_hash", original);
+        store.insert("000000000000000000000000000a0300", original);
 
         let ino = inodes.add_file(
             "test.txt",
             21,
             0,
-            FileContent::SingleHash("orig_hash".to_string()),
+            FileContent::SingleHash("000000000000000000000000000a0300".to_string()),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -486,13 +499,13 @@ mod delete {
         let (manager, inodes, store) = create_test_env();
 
         let original: Vec<u8> = b"original".to_vec();
-        store.insert("orig_hash", original);
+        store.insert("000000000000000000000000000b0100", original);
 
         let ino = inodes.add_file(
             "test.txt",
             8,
             0,
-            FileContent::SingleHash("orig_hash".to_string()),
+            FileContent::SingleHash("000000000000000000000000000b0100".to_string()),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -509,13 +522,13 @@ mod delete {
         let (manager, inodes, store) = create_test_env();
 
         let original: Vec<u8> = b"original".to_vec();
-        store.insert("orig_hash", original);
+        store.insert("000000000000000000000000000b0200", original);
 
         let ino = inodes.add_file(
             "test.txt",
             8,
             0,
-            FileContent::SingleHash("orig_hash".to_string()),
+            FileContent::SingleHash("000000000000000000000000000b0200".to_string()),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -534,13 +547,13 @@ mod delete {
         let (manager, inodes, store) = create_test_env();
 
         let original: Vec<u8> = b"original".to_vec();
-        store.insert("orig_hash", original);
+        store.insert("000000000000000000000000000b0300", original);
 
         let ino = inodes.add_file(
             "test.txt",
             8,
             0,
-            FileContent::SingleHash("orig_hash".to_string()),
+            FileContent::SingleHash("000000000000000000000000000b0300".to_string()),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -578,24 +591,24 @@ mod dirty_entries {
 
         // Modified file
         let original: Vec<u8> = b"original".to_vec();
-        store.insert("orig_hash", original);
+        store.insert("000000000000000000000000000c0100", original);
         let mod_ino = inodes.add_file(
             "modified.txt",
             8,
             0,
-            FileContent::SingleHash("orig_hash".to_string()),
+            FileContent::SingleHash("000000000000000000000000000c0100".to_string()),
             HashAlgorithm::Xxh128,
             false,
         );
         manager.write(mod_ino, 0, b"changed").await.unwrap();
 
         // Deleted file
-        store.insert("del_hash", b"to delete".to_vec());
+        store.insert("000000000000000000000000000c0200", b"to delete".to_vec());
         let del_ino = inodes.add_file(
             "deleted.txt",
             9,
             0,
-            FileContent::SingleHash("del_hash".to_string()),
+            FileContent::SingleHash("000000000000000000000000000c0200".to_string()),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -699,7 +712,8 @@ mod chunked_files {
         let mut total_size: u64 = 0;
 
         for (i, chunk) in chunks.iter().enumerate() {
-            let hash: String = format!("chunk_{}_hash", i);
+            // Generate valid 32-char hex hash for each chunk
+            let hash: String = format!("{:0>32x}", i);
             store.insert(hash.clone(), chunk.clone());
             hashes.push(hash);
             total_size += chunk.len() as u64;
@@ -909,13 +923,13 @@ mod cache_integration {
 
         // Use an existing manifest file for this test (new files are removed on delete)
         let original: Vec<u8> = b"original".to_vec();
-        store.insert("orig_hash", original);
+        store.insert("000000000000000000000000000d0100", original);
 
         let ino: u64 = inodes.add_file(
             "test.txt",
             8,
             0,
-            FileContent::SingleHash("orig_hash".to_string()),
+            FileContent::SingleHash("000000000000000000000000000d0100".to_string()),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -1075,14 +1089,14 @@ mod realistic_chunked {
         let chunk1_data: Vec<u8> = b"CHUNK1_START".to_vec();
 
         // Insert chunks with their expected padded sizes
-        store.insert_chunk("chunk0_hash", chunk0_data.clone(), chunk_size);
-        store.insert_chunk("chunk1_hash", chunk1_data.clone(), chunk1_size);
+        store.insert_chunk("0000000000000000000000000000e010", chunk0_data.clone(), chunk_size);
+        store.insert_chunk("0000000000000000000000000000e020", chunk1_data.clone(), chunk1_size);
 
         let ino: u64 = inodes.add_file(
             "large_260mb.bin",
             total_size,
             0,
-            FileContent::Chunked(vec!["chunk0_hash".to_string(), "chunk1_hash".to_string()]),
+            FileContent::Chunked(vec!["0000000000000000000000000000e010".to_string(), "0000000000000000000000000000e020".to_string()]),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -1147,14 +1161,14 @@ mod realistic_chunked {
         let chunk1_size: u64 = 4 * 1024 * 1024;
         let total_size: u64 = chunk_size + chunk1_size;
 
-        store.insert_chunk("chunk0_hash", b"CHUNK0".to_vec(), chunk_size);
-        store.insert_chunk("chunk1_hash", b"CHUNK1".to_vec(), chunk1_size);
+        store.insert_chunk("0000000000000000000000000000f010", b"CHUNK0".to_vec(), chunk_size);
+        store.insert_chunk("0000000000000000000000000000f020", b"CHUNK1".to_vec(), chunk1_size);
 
         let ino: u64 = inodes.add_file(
             "truncate_test.bin",
             total_size,
             0,
-            FileContent::Chunked(vec!["chunk0_hash".to_string(), "chunk1_hash".to_string()]),
+            FileContent::Chunked(vec!["0000000000000000000000000000f010".to_string(), "0000000000000000000000000000f020".to_string()]),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -1185,14 +1199,14 @@ mod realistic_chunked {
         let chunk1_size: u64 = 4 * 1024 * 1024;
         let total_size: u64 = chunk_size + chunk1_size;
 
-        store.insert_chunk("chunk0_hash", b"CHUNK0".to_vec(), chunk_size);
-        store.insert_chunk("chunk1_hash", b"CHUNK1".to_vec(), chunk1_size);
+        store.insert_chunk("00000000000000000000000000010010", b"CHUNK0".to_vec(), chunk_size);
+        store.insert_chunk("00000000000000000000000000010020", b"CHUNK1".to_vec(), chunk1_size);
 
         let ino: u64 = inodes.add_file(
             "extend_test.bin",
             total_size,
             0,
-            FileContent::Chunked(vec!["chunk0_hash".to_string(), "chunk1_hash".to_string()]),
+            FileContent::Chunked(vec!["00000000000000000000000000010010".to_string(), "00000000000000000000000000010020".to_string()]),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -1223,14 +1237,14 @@ mod realistic_chunked {
         let chunk1_size: u64 = 4 * 1024 * 1024;
         let total_size: u64 = chunk_size + chunk1_size;
 
-        store.insert_chunk("chunk0_hash", b"CHUNK0".to_vec(), chunk_size);
-        store.insert_chunk("chunk1_hash", b"CHUNK1".to_vec(), chunk1_size);
+        store.insert_chunk("00000000000000000000000000011010", b"CHUNK0".to_vec(), chunk_size);
+        store.insert_chunk("00000000000000000000000000011020", b"CHUNK1".to_vec(), chunk1_size);
 
         let ino: u64 = inodes.add_file(
             "delete_test.bin",
             total_size,
             0,
-            FileContent::Chunked(vec!["chunk0_hash".to_string(), "chunk1_hash".to_string()]),
+            FileContent::Chunked(vec!["00000000000000000000000000011010".to_string(), "00000000000000000000000000011020".to_string()]),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -1257,14 +1271,14 @@ mod realistic_chunked {
         let chunk1_size: u64 = 4 * 1024 * 1024;
         let total_size: u64 = chunk_size + chunk1_size;
 
-        store.insert_chunk("chunk0_hash", vec![0xAA; 100], chunk_size);
-        store.insert_chunk("chunk1_hash", vec![0xBB; 100], chunk1_size);
+        store.insert_chunk("00000000000000000000000000012010", vec![0xAA; 100], chunk_size);
+        store.insert_chunk("00000000000000000000000000012020", vec![0xBB; 100], chunk1_size);
 
         let ino: u64 = inodes.add_file(
             "multi_boundary.bin",
             total_size,
             0,
-            FileContent::Chunked(vec!["chunk0_hash".to_string(), "chunk1_hash".to_string()]),
+            FileContent::Chunked(vec!["00000000000000000000000000012010".to_string(), "00000000000000000000000000012020".to_string()]),
             HashAlgorithm::Xxh128,
             false,
         );

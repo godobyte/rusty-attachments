@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use crate::executor::ExecutorConfig;
 use crate::memory_pool::MemoryPoolConfig;
 
 /// Configuration options for the VFS.
@@ -34,6 +35,8 @@ pub struct VfsOptions {
     pub timeouts: TimeoutOptions,
     /// Read cache configuration (disk cache for immutable content).
     pub read_cache: ReadCacheConfig,
+    /// Async executor configuration.
+    pub executor: ExecutorConfig,
 }
 
 impl Default for VfsOptions {
@@ -45,6 +48,7 @@ impl Default for VfsOptions {
             read_ahead: ReadAheadOptions::default(),
             timeouts: TimeoutOptions::default(),
             read_cache: ReadCacheConfig::default(),
+            executor: ExecutorConfig::default(),
         }
     }
 }
@@ -101,6 +105,15 @@ impl VfsOptions {
     /// * `read_cache` - Read cache configuration
     pub fn with_read_cache(mut self, read_cache: ReadCacheConfig) -> Self {
         self.read_cache = read_cache;
+        self
+    }
+
+    /// Set executor configuration.
+    ///
+    /// # Arguments
+    /// * `executor` - Async executor configuration
+    pub fn with_executor(mut self, executor: ExecutorConfig) -> Self {
+        self.executor = executor;
         self
     }
 }
@@ -388,16 +401,19 @@ mod tests {
         assert!(!opts.prefetch.is_enabled());
         assert!(opts.kernel_cache.enable_page_cache);
         assert!(opts.read_ahead.detect_sequential);
+        assert_eq!(opts.executor.worker_threads, 4);
     }
 
     #[test]
     fn test_builder_pattern() {
         let opts: VfsOptions = VfsOptions::default()
             .with_prefetch(PrefetchStrategy::on_open(3))
-            .with_kernel_cache(KernelCacheOptions::immutable());
+            .with_kernel_cache(KernelCacheOptions::immutable())
+            .with_executor(ExecutorConfig::default().with_worker_threads(8));
 
         assert_eq!(opts.prefetch.on_open_chunks(), 3);
         assert_eq!(opts.kernel_cache.attr_timeout_secs, 86400 * 7);
+        assert_eq!(opts.executor.worker_threads, 8);
     }
 
     #[test]
