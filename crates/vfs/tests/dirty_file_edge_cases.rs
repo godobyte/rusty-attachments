@@ -387,7 +387,7 @@ mod multiple_truncate_operations {
 
 mod new_file_in_new_directory {
     use super::*;
-    use rusty_attachments_vfs::write::DirtyDirManager;
+    use rusty_attachments_vfs::write::{DirtyDirManager, DirtyDirState};
     use std::collections::HashSet;
 
     /// Helper to create test environment with both file and directory managers.
@@ -736,5 +736,46 @@ mod new_file_in_new_directory {
         // (it only returns paths for New state directories)
         // Note: After delete, the directory entry is removed for new dirs
         assert_eq!(dir_manager.get_new_dir_path(_dir_ino), None);
+    }
+
+    /// Test that new directories don't appear twice in readdir listing.
+    ///
+    /// Bug: create_dir adds to both INodeManager and DirtyDirManager, causing
+    /// readdir to list the directory twice (once from each source).
+    #[test]
+    fn test_new_dir_not_duplicated_in_listing() {
+        let inodes = Arc::new(INodeManager::new());
+        let _root_ino: u64 = inodes.add_directory("");
+
+        let dir_manager = Arc::new(DirtyDirManager::new(inodes.clone(), HashSet::new()));
+
+        // Create new directory
+        let new_dir_ino: u64 = dir_manager.create_dir(1, "newdir").unwrap();
+
+        // Simulate readdir logic: collect entries from both sources
+        let mut entries: Vec<(u64, String)> = Vec::new();
+
+        // Source 1: INodeManager children (skip new dirs to avoid duplicates)
+        if let Some(children) = inodes.get_dir_children(1) {
+            for (name, cid) in children {
+                // Skip new directories - they'll be added from dirty_dir_manager
+                if dir_manager.get_state(cid) == Some(DirtyDirState::New) {
+                    continue;
+                }
+                entries.push((cid, name));
+            }
+        }
+
+        // Source 2: DirtyDirManager new directories
+        let new_dirs: Vec<(u64, String)> = dir_manager.get_new_dirs_in_parent(1);
+        for (ino, name) in new_dirs {
+            entries.push((ino, name));
+        }
+
+        // Verify: directory should appear exactly once
+        let newdir_count: usize = entries.iter().filter(|(_, n)| n == "newdir").count();
+        assert_eq!(newdir_count, 1, "newdir should appear exactly once");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0], (new_dir_ino, "newdir".to_string()));
     }
 }

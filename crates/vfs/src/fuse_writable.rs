@@ -468,6 +468,10 @@ mod impl_fuse {
                         if self.dirty_dir_manager.get_state(cid) == Some(DirtyDirState::Deleted) {
                             continue;
                         }
+                        // Skip new directories (they'll be added from dirty_dir_manager below)
+                        if self.dirty_dir_manager.get_state(cid) == Some(DirtyDirState::New) {
+                            continue;
+                        }
 
                         let k: FileType = match c.inode_type() {
                             INodeType::File => FileType::RegularFile,
