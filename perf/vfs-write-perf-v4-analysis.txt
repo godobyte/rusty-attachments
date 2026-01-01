@@ -1,0 +1,503 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 1K of event 'cpu-clock:ppp'
+# Event count (approx.): 1329329328
+#
+# Overhead  Command        Shared Object      Symbol                                                                                                  
+# ........  .............  .................  ........................................................................................................
+#
+    19.58%  mount_vfs      [kernel.kallsyms]  [k] _raw_spin_unlock_irqrestore
+            |
+            ---_raw_spin_unlock_irqrestore
+               |          
+               |--17.09%--__wake_up_common_lock
+               |          fuse_request_end
+               |          fuse_dev_do_write
+               |          fuse_dev_write
+               |          do_iter_readv_writev
+               |          do_iter_write
+               |          vfs_writev
+               |          do_writev
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __GI___writev
+               |          
+               |--1.20%--folio_batch_move_lru
+               |          folio_add_lru
+               |          do_anonymous_page
+               |          __handle_mm_fault
+               |          handle_mm_fault
+               |          do_user_addr_fault
+               |          exc_page_fault
+               |          asm_exc_page_fault
+               |          __memset_avx2_unaligned_erms
+               |          
+               |--0.75%--rmqueue_bulk
+               |          rmqueue
+               |          get_page_from_freelist
+               |          __alloc_pages
+               |          __folio_alloc
+               |          vma_alloc_folio
+               |          do_anonymous_page
+               |          __handle_mm_fault
+               |          handle_mm_fault
+               |          do_user_addr_fault
+               |          exc_page_fault
+               |          asm_exc_page_fault
+               |          __memset_avx2_unaligned_erms
+               |          
+                --0.53%--prepare_to_wait_event
+                          fuse_dev_do_read
+                          fuse_dev_read
+                          vfs_read
+                          ksys_read
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          read
+
+    13.93%  mount_vfs      libc.so.6          [.] read
+            |
+            ---read
+
+     3.24%  vfs-io-worker  [kernel.kallsyms]  [k] _raw_spin_unlock_irq
+            |
+            ---_raw_spin_unlock_irq
+               |          
+               |--1.81%--filemap_remove_folio
+               |          truncate_inode_folio
+               |          shmem_undo_range
+               |          shmem_evict_inode
+               |          evict
+               |          __dentry_kill
+               |          dput
+               |          do_renameat2
+               |          __x64_sys_rename
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          rename
+               |          <rusty_attachments_vfs::diskcache::materialized::MaterializedCache as rusty_attachments_vfs::diskcache::traits::WriteCache>::write_file::{{closure}}
+               |          
+                --1.13%--shmem_add_to_page_cache
+                          shmem_get_folio_gfp
+                          shmem_write_begin
+                          generic_perform_write
+                          __generic_file_write_iter
+                          generic_file_write_iter
+                          vfs_write
+                          ksys_write
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __GI___libc_write
+                          <rusty_attachments_vfs::diskcache::materialized::MaterializedCache as rusty_attachments_vfs::diskcache::traits::WriteCache>::write_file::{{closure}}
+
+     3.09%  vfs-io-worker  libc.so.6          [.] __memmove_avx_unaligned_erms
+            |
+            ---__memmove_avx_unaligned_erms
+               0xc748fb894848ec83
+
+     2.64%  vfs-io-worker  [kernel.kallsyms]  [k] _raw_spin_unlock_irqrestore
+            |
+            ---_raw_spin_unlock_irqrestore
+               |          
+               |--0.75%--rmqueue_bulk
+               |          rmqueue
+               |          get_page_from_freelist
+               |          __alloc_pages
+               |          __folio_alloc
+               |          vma_alloc_folio
+               |          |          
+               |           --0.60%--do_anonymous_page
+               |                     __handle_mm_fault
+               |                     handle_mm_fault
+               |                     do_user_addr_fault
+               |                     exc_page_fault
+               |                     asm_exc_page_fault
+               |                     __memmove_avx_unaligned_erms
+               |                     0xc748fb894848ec83
+               |          
+               |--0.68%--folio_batch_move_lru
+               |          folio_add_lru
+               |          
+               |--0.68%--release_pages
+               |          |          
+               |           --0.53%--tlb_batch_pages_flush
+               |          
+                --0.53%--free_unref_page_list
+                          release_pages
+
+     2.64%  vfs-io-worker  [kernel.kallsyms]  [k] copy_user_generic_string
+            |
+            ---copy_user_generic_string
+               copy_page_from_iter_atomic
+               generic_perform_write
+               __generic_file_write_iter
+               generic_file_write_iter
+               vfs_write
+               ksys_write
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __GI___libc_write
+               <rusty_attachments_vfs::diskcache::materialized::MaterializedCache as rusty_attachments_vfs::diskcache::traits::WriteCache>::write_file::{{closure}}
+
+     2.56%  vfs-io-worker  [kernel.kallsyms]  [k] do_user_addr_fault
+            |
+            ---do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               __memmove_avx_unaligned_erms
+               0xc748fb894848ec83
+
+     2.26%  mount_vfs      libc.so.6          [.] __GI___writev
+            |
+            ---__GI___writev
+
+     2.18%  mount_vfs      [kernel.kallsyms]  [k] do_user_addr_fault
+            |
+            ---do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               __memset_avx2_unaligned_erms
+
+     2.11%  mount_vfs      libc.so.6          [.] __memset_avx2_unaligned_erms
+            |
+            ---__memset_avx2_unaligned_erms
+
+     1.58%  mount_vfs      [kernel.kallsyms]  [k] fuse_dev_do_read
+            |
+            ---fuse_dev_do_read
+               fuse_dev_read
+               vfs_read
+               ksys_read
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               read
+
+     1.43%  vfs-io-worker  [kernel.kallsyms]  [k] clear_page_rep
+            |
+            ---clear_page_rep
+               get_page_from_freelist
+               __alloc_pages
+               __folio_alloc
+               vma_alloc_folio
+               do_anonymous_page
+               __handle_mm_fault
+               handle_mm_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               __memmove_avx_unaligned_erms
+               0xc748fb894848ec83
+
+     1.36%  mount_vfs      [kernel.kallsyms]  [k] fuse_dev_do_write
+            |
+            ---fuse_dev_do_write
+               fuse_dev_write
+               do_iter_readv_writev
+               do_iter_write
+               vfs_writev
+               do_writev
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __GI___writev
+
+     1.20%  mount_vfs      [kernel.kallsyms]  [k] clear_page_rep
+            |
+            ---clear_page_rep
+               get_page_from_freelist
+               __alloc_pages
+               __folio_alloc
+               vma_alloc_folio
+               do_anonymous_page
+               __handle_mm_fault
+               handle_mm_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               __memset_avx2_unaligned_erms
+
+     1.20%  mount_vfs      [kernel.kallsyms]  [k] internal_get_user_pages_fast
+            |
+            ---internal_get_user_pages_fast
+               __iov_iter_get_pages_alloc
+               iov_iter_get_pages2
+               fuse_copy_fill
+               |          
+                --0.75%--fuse_copy_args
+                          fuse_dev_do_write
+                          fuse_dev_write
+                          do_iter_readv_writev
+                          do_iter_write
+                          vfs_writev
+                          do_writev
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __GI___writev
+
+     1.20%  mount_vfs      [kernel.kallsyms]  [k] syscall_enter_from_user_mode
+            |
+            ---syscall_enter_from_user_mode
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               |          
+                --0.98%--read
+
+     1.13%  mount_vfs      libc.so.6          [.] __memmove_avx_unaligned_erms
+            |
+            ---__memmove_avx_unaligned_erms
+
+     0.98%  mount_vfs      [kernel.kallsyms]  [k] do_iter_write
+            |
+            ---do_iter_write
+               vfs_writev
+               do_writev
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __GI___writev
+
+     0.75%  mount_vfs      [kernel.kallsyms]  [k] selinux_file_permission
+            |
+            ---selinux_file_permission
+               security_file_permission
+
+     0.68%  mount_vfs      [kernel.kallsyms]  [k] __fget_light
+            |
+            ---__fget_light
+               __fdget_pos
+
+     0.68%  mount_vfs      [kernel.kallsyms]  [k] vfs_writev
+            |
+            ---vfs_writev
+               do_writev
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __GI___writev
+
+     0.68%  vfs-io-worker  [kernel.kallsyms]  [k] charge_memcg
+            |
+            ---charge_memcg
+               __mem_cgroup_charge
+               |          
+                --0.60%--do_anonymous_page
+                          __handle_mm_fault
+                          handle_mm_fault
+                          do_user_addr_fault
+                          exc_page_fault
+                          asm_exc_page_fault
+                          __memmove_avx_unaligned_erms
+                          0xc748fb894848ec83
+
+     0.60%  mount_vfs      [kernel.kallsyms]  [k] fsnotify_perm.part.0
+            |
+            ---fsnotify_perm.part.0
+               vfs_read
+               ksys_read
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               read
+
+     0.53%  mount_vfs      [kernel.kallsyms]  [k] fuse_request_end
+            |
+            ---fuse_request_end
+               fuse_dev_do_write
+               fuse_dev_write
+               do_iter_readv_writev
+               do_iter_write
+               vfs_writev
+               do_writev
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __GI___writev
+
+     0.53%  mount_vfs      [kernel.kallsyms]  [k] srso_alias_safe_ret
+            |
+            ---srso_alias_safe_ret
+
+     0.53%  mount_vfs      [kernel.kallsyms]  [k] x64_sys_call
+            |
+            ---x64_sys_call
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+
+     0.45%  mount_vfs      [kernel.kallsyms]  [k] __handle_mm_fault
+     0.45%  mount_vfs      [kernel.kallsyms]  [k] __mem_cgroup_charge
+     0.45%  mount_vfs      [kernel.kallsyms]  [k] do_writev
+     0.45%  mount_vfs      [kernel.kallsyms]  [k] security_file_permission
+     0.45%  mount_vfs      mount_vfs          [.] fuser::request::Request::dispatch
+     0.45%  vfs-io-worker  [kernel.kallsyms]  [k] __mem_cgroup_charge
+     0.45%  vfs-io-worker  [kernel.kallsyms]  [k] handle_mm_fault
+     0.38%  mount_vfs      [kernel.kallsyms]  [k] __alloc_pages
+     0.38%  mount_vfs      [kernel.kallsyms]  [k] __fsnotify_parent
+     0.38%  mount_vfs      [kernel.kallsyms]  [k] __import_iovec
+     0.38%  mount_vfs      [kernel.kallsyms]  [k] __rseq_handle_notify_resume
+     0.38%  mount_vfs      [kernel.kallsyms]  [k] charge_memcg
+     0.38%  mount_vfs      [kernel.kallsyms]  [k] vfs_read
+     0.38%  mount_vfs      mount_vfs          [.] <dashmap::DashMap<K,V,S> as dashmap::t::Map<K,V,S>>::_get
+     0.38%  vfs-io-worker  [kernel.kallsyms]  [k] find_lock_entries
+     0.38%  vfs-io-worker  [kernel.kallsyms]  [k] generic_perform_write
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] __fdget_pos
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] __wake_up_common_lock
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] _copy_from_user
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] _raw_spin_lock
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] blk_cgroup_congested
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] copy_user_generic_string
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] exit_to_user_mode_loop
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] fput
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] fuse_copy_do
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] fuse_copy_fill
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] fuse_put_request
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] handle_mm_fault
+     0.30%  mount_vfs      [kernel.kallsyms]  [k] schedule_debug.constprop.0
+     0.30%  mount_vfs      libc.so.6          [.] __GI___pthread_disable_asynccancel
+     0.30%  mount_vfs      mount_vfs          [.] <rusty_attachments_vfs::fuse_writable::impl_fuse::WritableVfs as fuser::Filesystem>::write
+     0.30%  mount_vfs      mount_vfs          [.] fuser::reply::ReplyWrite::written
+     0.30%  mount_vfs      mount_vfs          [.] rusty_attachments_vfs::write::dirty::DirtyFileManager::is_dirty
+     0.30%  vfs-io-worker  [kernel.kallsyms]  [k] __alloc_pages
+     0.30%  vfs-io-worker  [kernel.kallsyms]  [k] __filemap_get_folio
+     0.30%  vfs-io-worker  [kernel.kallsyms]  [k] __rcu_read_unlock
+     0.30%  vfs-io-worker  [kernel.kallsyms]  [k] copy_page_from_iter_atomic
+     0.30%  vfs-io-worker  [kernel.kallsyms]  [k] get_page_from_freelist
+     0.23%  mount_vfs      [kernel.kallsyms]  [k] __iov_iter_get_pages_alloc
+     0.23%  mount_vfs      [kernel.kallsyms]  [k] __rcu_read_unlock
+     0.23%  mount_vfs      [kernel.kallsyms]  [k] _raw_spin_unlock
+     0.23%  mount_vfs      [kernel.kallsyms]  [k] do_anonymous_page
+     0.23%  mount_vfs      [kernel.kallsyms]  [k] get_page_from_freelist
+     0.23%  mount_vfs      [kernel.kallsyms]  [k] lock_request.part.0
+     0.23%  mount_vfs      [kernel.kallsyms]  [k] memcpy
+     0.23%  mount_vfs      [kernel.kallsyms]  [k] mtree_range_walk
+     0.23%  mount_vfs      mount_vfs          [.] <core::hash::sip::Hasher<S> as core::hash::Hasher>::write
+     0.23%  mount_vfs      mount_vfs          [.] <dashmap::DashMap<K,V,S> as dashmap::t::Map<K,V,S>>::_get
+     0.23%  mount_vfs      mount_vfs          [.] dashmap::DashMap<K,V,S>::hash_u64
+     0.23%  mount_vfs      mount_vfs          [.] fuser::ll::request::AnyRequest::operation
+     0.23%  mount_vfs      mount_vfs          [.] fuser::reply::ReplyRaw::send_ll_mut
+     0.23%  mount_vfs      mount_vfs          [.] fuser::session::Session<FS>::run
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] __mod_lruvec_page_state
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] do_anonymous_page
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] fault_in_readable
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] free_unref_page_list
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] kthread_blkcg
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] lock_mm_and_find_vma
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] mt_find
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] mtree_range_walk
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] policy_node
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] security_vm_enough_memory_mm
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] shmem_add_to_page_cache
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] truncate_cleanup_folio
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] try_charge_memcg
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] uncharge_folio
+     0.23%  vfs-io-worker  [kernel.kallsyms]  [k] zap_pte_range
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] __mod_lruvec_page_state
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] __put_user_nocheck_8
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] __raw_callee_save___pv_queued_spin_unlock
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] __rcu_read_lock
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] __schedule
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] _raw_spin_trylock
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] check_stack_object
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] do_iter_readv_writev
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] do_syscall_64
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] find_vma
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] finish_task_switch.isra.0
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] fuse_dev_read
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] fuse_dev_write
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] iov_iter_get_pages2
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] iovec_from_user.part.0
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] mt_find
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] prepare_to_wait_event
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] rseq_get_rseq_cs.isra.0
+     0.15%  mount_vfs      [kernel.kallsyms]  [k] try_charge_memcg
+     0.15%  mount_vfs      [vdso]             [.] 0x0000000000000698
+     0.15%  mount_vfs      libc.so.6          [.] clock_nanosleep@GLIBC_2.2.5
+     0.15%  mount_vfs      mount_vfs          [.] <fuser::channel::ChannelSender as fuser::reply::ReplySender>::send
+     0.15%  mount_vfs      mount_vfs          [.] fuser::channel::Channel::receive
+     0.15%  mount_vfs      mount_vfs          [.] rusty_attachments_vfs::write::dirty::DirtyFileManager::write_sync
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] __folio_cancel_dirty
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] __handle_mm_fault
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] __mod_node_page_state
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] _raw_spin_unlock
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] blk_cgroup_congested
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] fault_in_iov_iter_readable
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] filemap_remove_folio
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] free_swap_cache
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] mpol_shared_policy_lookup
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] rmqueue
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] selinux_vm_enough_memory
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] shmem_alloc_folio
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] shmem_get_folio_gfp
+     0.15%  vfs-io-worker  [kernel.kallsyms]  [k] xas_descend
+     0.08%  fusermount3    [kernel.kallsyms]  [k] __x64_sys_prlimit64
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] __check_object_size.part.0
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] __folio_alloc
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] __get_task_ioprio
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] __get_user_8
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] __list_del_entry_valid
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] __next_zones_zonelist
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] __page_set_anon_rmap
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] __x64_sys_read
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] _find_first_bit
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] _raw_spin_lock_irqsave
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] blkcg_maybe_throttle_current
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] folio_mapping
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] fuse_copy_args
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] fuse_copy_page
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] get_mem_cgroup_from_mm
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] init_wait_entry
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] inode_security
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] iov_iter_advance
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] kfree
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] ksys_read
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] kthread_blkcg
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] lock_mm_and_find_vma
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] mem_cgroup_from_task
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] perf_event_alloc
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] policy_node
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] rmqueue
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] rseq_ip_fixup
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] schedule
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] sync_mm_rss
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] syscall_exit_to_user_mode
+     0.08%  mount_vfs      [kernel.kallsyms]  [k] syscall_exit_to_user_mode_prepare
+     0.08%  mount_vfs      [vdso]             [.] 0x00000000000006a1
+     0.08%  mount_vfs      libc.so.6          [.] __GI___pthread_enable_asynccancel
+     0.08%  mount_vfs      mount_vfs          [.] <smallvec::SmallVec<A> as core::iter::traits::collect::Extend<<A as smallvec::Array>::Item>>::extend
+     0.08%  mount_vfs      mount_vfs          [.] __rustc::__rust_no_alloc_shim_is_unstable_v2
+     0.08%  mount_vfs      mount_vfs          [.] core::hash::BuildHasher::hash_one
+     0.08%  mount_vfs      mount_vfs          [.] core::ptr::drop_in_place<fuser::channel::ChannelSender>
+     0.08%  mount_vfs      mount_vfs          [.] core::ptr::drop_in_place<fuser::reply::ReplyRaw>
+     0.08%  mount_vfs      mount_vfs          [.] dashmap::DashMap<K,V,S>::hash_u64
+     0.08%  mount_vfs      mount_vfs          [.] fuser::channel::Channel::sender
+     0.08%  mount_vfs      mount_vfs          [.] fuser::ll::reply::Response::with_iovec
+     0.08%  mount_vfs      mount_vfs          [.] hashbrown::map::HashMap<K,V,S,A>::insert
+     0.08%  mount_vfs      mount_vfs          [.] mount_vfs::main
+     0.08%  mount_vfs      mount_vfs          [.] rustls_pki_types::pem::from_buf_inner
+     0.08%  mount_vfs      mount_vfs          [.] rusty_attachments_vfs::memory_pool_v2::MemoryPool::modify_dirty_in_place_with_slice
+     0.08%  mount_vfs      mount_vfs          [.] serde_json::de::Deserializer<R>::parse_integer
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] __list_del_entry_valid
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] __mem_cgroup_uncharge_list
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] __raw_callee_save___pv_queued_spin_unlock
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] __vm_enough_memory
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] avc_has_perm_noaudit
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] avtab_search_node
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] cap_vm_enough_memory
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] find_vma
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] folio_add_lru
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] folio_mapping
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] folio_memcg_lock.part.0
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] folio_memcg_unlock
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] folio_unlock
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] get_mem_cgroup_from_mm
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] mem_cgroup_from_task
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] page_add_new_anon_rmap
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] percpu_counter_add_batch
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] shmem_alloc_and_acct_folio
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] shmem_write_begin
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] shmem_write_end
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] srso_alias_safe_ret
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] vma_alloc_folio
+     0.08%  vfs-io-worker  [kernel.kallsyms]  [k] xas_load
+
+
+#
+# (Tip: Search options using a keyword: perf report -h <keyword>)
+#
