@@ -1,0 +1,704 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 3K of event 'cpu-clock:ppp'
+# Event count (approx.): 3887887884
+#
+# Overhead  Command          Shared Object         Symbol                                       
+# ........  ...............  ....................  .............................................
+#
+    20.98%  vfs-io-worker    [kernel.kallsyms]     [k] _raw_spin_unlock_irqrestore
+            |
+            ---_raw_spin_unlock_irqrestore
+               |          
+               |--19.39%--try_to_wake_up
+               |          wake_up_q
+               |          futex_wake
+               |          do_futex
+               |          __x64_sys_futex
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          syscall
+               |          
+               |--0.80%--folio_batch_move_lru
+               |          folio_add_lru
+               |          |          
+               |           --0.54%--do_anonymous_page
+               |                     __handle_mm_fault
+               |                     handle_mm_fault
+               |                     do_user_addr_fault
+               |                     exc_page_fault
+               |                     asm_exc_page_fault
+               |          
+                --0.51%--rmqueue_bulk
+                          rmqueue
+                          get_page_from_freelist
+                          __alloc_pages
+                          __folio_alloc
+                          vma_alloc_folio
+
+    10.84%  vfs-async-execu  [kernel.kallsyms]     [k] _raw_spin_unlock_irqrestore
+            |
+            ---_raw_spin_unlock_irqrestore
+               |          
+                --10.81%--try_to_wake_up
+                          wake_up_q
+                          futex_wake
+                          do_futex
+                          __x64_sys_futex
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          syscall
+                          0x1
+
+     8.32%  mount_vfs        [kernel.kallsyms]     [k] _raw_spin_unlock_irqrestore
+            |
+            ---_raw_spin_unlock_irqrestore
+               |          
+               |--4.51%--__wake_up_common_lock
+               |          fuse_request_end
+               |          fuse_dev_do_write
+               |          fuse_dev_write
+               |          do_iter_readv_writev
+               |          do_iter_write
+               |          vfs_writev
+               |          do_writev
+               |          do_syscall_64
+               |          entry_SYSCALL_64_after_hwframe
+               |          __GI___writev
+               |          
+                --3.71%--try_to_wake_up
+                          wake_up_q
+                          futex_wake
+                          do_futex
+                          __x64_sys_futex
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          syscall
+                          0x2
+
+     7.60%  mount_vfs        libc.so.6             [.] read
+            |
+            ---read
+
+     3.27%  mount_vfs        [kernel.kallsyms]     [k] internal_get_user_pages_fast
+            |
+            ---internal_get_user_pages_fast
+               __iov_iter_get_pages_alloc
+               iov_iter_get_pages2
+               fuse_copy_fill
+               |          
+                --3.12%--fuse_dev_do_write
+                          fuse_dev_write
+                          do_iter_readv_writev
+                          do_iter_write
+                          vfs_writev
+                          do_writev
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __GI___writev
+
+     2.19%  vfs-io-worker    libc.so.6             [.] __memmove_avx_unaligned_erms
+            |
+            ---__memmove_avx_unaligned_erms
+               |          
+                --0.95%--0x894928ec83485354
+
+     1.83%  vfs-io-worker    libc.so.6             [.] syscall
+            |
+            ---syscall
+
+     1.70%  vfs-io-worker    libc.so.6             [.] __memset_avx2_unaligned_erms
+            |
+            ---__memset_avx2_unaligned_erms
+
+     1.60%  vfs-io-worker    [kernel.kallsyms]     [k] do_user_addr_fault
+            |
+            ---do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               |          
+               |--0.93%--__memmove_avx_unaligned_erms
+               |          0x894928ec83485354
+               |          
+                --0.67%--__memset_avx2_unaligned_erms
+
+     1.00%  mount_vfs        [kernel.kallsyms]     [k] __iov_iter_get_pages_alloc
+            |
+            ---__iov_iter_get_pages_alloc
+               iov_iter_get_pages2
+               fuse_copy_fill
+               |          
+                --0.93%--fuse_dev_do_write
+                          fuse_dev_write
+                          do_iter_readv_writev
+                          do_iter_write
+                          vfs_writev
+                          do_writev
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __GI___writev
+
+     0.98%  vfs-io-worker    [kernel.kallsyms]     [k] clear_page_rep
+            |
+            ---clear_page_rep
+               get_page_from_freelist
+               __alloc_pages
+               __folio_alloc
+               vma_alloc_folio
+               do_anonymous_page
+               __handle_mm_fault
+               handle_mm_fault
+               do_user_addr_fault
+               exc_page_fault
+               asm_exc_page_fault
+               |          
+                --0.59%--__memset_avx2_unaligned_erms
+
+     0.88%  mount_vfs        [fuse]                [k] fuse_dev_write
+            |
+            ---fuse_dev_write
+               do_iter_readv_writev
+               do_iter_write
+               vfs_writev
+               do_writev
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __GI___writev
+
+     0.85%  mount_vfs        [fuse]                [k] fuse_dev_do_write
+            |
+            ---fuse_dev_do_write
+               fuse_dev_write
+               do_iter_readv_writev
+               do_iter_write
+               vfs_writev
+               do_writev
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __GI___writev
+
+     0.75%  mount_vfs        [kernel.kallsyms]     [k] __rseq_handle_notify_resume
+            |
+            ---__rseq_handle_notify_resume
+               exit_to_user_mode_loop
+               exit_to_user_mode_prepare
+               syscall_exit_to_user_mode
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               read
+
+     0.70%  vfs-async-execu  [kernel.kallsyms]     [k] futex_wake
+            |
+            ---futex_wake
+               do_futex
+               __x64_sys_futex
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               syscall
+               0x1
+
+     0.67%  mount_vfs        libc.so.6             [.] __GI___writev
+            |
+            ---__GI___writev
+
+     0.64%  vfs-io-worker    [kernel.kallsyms]     [k] _raw_spin_unlock_irq
+            |
+            ---_raw_spin_unlock_irq
+               |          
+                --0.51%--shmem_add_to_page_cache
+                          shmem_get_folio_gfp
+                          shmem_write_begin
+                          generic_perform_write
+                          __generic_file_write_iter
+                          generic_file_write_iter
+                          vfs_write
+                          ksys_write
+                          do_syscall_64
+                          entry_SYSCALL_64_after_hwframe
+                          __GI___libc_write
+                          0x55751d479b29
+
+     0.62%  vfs-io-worker    [kernel.kallsyms]     [k] copy_user_generic_string
+            |
+            ---copy_user_generic_string
+               copy_page_from_iter_atomic
+               generic_perform_write
+               __generic_file_write_iter
+               generic_file_write_iter
+               vfs_write
+               ksys_write
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               __GI___libc_write
+               0x55751d479b29
+
+     0.57%  vfs-async-execu  libc.so.6             [.] syscall
+            |
+            ---syscall
+               |          
+                --0.51%--0x1
+
+     0.51%  mount_vfs        [kernel.kallsyms]     [k] __get_user_8
+            |
+            ---__get_user_8
+               rseq_get_rseq_cs.isra.0
+               rseq_ip_fixup
+               __rseq_handle_notify_resume
+               exit_to_user_mode_loop
+               exit_to_user_mode_prepare
+               syscall_exit_to_user_mode
+               do_syscall_64
+               entry_SYSCALL_64_after_hwframe
+               read
+
+     0.51%  mount_vfs        [kernel.kallsyms]     [k] selinux_file_permission
+            |
+            ---selinux_file_permission
+               security_file_permission
+
+     0.49%  mount_vfs        [kernel.kallsyms]     [k] rseq_ip_fixup
+     0.49%  mount_vfs        [kernel.kallsyms]     [k] security_file_permission
+     0.49%  mount_vfs        libc.so.6             [.] __memmove_avx_unaligned_erms
+     0.49%  mount_vfs        libc.so.6             [.] syscall
+     0.49%  vfs-io-worker    [kernel.kallsyms]     [k] futex_wake
+     0.46%  mount_vfs        [fuse]                [k] fuse_copy_do
+     0.46%  vfs-async-execu  [kernel.kallsyms]     [k] syscall_enter_from_user_mode
+     0.41%  mount_vfs        [kernel.kallsyms]     [k] srso_alias_safe_ret
+     0.41%  vfs-io-worker    [kernel.kallsyms]     [k] syscall_enter_from_user_mode
+     0.39%  mount_vfs        [fuse]                [k] fuse_copy_fill
+     0.39%  mount_vfs        [kernel.kallsyms]     [k] __put_user_nocheck_8
+     0.39%  mount_vfs        [kernel.kallsyms]     [k] exit_to_user_mode_loop
+     0.36%  mount_vfs        [kernel.kallsyms]     [k] syscall_enter_from_user_mode
+     0.36%  vfs-io-worker    libc.so.6             [.] _int_free
+     0.33%  mount_vfs        [kernel.kallsyms]     [k] do_iter_write
+     0.33%  vfs-io-worker    [kernel.kallsyms]     [k] charge_memcg
+     0.33%  vfs-io-worker    [kernel.kallsyms]     [k] do_anonymous_page
+     0.33%  vfs-io-worker    [kernel.kallsyms]     [k] try_to_wake_up
+     0.33%  vfs-io-worker    libc.so.6             [.] malloc
+     0.31%  mount_vfs        [kernel.kallsyms]     [k] iov_iter_get_pages2
+     0.31%  mount_vfs        libc.so.6             [.] _int_malloc
+     0.31%  vfs-io-worker    [kernel.kallsyms]     [k] __x64_sys_futex
+     0.31%  vfs-io-worker    [kernel.kallsyms]     [k] wake_up_q
+     0.28%  vfs-async-execu  libc.so.6             [.] _int_malloc
+     0.28%  vfs-io-worker    [kernel.kallsyms]     [k] __handle_mm_fault
+     0.26%  mount_vfs        [fuse]                [k] fuse_dev_do_read
+     0.26%  vfs-io-worker    libc.so.6             [.] __memmove_avx_unaligned
+     0.26%  vfs-io-worker    mount_vfs             [.] 0x00000000001cc709
+     0.23%  mount_vfs        [kernel.kallsyms]     [k] memcpy
+     0.23%  mount_vfs        libc.so.6             [.] malloc
+     0.23%  vfs-async-execu  [kernel.kallsyms]     [k] __x64_sys_futex
+     0.23%  vfs-async-execu  [kernel.kallsyms]     [k] x64_sys_call
+     0.23%  vfs-io-worker    [kernel.kallsyms]     [k] mtree_range_walk
+     0.23%  vfs-io-worker    [vdso]                [.] 0x0000000000000698
+     0.23%  vfs-io-worker    mount_vfs             [.] 0x00000000001cb23d
+     0.21%  mount_vfs        [kernel.kallsyms]     [k] inode_security
+     0.21%  vfs-io-worker    [kernel.kallsyms]     [k] futex_hash
+     0.21%  vfs-io-worker    [kernel.kallsyms]     [k] futex_wake_mark
+     0.21%  vfs-io-worker    [kernel.kallsyms]     [k] x64_sys_call
+     0.18%  mount_vfs        [fuse]                [k] fuse_copy_finish
+     0.18%  mount_vfs        [kernel.kallsyms]     [k] futex_wake
+     0.18%  mount_vfs        [kernel.kallsyms]     [k] rseq_get_rseq_cs.isra.0
+     0.18%  mount_vfs        [kernel.kallsyms]     [k] vfs_read
+     0.18%  mount_vfs        [kernel.kallsyms]     [k] vfs_writev
+     0.18%  vfs-io-worker    [kernel.kallsyms]     [k] __alloc_pages
+     0.18%  vfs-io-worker    [kernel.kallsyms]     [k] handle_mm_fault
+     0.18%  vfs-io-worker    [kernel.kallsyms]     [k] lock_mm_and_find_vma
+     0.18%  vfs-io-worker    [kernel.kallsyms]     [k] rmqueue
+     0.18%  vfs-io-worker    [kernel.kallsyms]     [k] srso_alias_safe_ret
+     0.18%  vfs-io-worker    [kernel.kallsyms]     [k] try_charge_memcg
+     0.18%  vfs-io-worker    libc.so.6             [.] _int_malloc
+     0.15%  mount_vfs        [kernel.kallsyms]     [k] _raw_spin_unlock
+     0.15%  mount_vfs        [kernel.kallsyms]     [k] x64_sys_call
+     0.15%  vfs-async-execu  [kernel.kallsyms]     [k] get_futex_key
+     0.15%  vfs-io-worker    [kernel.kallsyms]     [k] __mem_cgroup_charge
+     0.15%  vfs-io-worker    [kernel.kallsyms]     [k] blk_cgroup_congested
+     0.15%  vfs-io-worker    [kernel.kallsyms]     [k] copy_page_from_iter_atomic
+     0.15%  vfs-io-worker    [kernel.kallsyms]     [k] do_futex
+     0.15%  vfs-io-worker    [kernel.kallsyms]     [k] do_syscall_64
+     0.15%  vfs-io-worker    [kernel.kallsyms]     [k] futex_wait
+     0.15%  vfs-io-worker    [kernel.kallsyms]     [k] zap_pte_range
+     0.15%  vfs-io-worker    libc.so.6             [.] cfree@GLIBC_2.2.5
+     0.15%  vfs-io-worker    mount_vfs             [.] 0x00000000001cc789
+     0.13%  mount_vfs        [kernel.kallsyms]     [k] do_iter_readv_writev
+     0.13%  mount_vfs        [kernel.kallsyms]     [k] get_user_pages_fast
+     0.13%  mount_vfs        mount_vfs             [.] 0x0000000000ab0b65
+     0.13%  vfs-io-worker    [kernel.kallsyms]     [k] __list_del_entry_valid
+     0.13%  vfs-io-worker    [kernel.kallsyms]     [k] __mod_memcg_lruvec_state
+     0.13%  vfs-io-worker    [kernel.kallsyms]     [k] __rcu_read_unlock
+     0.13%  vfs-io-worker    [kernel.kallsyms]     [k] mt_find
+     0.13%  vfs-io-worker    [kernel.kallsyms]     [k] vma_alloc_folio
+     0.13%  vfs-io-worker    mount_vfs             [.] 0x00000000001a64fa
+     0.13%  vfs-io-worker    mount_vfs             [.] 0x00000000001cb219
+     0.10%  mount_vfs        [kernel.kallsyms]     [k] __get_task_ioprio
+     0.10%  mount_vfs        [kernel.kallsyms]     [k] __get_user_nocheck_4
+     0.10%  mount_vfs        [kernel.kallsyms]     [k] __put_user_8
+     0.10%  mount_vfs        [kernel.kallsyms]     [k] __raw_callee_save___pv_queued_spin_unlock
+     0.10%  mount_vfs        [kernel.kallsyms]     [k] bpf_lsm_file_permission
+     0.10%  mount_vfs        [kernel.kallsyms]     [k] fsnotify_perm.part.0
+     0.10%  mount_vfs        [kernel.kallsyms]     [k] futex_q_lock
+     0.10%  mount_vfs        [kernel.kallsyms]     [k] futex_wait
+     0.10%  mount_vfs        [kernel.kallsyms]     [k] iov_iter_advance
+     0.10%  mount_vfs        mount_vfs             [.] 0x0000000000b26b51
+     0.10%  vfs-async-execu  [kernel.kallsyms]     [k] futex_hash
+     0.10%  vfs-async-execu  [kernel.kallsyms]     [k] futex_q_lock
+     0.10%  vfs-async-execu  [kernel.kallsyms]     [k] futex_wait_queue
+     0.10%  vfs-async-execu  [kernel.kallsyms]     [k] try_to_wake_up
+     0.10%  vfs-async-execu  [kernel.kallsyms]     [k] wake_q_add_safe
+     0.10%  vfs-async-execu  libc.so.6             [.] _int_free
+     0.10%  vfs-async-execu  mount_vfs             [.] 0x0000000000ab0b05
+     0.10%  vfs-async-execu  mount_vfs             [.] 0x0000000000ac1553
+     0.10%  vfs-async-execu  mount_vfs             [.] 0x0000000000ac1572
+     0.10%  vfs-io-worker    [kernel.kallsyms]     [k] __mod_lruvec_page_state
+     0.10%  vfs-io-worker    [kernel.kallsyms]     [k] fault_in_readable
+     0.10%  vfs-io-worker    [kernel.kallsyms]     [k] free_unref_page_list
+     0.10%  vfs-io-worker    [kernel.kallsyms]     [k] futex_q_lock
+     0.10%  vfs-io-worker    [kernel.kallsyms]     [k] generic_perform_write
+     0.10%  vfs-io-worker    [kernel.kallsyms]     [k] get_page_from_freelist
+     0.10%  vfs-io-worker    [kernel.kallsyms]     [k] schedule_debug.constprop.0
+     0.10%  vfs-io-worker    [kernel.kallsyms]     [k] shmem_add_to_page_cache
+     0.10%  vfs-io-worker    mount_vfs             [.] 0x00000000001a64e8
+     0.10%  vfs-io-worker    mount_vfs             [.] 0x00000000001cb1a1
+     0.10%  vfs-io-worker    mount_vfs             [.] 0x00000000001d8389
+     0.08%  mount_vfs        [fuse]                [k] fuse_copy_args
+     0.08%  mount_vfs        [kernel.kallsyms]     [k] __check_object_size.part.0
+     0.08%  mount_vfs        [kernel.kallsyms]     [k] __fget_light
+     0.08%  mount_vfs        [kernel.kallsyms]     [k] __fsnotify_parent
+     0.08%  mount_vfs        [kernel.kallsyms]     [k] __x64_sys_futex
+     0.08%  mount_vfs        [kernel.kallsyms]     [k] _raw_spin_lock
+     0.08%  mount_vfs        [kernel.kallsyms]     [k] do_syscall_64
+     0.08%  mount_vfs        [kernel.kallsyms]     [k] ksys_read
+     0.08%  mount_vfs        libc.so.6             [.] cfree@GLIBC_2.2.5
+     0.08%  mount_vfs        mount_vfs             [.] 0x000000000019ab9e
+     0.08%  mount_vfs        mount_vfs             [.] 0x00000000001f19d2
+     0.08%  vfs-async-execu  [kernel.kallsyms]     [k] __schedule
+     0.08%  vfs-async-execu  libc.so.6             [.] unlink_chunk.constprop.0
+     0.08%  vfs-async-execu  mount_vfs             [.] 0x0000000000aa6dc8
+     0.08%  vfs-async-execu  mount_vfs             [.] 0x0000000000b1ac83
+     0.08%  vfs-io-worker    [kernel.kallsyms]     [k] __raw_callee_save___pv_queued_spin_unlock
+     0.08%  vfs-io-worker    [kernel.kallsyms]     [k] _raw_spin_lock_irqsave
+     0.08%  vfs-io-worker    [kernel.kallsyms]     [k] find_vma
+     0.08%  vfs-io-worker    [kernel.kallsyms]     [k] schedule
+     0.08%  vfs-io-worker    [kernel.kallsyms]     [k] shmem_write_begin
+     0.08%  vfs-io-worker    [kernel.kallsyms]     [k] syscall_exit_to_user_mode_prepare
+     0.08%  vfs-io-worker    libc.so.6             [.] clock_gettime@@GLIBC_2.17
+     0.08%  vfs-io-worker    mount_vfs             [.] 0x00000000001d8b4d
+     0.08%  vfs-io-worker    mount_vfs             [.] 0x0000000000aabcc2
+     0.08%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab1830
+     0.08%  vfs-io-worker    mount_vfs             [.] 0x0000000000aba3d4
+     0.08%  vfs-io-worker    mount_vfs             [.] 0x0000000000aba3d8
+     0.08%  vfs-io-worker    mount_vfs             [.] 0x0000000000b1b0b0
+     0.05%  mount_vfs        [fuse]                [k] fuse_copy_page
+     0.05%  mount_vfs        [fuse]                [k] fuse_dev_read
+     0.05%  mount_vfs        [fuse]                [k] fuse_request_end
+     0.05%  mount_vfs        [fuse]                [k] lock_request.part.0
+     0.05%  mount_vfs        [kernel.kallsyms]     [k] __fdget_pos
+     0.05%  mount_vfs        [kernel.kallsyms]     [k] blkcg_maybe_throttle_current
+     0.05%  mount_vfs        [kernel.kallsyms]     [k] copy_user_generic_string
+     0.05%  mount_vfs        [kernel.kallsyms]     [k] do_writev
+     0.05%  mount_vfs        [kernel.kallsyms]     [k] futex_hash
+     0.05%  mount_vfs        [kernel.kallsyms]     [k] futex_wait_setup
+     0.05%  mount_vfs        [kernel.kallsyms]     [k] futex_wake_mark
+     0.05%  mount_vfs        [kernel.kallsyms]     [k] iovec_from_user.part.0
+     0.05%  mount_vfs        [kernel.kallsyms]     [k] schedule
+     0.05%  mount_vfs        [kernel.kallsyms]     [k] try_to_wake_up
+     0.05%  mount_vfs        [kernel.kallsyms]     [k] wake_up_q
+     0.05%  mount_vfs        libc.so.6             [.] __memmove_avx_unaligned
+     0.05%  mount_vfs        mount_vfs             [.] 0x00000000001915c6
+     0.05%  mount_vfs        mount_vfs             [.] 0x0000000000196bf7
+     0.05%  mount_vfs        mount_vfs             [.] 0x0000000000199d11
+     0.05%  mount_vfs        mount_vfs             [.] 0x00000000001f2910
+     0.05%  mount_vfs        mount_vfs             [.] 0x00000000001f2b30
+     0.05%  mount_vfs        mount_vfs             [.] 0x0000000000ab7f4f
+     0.05%  mount_vfs        mount_vfs             [.] 0x0000000000ab8090
+     0.05%  mount_vfs        mount_vfs             [.] 0x0000000000ab8107
+     0.05%  mount_vfs        mount_vfs             [.] 0x0000000000abf8ab
+     0.05%  vfs-async-execu  [kernel.kallsyms]     [k] do_futex
+     0.05%  vfs-async-execu  [kernel.kallsyms]     [k] futex_wait
+     0.05%  vfs-async-execu  [kernel.kallsyms]     [k] futex_wait_setup
+     0.05%  vfs-async-execu  [kernel.kallsyms]     [k] futex_wake_mark
+     0.05%  vfs-async-execu  [kernel.kallsyms]     [k] wake_up_q
+     0.05%  vfs-async-execu  libc.so.6             [.] _mid_memalign.constprop.0
+     0.05%  vfs-async-execu  mount_vfs             [.] 0x00000000001a88f9
+     0.05%  vfs-async-execu  mount_vfs             [.] 0x00000000001ad668
+     0.05%  vfs-async-execu  mount_vfs             [.] 0x0000000000aa6e60
+     0.05%  vfs-async-execu  mount_vfs             [.] 0x0000000000ab6820
+     0.05%  vfs-async-execu  mount_vfs             [.] 0x0000000000ac15b8
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] __cgroup_throttle_swaprate
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] __mod_node_page_state
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] __next_zones_zonelist
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] __vm_enough_memory
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] _raw_spin_unlock
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] down_read_trylock
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] folio_add_lru
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] folio_lruvec_lock_irqsave
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] futex_get_value_locked
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] futex_wait_queue
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] futex_wait_setup
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] get_mem_cgroup_from_mm
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] handle_pte_fault
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] kthread_blkcg
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] noop_dirty_folio
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] release_pages
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] shmem_alloc_folio
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] shmem_get_folio_gfp
+     0.05%  vfs-io-worker    [kernel.kallsyms]     [k] xas_load
+     0.05%  vfs-io-worker    libm.so.6             [.] 0x0000000000069c19
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x00000000001a65c6
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x00000000001ab5c0
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x00000000001cb1d3
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x00000000001cc6f8
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x00000000001d8360
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x00000000001d837e
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x00000000001d8f03
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x00000000001d8fc4
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab19cc
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab5e42
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab9e0e
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x0000000000aba431
+     0.05%  vfs-io-worker    mount_vfs             [.] 0x0000000000ac6fd2
+     0.03%  fusermount3      [kernel.kallsyms]     [k] strncmp
+     0.03%  mount_vfs        [fuse]                [k] unlock_request.part.0
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] __check_object_size
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] __futex_queue
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] __import_iovec
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] __list_add_valid
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] __schedule
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] __x64_sys_read
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] _copy_from_user
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] _raw_spin_lock_irqsave
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] avc_policy_seqno
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] check_stack_object
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] do_futex
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] do_nanosleep
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] do_user_addr_fault
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] get_futex_key
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] mem_cgroup_handle_over_high
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] next_uptodate_page
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] plist_add
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] prepare_to_wait_event
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] schedule_debug.constprop.0
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] srso_alias_return_thunk
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] syscall_exit_to_user_mode
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] syscall_exit_to_user_mode_prepare
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] unlock_page
+     0.03%  mount_vfs        [kernel.kallsyms]     [k] wake_q_add_safe
+     0.03%  mount_vfs        ld-linux-x86-64.so.2  [.] _dl_relocate_object_no_relro
+     0.03%  mount_vfs        libc.so.6             [.] __GI___pthread_disable_asynccancel
+     0.03%  mount_vfs        libc.so.6             [.] __GI___pthread_enable_asynccancel
+     0.03%  mount_vfs        libc.so.6             [.] _int_free
+     0.03%  mount_vfs        libc.so.6             [.] pthread_create@GLIBC_2.2.5
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001630ba
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000191590
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000196fa8
+     0.03%  mount_vfs        mount_vfs             [.] 0x000000000019748f
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001977ed
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000199cfd
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000199e92
+     0.03%  mount_vfs        mount_vfs             [.] 0x000000000019ab12
+     0.03%  mount_vfs        mount_vfs             [.] 0x000000000019aca5
+     0.03%  mount_vfs        mount_vfs             [.] 0x000000000019acab
+     0.03%  mount_vfs        mount_vfs             [.] 0x000000000019be81
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001a2af9
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001a2b0d
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001aba15
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001aee86
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001af035
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001b99a4
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001d1918
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001d1984
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001d1d8e
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001d1da4
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001ef4b5
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001ef930
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f0c14
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f19e1
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f212a
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f215b
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f2912
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f2b07
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f2b37
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f2b39
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f2bb6
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f2d03
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f3601
+     0.03%  mount_vfs        mount_vfs             [.] 0x00000000001f367f
+     0.03%  mount_vfs        mount_vfs             [.] 0x000000000097d031
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000aaf002
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000aaf1e0
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000aaf298
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000ab0b52
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000ab0c6e
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000ab5ab0
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000ab5ab1
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000ab5ac1
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000ab68e1
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000ab7a3a
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000ab7a63
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000abf760
+     0.03%  mount_vfs        mount_vfs             [.] 0x0000000000b26b92
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] __futex_queue
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] __futex_unqueue
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] __get_user_nocheck_4
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] __raw_callee_save___pv_queued_spin_unlock
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] _raw_spin_lock
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] _raw_spin_lock_irqsave
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] _raw_spin_unlock
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] do_syscall_64
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] plist_add
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] schedule
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] schedule_debug.constprop.0
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] srso_alias_safe_ret
+     0.03%  vfs-async-execu  [kernel.kallsyms]     [k] syscall_exit_to_user_mode_prepare
+     0.03%  vfs-async-execu  libc.so.6             [.] __posix_memalign
+     0.03%  vfs-async-execu  libc.so.6             [.] _int_memalign
+     0.03%  vfs-async-execu  libc.so.6             [.] malloc_consolidate
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000199cb0
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x000000000019ba94
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x000000000019e49a
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x000000000019e76c
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x00000000001a859c
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x00000000001a85a4
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x00000000001a85ca
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000aa14b2
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000aa1f1c
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000aa6df1
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000aa73d0
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000aa7822
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ab1ba0
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ab1ba5
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ab656b
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ab6601
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ab6830
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ab68e0
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ab7a3a
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ac0e53
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ac154a
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ac1568
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ac1579
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ac1860
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ac1e31
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000ac2dc0
+     0.03%  vfs-async-execu  mount_vfs             [.] 0x0000000000b1ac80
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] __filemap_get_folio
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] __futex_queue
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] __get_user_nocheck_4
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] __get_vma_policy
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] __rcu_read_lock
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] __schedule
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] _find_first_bit
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] _raw_spin_lock
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] _raw_spin_trylock
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] avc_has_perm_noaudit
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] avc_lookup
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] avtab_search_node
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] balance_dirty_pages_ratelimited_flags
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] bpf_lsm_vm_enough_memory
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] cap_vm_enough_memory
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] fault_in_iov_iter_readable
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] folio_add_lru_vma
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] folio_batch_move_lru
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] free_unref_page_commit
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] get_futex_key
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] lru_cache_add_inactive_or_unevictable
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] mem_cgroup_from_task
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] page_add_new_anon_rmap
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] page_remove_rmap
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] percpu_counter_add_batch
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] plist_add
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] policy_node
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] policy_nodemask
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] security_vm_enough_memory_mm
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] shmem_alloc_and_acct_folio
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] shmem_is_huge.part.0
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] srso_alias_return_thunk
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] uncharge_folio
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] up_read
+     0.03%  vfs-io-worker    [kernel.kallsyms]     [k] xas_descend
+     0.03%  vfs-io-worker    [vdso]                [.] 0x000000000000069e
+     0.03%  vfs-io-worker    [vdso]                [.] 0x0000000000000761
+     0.03%  vfs-io-worker    [vdso]                [.] 0x0000000000000781
+     0.03%  vfs-io-worker    libm.so.6             [.] pow
+     0.03%  vfs-io-worker    libm.so.6             [.] 0x0000000000069be2
+     0.03%  vfs-io-worker    libm.so.6             [.] 0x0000000000069c2b
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x000000000019d63e
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x000000000019f543
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001a64d0
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001a655f
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001a658d
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001a8e41
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001a8e80
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ab458
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ab465
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ab472
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ab47e
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ab4db
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ab4fd
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ab567
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ab73f
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001aba28
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001acf95
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ad0a3
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ad0c4
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ad0e0
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ad0fb
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ad11f
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ad129
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001caff3
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001cb02f
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001cb08f
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001cb0dc
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001cb0e2
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001cb1b1
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001cb289
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001cb3f2
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001cc6ec
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001cc762
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001cc76e
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001ced02
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001d8621
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001d8864
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001d88bd
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001d8d03
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001d8ef1
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001d8ef8
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x00000000001df489
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000aa6dcb
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000aa6e23
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000aa6e60
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000aa6f77
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000aa705d
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000aa7669
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000aa78f1
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000aabca3
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000aabce9
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab1570
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab5e5b
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab5e88
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab7f4f
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab9853
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab986d
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab9bae
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab9cb3
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab9cf9
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ab9e61
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000aba090
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ac1261
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ac12ea
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000ac1568
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000b1b1b0
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000b1b1b1
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000b1b1e3
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000b1b272
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000b1c610
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000b1c613
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000b21686
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000b26b92
+     0.03%  vfs-io-worker    mount_vfs             [.] 0x0000000000b4cb80
+
+
+#
+# (Tip: Show user configuration overrides: perf config --user --list)
+#
