@@ -12,9 +12,11 @@ fuse = ["dep:fuser", "dep:libc"]
 
 [dependencies]
 async-trait = "0.1"
+dashmap = "6"
 fuser = { version = "0.14", optional = true }
 futures = "0.3"
 libc = { version = "0.2", optional = true }
+parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"

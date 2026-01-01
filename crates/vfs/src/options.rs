@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use crate::executor::ExecutorConfig;
-use crate::memory_pool::MemoryPoolConfig;
+use crate::memory_pool_v2::MemoryPoolConfig;
 
 /// Configuration options for the VFS.
 ///

@@ -22,7 +22,7 @@ mod impl_fuse {
     use crate::content::FileStore;
     use crate::executor::AsyncExecutor;
     use crate::inode::{INode, INodeManager, INodeType};
-    use crate::memory_pool::MemoryPool;
+    use crate::memory_pool_v2::MemoryPool;
     use crate::options::VfsOptions;
     use crate::write::{
         DiffManifestExporter, DirtyDirManager, DirtyDirState, DirtyFileManager, DirtyState,

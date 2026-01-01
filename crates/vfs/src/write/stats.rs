@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::memory_pool::{MemoryPool, MemoryPoolStats};
+use crate::memory_pool_v2::{MemoryPool, MemoryPoolStats};
 use crate::write::{DirtyEntry, DirtyFileManager, DirtyState};
 
 use super::export::{DirtyFileInfo, DirtySummary};

@@ -31,6 +31,7 @@ pub mod error;
 pub mod executor;
 pub mod inode;
 pub mod memory_pool;
+pub mod memory_pool_v2;
 pub mod options;
 pub mod write;
 
@@ -42,9 +43,9 @@ pub mod fuse_writable;
 
 pub use error::VfsError;
 pub use executor::{AsyncExecutor, ExecutorCancelled, ExecutorConfig, ExecutorError};
-pub use memory_pool::{
+pub use memory_pool_v2::{
     BlockContentProvider, BlockHandle, BlockKey, MemoryPool, MemoryPoolConfig, MemoryPoolError,
-    MemoryPoolStats,
+    MemoryPoolStats, MutableBlockHandle,
 };
 pub use options::{
     KernelCacheOptions, PrefetchStrategy, ReadAheadOptions, ReadCacheConfig, TimeoutOptions,

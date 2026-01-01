@@ -19,7 +19,7 @@ mod impl_fuse {
     use crate::diskcache::{ReadCache, ReadCacheOptions};
     use crate::executor::AsyncExecutor;
     use crate::inode::{FileContent, INode, INodeManager, INodeType};
-    use crate::memory_pool::{BlockKey, MemoryPool, MemoryPoolError, MemoryPoolStats};
+    use crate::memory_pool_v2::{BlockKey, MemoryPool, MemoryPoolError, MemoryPoolStats};
     use crate::options::VfsOptions;
     use crate::VfsError;
 

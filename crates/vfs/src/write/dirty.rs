@@ -23,7 +23,7 @@ use rusty_attachments_model::HashAlgorithm;
 
 use crate::content::FileStore;
 use crate::inode::{FileContent, INode, INodeId, INodeManager, INodeType};
-use crate::memory_pool::MemoryPool;
+use crate::memory_pool_v2::MemoryPool;
 use crate::VfsError;
 
 use crate::diskcache::WriteCache;
@@ -1231,7 +1231,7 @@ mod tests {
     use super::*;
     use crate::content::MemoryFileStore;
     use crate::diskcache::MemoryWriteCache;
-    use crate::memory_pool::MemoryPoolConfig;
+    use crate::memory_pool_v2::MemoryPoolConfig;
 
     fn create_test_manager() -> (DirtyFileManager, Arc<INodeManager>, Arc<MemoryPool>) {
         let cache = Arc::new(MemoryWriteCache::new());
