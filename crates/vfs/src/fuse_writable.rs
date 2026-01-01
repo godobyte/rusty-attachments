@@ -653,9 +653,26 @@ mod impl_fuse {
             _lock: Option<u64>,
             reply: ReplyWrite,
         ) {
-            let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
-            let data_vec: Vec<u8> = data.to_vec();
             let offset_u64: u64 = offset as u64;
+
+            // Fast path: try synchronous write for already-dirty files
+            if let Some(result) = self.dirty_manager.write_sync(ino, offset_u64, data) {
+                match result {
+                    Ok(written) => {
+                        reply.written(written as u32);
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::error!("Sync write failed for inode {}: {}", ino, e);
+                        reply.error(libc::EIO);
+                        return;
+                    }
+                }
+            }
+
+            // Slow path: need async (COW or chunk loading)
+            let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
+            let data_vec: Vec<u8> = data.to_vec(); // Only clone when async needed
 
             let exec_result = self.executor.block_on(async move { dm.write(ino, offset_u64, &data_vec).await });
             match exec_result {

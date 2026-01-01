@@ -23,7 +23,7 @@ use rusty_attachments_vfs::inode::{FileContent, INodeManager};
 use rusty_attachments_vfs::write::{
     DirtyFileManager, DirtyState, MemoryWriteCache,
 };
-use rusty_attachments_vfs::memory_pool::{MemoryPool, MemoryPoolConfig};
+use rusty_attachments_vfs::memory_pool_v2::{MemoryPool, MemoryPoolConfig};
 use rusty_attachments_vfs::{FileStore, VfsError};
 
 /// Generate a valid 32-character hex hash for testing.

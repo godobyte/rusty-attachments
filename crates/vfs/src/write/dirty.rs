@@ -713,6 +713,176 @@ impl DirtyFileManager {
         Ok(bytes_written)
     }
 
+    /// Write to an already-dirty file synchronously.
+    ///
+    /// This is a fast path for files that are already dirty and have their
+    /// chunks loaded in the pool. Returns `None` if async path is needed.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID of file
+    /// * `offset` - Byte offset to write at
+    /// * `data` - Data to write
+    ///
+    /// # Returns
+    /// `Some(Ok(bytes_written))` if sync write succeeded,
+    /// `Some(Err(...))` if sync write failed,
+    /// `None` if async path is needed (file not dirty or chunks not in pool).
+    pub fn write_sync(
+        &self,
+        inode_id: INodeId,
+        offset: u64,
+        data: &[u8],
+    ) -> Option<Result<usize, VfsError>> {
+        // Fast path: check if file is dirty
+        if !self.is_dirty(inode_id) {
+            return None; // Need async COW
+        }
+
+        // Get metadata
+        let (chunk_size, chunk_count): (u64, u32) = {
+            let guard = self.dirty_metadata.read().unwrap();
+            let meta: &DirtyFileMetadata = guard.get(&inode_id)?;
+            (meta.chunk_size(), meta.chunk_count())
+        };
+
+        let write_end: u64 = offset + data.len() as u64;
+
+        // Small file optimization: single chunk
+        if chunk_count <= 1 && write_end <= chunk_size {
+            // Check if chunk 0 is in pool
+            if !self.pool.has_dirty(inode_id, 0) {
+                return None; // Need async to load chunk
+            }
+            return Some(self.write_single_chunk_sync(inode_id, offset, data));
+        }
+
+        // Multi-chunk: check if all chunks are in pool
+        let start_chunk: u32 = (offset / chunk_size) as u32;
+        let end_chunk: u32 = if data.is_empty() {
+            start_chunk
+        } else {
+            ((write_end - 1) / chunk_size) as u32
+        };
+
+        // Check all required chunks are in pool
+        for chunk_idx in start_chunk..=end_chunk {
+            if !self.pool.has_dirty(inode_id, chunk_idx) {
+                return None; // Need async to load chunk
+            }
+        }
+
+        // All chunks in pool - do sync write
+        Some(self.write_multi_chunk_sync(inode_id, offset, data, chunk_size))
+    }
+
+    /// Synchronous single-chunk write (no async, no Vec clone).
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID
+    /// * `offset` - Byte offset within the file
+    /// * `data` - Data to write
+    ///
+    /// # Returns
+    /// Number of bytes written.
+    fn write_single_chunk_sync(
+        &self,
+        inode_id: INodeId,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<usize, VfsError> {
+        let write_end: u64 = offset + data.len() as u64;
+        let offset_usize: usize = offset as usize;
+
+        // Modify in place - pass slice directly, no Vec clone
+        self.pool
+            .modify_dirty_in_place_with_slice(inode_id, 0, offset_usize, data)
+            .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
+
+        // Update metadata
+        {
+            let mut guard = self.dirty_metadata.write().unwrap();
+            if let Some(meta) = guard.get_mut(&inode_id) {
+                meta.mark_chunk_dirty(0);
+                if write_end > meta.size() {
+                    meta.set_size(write_end);
+                }
+                meta.touch();
+            }
+        }
+
+        Ok(data.len())
+    }
+
+    /// Synchronous multi-chunk write.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID
+    /// * `offset` - Byte offset to write at
+    /// * `data` - Data to write
+    /// * `chunk_size` - Size of each chunk
+    ///
+    /// # Returns
+    /// Number of bytes written.
+    fn write_multi_chunk_sync(
+        &self,
+        inode_id: INodeId,
+        offset: u64,
+        data: &[u8],
+        chunk_size: u64,
+    ) -> Result<usize, VfsError> {
+        let write_end: u64 = offset + data.len() as u64;
+        let start_chunk: u32 = (offset / chunk_size) as u32;
+        let end_chunk: u32 = ((write_end - 1) / chunk_size) as u32;
+
+        let mut data_offset: usize = 0;
+
+        for chunk_idx in start_chunk..=end_chunk {
+            let chunk_start_offset: u64 = chunk_idx as u64 * chunk_size;
+            let write_start_in_chunk: usize = if chunk_idx == start_chunk {
+                (offset - chunk_start_offset) as usize
+            } else {
+                0
+            };
+            let write_end_in_chunk: usize = if chunk_idx == end_chunk {
+                (write_end - chunk_start_offset) as usize
+            } else {
+                chunk_size as usize
+            };
+            let write_len: usize = write_end_in_chunk - write_start_in_chunk;
+
+            // Get slice of data for this chunk
+            let chunk_data: &[u8] = &data[data_offset..data_offset + write_len];
+
+            // Modify chunk in place with slice
+            self.pool
+                .modify_dirty_in_place_with_slice(inode_id, chunk_idx, write_start_in_chunk, chunk_data)
+                .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
+
+            // Mark chunk as dirty
+            {
+                let mut guard = self.dirty_metadata.write().unwrap();
+                if let Some(meta) = guard.get_mut(&inode_id) {
+                    meta.mark_chunk_dirty(chunk_idx);
+                }
+            }
+
+            data_offset += write_len;
+        }
+
+        // Update file size
+        {
+            let mut guard = self.dirty_metadata.write().unwrap();
+            if let Some(meta) = guard.get_mut(&inode_id) {
+                if write_end > meta.size() {
+                    meta.set_size(write_end);
+                }
+                meta.touch();
+            }
+        }
+
+        Ok(data.len())
+    }
+
     /// Write to a single chunk (optimized for small files).
     ///
     /// # Arguments
@@ -733,20 +903,10 @@ impl DirtyFileManager {
 
         let write_end: u64 = offset + data.len() as u64;
         let offset_usize: usize = offset as usize;
-        let end: usize = offset_usize + data.len();
 
-        // Capture data for the closure
-        let data_to_write: Vec<u8> = data.to_vec();
-
-        // Modify in place - much faster than copy + replace
+        // Use slice-based method - no Vec clone needed
         self.pool
-            .modify_dirty_in_place(inode_id, 0, |file_data: &mut Vec<u8>| {
-                // Extend file if needed
-                if end > file_data.len() {
-                    file_data.resize(end, 0);
-                }
-                file_data[offset_usize..end].copy_from_slice(&data_to_write);
-            })
+            .modify_dirty_in_place_with_slice(inode_id, 0, offset_usize, data)
             .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
 
         // Update metadata
@@ -815,20 +975,12 @@ impl DirtyFileManager {
             };
             let write_len: usize = write_end_in_chunk - write_start_in_chunk;
 
-            // Capture data slice for this chunk
-            let chunk_data_slice: Vec<u8> = data[data_offset..data_offset + write_len].to_vec();
-            let start: usize = write_start_in_chunk;
-            let end: usize = write_end_in_chunk;
+            // Get slice of data for this chunk - no Vec clone
+            let chunk_data: &[u8] = &data[data_offset..data_offset + write_len];
 
-            // Modify chunk in place
+            // Modify chunk in place with slice
             self.pool
-                .modify_dirty_in_place(inode_id, chunk_idx, |chunk_data: &mut Vec<u8>| {
-                    // Extend chunk if writing beyond current length
-                    if end > chunk_data.len() {
-                        chunk_data.resize(end, 0);
-                    }
-                    chunk_data[start..end].copy_from_slice(&chunk_data_slice);
-                })
+                .modify_dirty_in_place_with_slice(inode_id, chunk_idx, write_start_in_chunk, chunk_data)
                 .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
 
             // Mark chunk as dirty in metadata

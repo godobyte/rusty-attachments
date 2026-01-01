@@ -67,6 +67,9 @@ pub enum MemoryPoolError {
     /// Block is not mutable (tried to modify an immutable block).
     BlockNotMutable(PoolBlockId),
 
+    /// Block is not dirty (tried to modify a clean block).
+    NotDirty,
+
     /// Pool is at capacity and all blocks are in use (cannot evict).
     PoolExhausted {
         current_blocks: usize,
@@ -87,6 +90,7 @@ impl fmt::Display for MemoryPoolError {
             MemoryPoolError::BlockNotMutable(id) => {
                 write!(f, "Block {} is not mutable", id)
             }
+            MemoryPoolError::NotDirty => write!(f, "Block is not dirty"),
             MemoryPoolError::PoolExhausted {
                 current_blocks,
                 in_use_blocks,
@@ -770,6 +774,74 @@ impl MemoryPool {
         block.mark_needs_flush();
         
         Ok(new_size as usize)
+    }
+
+    /// Modify a dirty block in place using a slice (zero-copy).
+    ///
+    /// This is an optimized version that takes a slice directly instead of
+    /// a closure, avoiding the need to clone data into a Vec.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID of the dirty file
+    /// * `chunk_index` - Chunk index within the file
+    /// * `offset` - Byte offset within the chunk to start writing
+    /// * `data` - Data slice to write
+    ///
+    /// # Returns
+    /// Ok(()) on success, Err if block not found or not mutable.
+    pub fn modify_dirty_in_place_with_slice(
+        &self,
+        inode_id: u64,
+        chunk_index: u32,
+        offset: usize,
+        data: &[u8],
+    ) -> Result<(), MemoryPoolError> {
+        let key = BlockKey::from_inode(inode_id, chunk_index);
+
+        // Lock-free lookup via DashMap
+        let block_id: PoolBlockId = *self
+            .key_index
+            .get(&key)
+            .ok_or(MemoryPoolError::BlockNotFound(0))?;
+
+        let block: Arc<PoolBlock> = self
+            .blocks
+            .get(&block_id)
+            .ok_or(MemoryPoolError::BlockNotFound(block_id))?
+            .clone();
+
+        // Modify data using parking_lot RwLock
+        let (old_size, new_size): (u64, u64) = match &block.data {
+            BlockData::Mutable(block_data) => {
+                let mut guard = block_data.write();
+                let old_size: u64 = guard.len() as u64;
+                let end: usize = offset + data.len();
+
+                // Extend if needed
+                if end > guard.len() {
+                    guard.resize(end, 0);
+                }
+
+                // Direct copy from slice - no intermediate Vec
+                guard[offset..end].copy_from_slice(data);
+                let new_size: u64 = guard.len() as u64;
+                (old_size, new_size)
+            }
+            BlockData::Immutable(_) => {
+                return Err(MemoryPoolError::BlockNotMutable(block_id));
+            }
+        };
+
+        // Update size tracking (cold path - only if size changed)
+        if new_size != old_size {
+            let mut lru: parking_lot::MutexGuard<'_, LruState> = self.lru_state.lock();
+            lru.update_size(old_size, new_size);
+        }
+
+        // Mark needs flush (atomic operation)
+        block.mark_needs_flush();
+
+        Ok(())
     }
 
     /// Get a dirty block if it exists (lock-free lookup).

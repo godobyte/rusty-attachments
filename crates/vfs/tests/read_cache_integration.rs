@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rusty_attachments_model::HashAlgorithm;
 use rusty_attachments_vfs::inode::{FileContent, INodeManager};
-use rusty_attachments_vfs::memory_pool::{MemoryPool, MemoryPoolConfig};
+use rusty_attachments_vfs::memory_pool_v2::{MemoryPool, MemoryPoolConfig};
 use rusty_attachments_vfs::write::{DirtyFileManager, MemoryWriteCache};
 use rusty_attachments_vfs::{FileStore, ReadCache, ReadCacheOptions, VfsError};
 use tempfile::TempDir;
