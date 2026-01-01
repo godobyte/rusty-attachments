@@ -521,24 +521,25 @@ impl DirtyFileManager {
 
             // Read from pool
             if let Some(handle) = self.pool.get_dirty(inode_id, chunk_idx) {
-                let chunk_data: &[u8] = handle.data();
                 let chunk_start_offset: u64 = chunk_idx as u64 * chunk_size;
 
-                let read_start: usize = if chunk_idx == start_chunk {
-                    (offset - chunk_start_offset) as usize
-                } else {
-                    0
-                };
-                let read_end_in_chunk: usize = if chunk_idx == end_chunk {
-                    (read_end - chunk_start_offset) as usize
-                } else {
-                    chunk_data.len()
-                };
+                handle.with_data(|chunk_data: &[u8]| {
+                    let read_start: usize = if chunk_idx == start_chunk {
+                        (offset - chunk_start_offset) as usize
+                    } else {
+                        0
+                    };
+                    let read_end_in_chunk: usize = if chunk_idx == end_chunk {
+                        (read_end - chunk_start_offset) as usize
+                    } else {
+                        chunk_data.len()
+                    };
 
-                let actual_end: usize = read_end_in_chunk.min(chunk_data.len());
-                if read_start < actual_end {
-                    result.extend_from_slice(&chunk_data[read_start..actual_end]);
-                }
+                    let actual_end: usize = read_end_in_chunk.min(chunk_data.len());
+                    if read_start < actual_end {
+                        result.extend_from_slice(&chunk_data[read_start..actual_end]);
+                    }
+                });
             }
         }
 
@@ -569,9 +570,9 @@ impl DirtyFileManager {
         // Ensure chunk 0 is loaded
         self.ensure_chunk_in_pool(inode_id, 0).await?;
 
-        // Read from pool
+        // Read from pool - get a copy of the data
         let pool_data: Vec<u8> = if let Some(handle) = self.pool.get_dirty(inode_id, 0) {
-            handle.data().to_vec()
+            handle.data()
         } else {
             // New file with no content yet - treat as empty
             Vec::new()
@@ -705,8 +706,9 @@ impl DirtyFileManager {
             self.write_multi_chunk(inode_id, offset, data).await?
         };
 
-        // Flush to disk cache
-        self.flush_to_disk(inode_id).await?;
+        // Note: We don't flush to disk here - that happens on fsync() or release()
+        // This is critical for performance: FUSE sends many small writes (4KB-128KB)
+        // and flushing after each one would be extremely slow for large files.
 
         Ok(bytes_written)
     }
@@ -730,31 +732,21 @@ impl DirtyFileManager {
         self.ensure_chunk_in_pool(inode_id, 0).await?;
 
         let write_end: u64 = offset + data.len() as u64;
+        let offset_usize: usize = offset as usize;
+        let end: usize = offset_usize + data.len();
 
-        // Get current data, modify, and update
-        let new_data: Vec<u8> = if let Some(handle) = self.pool.get_dirty(inode_id, 0) {
-            let mut file_data: Vec<u8> = handle.data().to_vec();
-            drop(handle);
+        // Capture data for the closure
+        let data_to_write: Vec<u8> = data.to_vec();
 
-            let offset_usize: usize = offset as usize;
-            let end: usize = offset_usize + data.len();
-
-            // Extend file if needed
-            if end > file_data.len() {
-                file_data.resize(end, 0);
-            }
-
-            file_data[offset_usize..end].copy_from_slice(data);
-            file_data
-        } else {
-            // New file
-            let mut file_data: Vec<u8> = vec![0u8; write_end as usize];
-            file_data[offset as usize..write_end as usize].copy_from_slice(data);
-            file_data
-        };
-
-        // Update in pool
-        self.pool.update_dirty(inode_id, 0, new_data)
+        // Modify in place - much faster than copy + replace
+        self.pool
+            .modify_dirty_in_place(inode_id, 0, |file_data: &mut Vec<u8>| {
+                // Extend file if needed
+                if end > file_data.len() {
+                    file_data.resize(end, 0);
+                }
+                file_data[offset_usize..end].copy_from_slice(&data_to_write);
+            })
             .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
 
         // Update metadata
@@ -823,30 +815,20 @@ impl DirtyFileManager {
             };
             let write_len: usize = write_end_in_chunk - write_start_in_chunk;
 
-            // Get current chunk data, modify it, and update in pool
-            let new_chunk_data: Vec<u8> = if let Some(handle) = self.pool.get_dirty(inode_id, chunk_idx) {
-                let mut chunk_data: Vec<u8> = handle.data().to_vec();
-                drop(handle); // Release handle before updating
+            // Capture data slice for this chunk
+            let chunk_data_slice: Vec<u8> = data[data_offset..data_offset + write_len].to_vec();
+            let start: usize = write_start_in_chunk;
+            let end: usize = write_end_in_chunk;
 
-                // Extend chunk if writing beyond current length
-                if write_end_in_chunk > chunk_data.len() {
-                    chunk_data.resize(write_end_in_chunk, 0);
-                }
-
-                chunk_data[write_start_in_chunk..write_end_in_chunk]
-                    .copy_from_slice(&data[data_offset..data_offset + write_len]);
-
-                chunk_data
-            } else {
-                // New chunk
-                let mut chunk_data: Vec<u8> = vec![0u8; write_end_in_chunk];
-                chunk_data[write_start_in_chunk..write_end_in_chunk]
-                    .copy_from_slice(&data[data_offset..data_offset + write_len]);
-                chunk_data
-            };
-
-            // Update chunk in pool (marks as dirty)
-            self.pool.update_dirty(inode_id, chunk_idx, new_chunk_data)
+            // Modify chunk in place
+            self.pool
+                .modify_dirty_in_place(inode_id, chunk_idx, |chunk_data: &mut Vec<u8>| {
+                    // Extend chunk if writing beyond current length
+                    if end > chunk_data.len() {
+                        chunk_data.resize(end, 0);
+                    }
+                    chunk_data[start..end].copy_from_slice(&chunk_data_slice);
+                })
                 .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
 
             // Mark chunk as dirty in metadata
@@ -1061,12 +1043,13 @@ impl DirtyFileManager {
                 let last_chunk_end: u64 = new_size - (last_chunk_idx as u64 * chunk_size);
 
                 if let Some(handle) = self.pool.get_dirty(inode_id, last_chunk_idx) {
-                    let mut chunk_data: Vec<u8> = handle.data().to_vec();
+                    let chunk_data: Vec<u8> = handle.data();
                     drop(handle);
 
                     if (last_chunk_end as usize) < chunk_data.len() {
-                        chunk_data.truncate(last_chunk_end as usize);
-                        self.pool.update_dirty(inode_id, last_chunk_idx, chunk_data)
+                        let mut truncated_data: Vec<u8> = chunk_data;
+                        truncated_data.truncate(last_chunk_end as usize);
+                        self.pool.update_dirty(inode_id, last_chunk_idx, truncated_data)
                             .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
                     }
                 }
@@ -1120,7 +1103,9 @@ impl DirtyFileManager {
 
         for chunk_idx in 0..chunk_count {
             if let Some(handle) = self.pool.get_dirty(inode_id, chunk_idx) {
-                assembled.extend_from_slice(handle.data());
+                handle.with_data(|data: &[u8]| {
+                    assembled.extend_from_slice(data);
+                });
             } else if dirty_chunks.contains(&chunk_idx) {
                 return Err(VfsError::ChunkNotLoaded {
                     path: rel_path,

@@ -921,13 +921,30 @@ mod impl_fuse {
         fn release(
             &mut self,
             _req: &Request,
-            _ino: u64,
+            ino: u64,
             _fh: u64,
             _flags: i32,
             _lock: Option<u64>,
             _flush: bool,
             reply: ReplyEmpty,
         ) {
+            // Flush dirty file to disk on close
+            if self.dirty_manager.is_dirty(ino) {
+                let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
+
+                let exec_result =
+                    self.executor
+                        .block_on(async move { dm.flush_to_disk(ino).await });
+                match exec_result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tracing::error!("release flush failed for inode {}: {}", ino, e);
+                    }
+                    Err(e) => {
+                        tracing::error!("Executor error during release flush: {}", e);
+                    }
+                }
+            }
             reply.ok();
         }
 

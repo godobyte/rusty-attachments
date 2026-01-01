@@ -59,7 +59,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use futures::future::{BoxFuture, Shared};
 use futures::FutureExt;
@@ -87,6 +87,9 @@ pub enum MemoryPoolError {
     /// Block not found in pool.
     BlockNotFound(PoolBlockId),
 
+    /// Block is not mutable (tried to modify an immutable block).
+    BlockNotMutable(PoolBlockId),
+
     /// Pool is at capacity and all blocks are in use (cannot evict).
     PoolExhausted {
         current_blocks: usize,
@@ -104,6 +107,9 @@ impl fmt::Display for MemoryPoolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MemoryPoolError::BlockNotFound(id) => write!(f, "Block not found: {}", id),
+            MemoryPoolError::BlockNotMutable(id) => {
+                write!(f, "Block {} is not mutable", id)
+            }
             MemoryPoolError::PoolExhausted {
                 current_blocks,
                 in_use_blocks,
@@ -344,6 +350,63 @@ impl fmt::Display for BlockKey {
 }
 
 // ============================================================================
+// Block Data Storage
+// ============================================================================
+
+/// Block data storage - either immutable (read-only) or mutable (dirty).
+///
+/// Read-only blocks use `Arc<Vec<u8>>` for lock-free reads.
+/// Dirty blocks use `Arc<RwLock<Vec<u8>>>` for in-place modification.
+enum BlockData {
+    /// Immutable data for read-only blocks (fetched from S3).
+    /// Lock-free reads via Arc - no copying needed for access.
+    Immutable(Arc<Vec<u8>>),
+
+    /// Mutable data for dirty blocks (modified files).
+    /// Allows in-place modification without full copies on each write.
+    Mutable(Arc<RwLock<Vec<u8>>>),
+}
+
+impl BlockData {
+    /// Get the size of the data in bytes.
+    fn len(&self) -> usize {
+        match self {
+            BlockData::Immutable(data) => data.len(),
+            BlockData::Mutable(data) => data.read().unwrap().len(),
+        }
+    }
+
+    /// Check if the data is empty.
+    #[allow(dead_code)]
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Get the immutable Arc reference if this is an immutable block.
+    ///
+    /// # Returns
+    /// Some(Arc<Vec<u8>>) for immutable blocks, None for mutable blocks.
+    fn as_immutable(&self) -> Option<Arc<Vec<u8>>> {
+        match self {
+            BlockData::Immutable(data) => Some(data.clone()),
+            BlockData::Mutable(_) => None,
+        }
+    }
+
+    /// Get the mutable RwLock reference if this is a mutable block.
+    ///
+    /// # Returns
+    /// Some(Arc<RwLock<Vec<u8>>>) for mutable blocks, None for immutable blocks.
+    #[allow(dead_code)]
+    fn as_mutable(&self) -> Option<Arc<RwLock<Vec<u8>>>> {
+        match self {
+            BlockData::Immutable(_) => None,
+            BlockData::Mutable(data) => Some(data.clone()),
+        }
+    }
+}
+
+// ============================================================================
 // Pool Block
 // ============================================================================
 
@@ -351,8 +414,8 @@ impl fmt::Display for BlockKey {
 struct PoolBlock {
     /// Key identifying the content stored in this block.
     key: BlockKey,
-    /// The actual data buffer (Arc for lock-free sharing).
-    data: Arc<Vec<u8>>,
+    /// The actual data buffer - immutable for read-only, mutable for dirty.
+    data: BlockData,
     /// Number of active references to this block (atomic for lock-free updates).
     ref_count: AtomicUsize,
     /// True if block has unflushed modifications (needs flush before eviction).
@@ -360,18 +423,39 @@ struct PoolBlock {
 }
 
 impl PoolBlock {
-    /// Create a new pool block.
+    /// Create a new pool block with immutable data (for read-only blocks).
     ///
     /// # Arguments
     /// * `key` - Block key identifying the content
-    /// * `data` - Block data
+    /// * `data` - Block data wrapped in Arc
     /// * `needs_flush` - Whether this block needs to be flushed before eviction
     fn new(key: BlockKey, data: Arc<Vec<u8>>, needs_flush: bool) -> Self {
         Self {
             key,
-            data,
+            data: BlockData::Immutable(data),
             ref_count: AtomicUsize::new(0),
             needs_flush: AtomicBool::new(needs_flush),
+        }
+    }
+
+    /// Create a new pool block with mutable data (for dirty blocks).
+    ///
+    /// # Arguments
+    /// * `key` - Block key identifying the content
+    /// * `data` - Block data (will be wrapped in RwLock)
+    /// * `capacity` - Optional pre-allocation capacity (for performance)
+    fn new_mutable(key: BlockKey, mut data: Vec<u8>, capacity: Option<usize>) -> Self {
+        // Pre-allocate capacity if specified
+        if let Some(cap) = capacity {
+            if data.capacity() < cap {
+                data.reserve(cap - data.len());
+            }
+        }
+        Self {
+            key,
+            data: BlockData::Mutable(Arc::new(RwLock::new(data))),
+            ref_count: AtomicUsize::new(0),
+            needs_flush: AtomicBool::new(true), // Mutable blocks always start dirty
         }
     }
 
@@ -410,6 +494,11 @@ impl PoolBlock {
         self.data.len() as u64
     }
 
+    /// Check if this block is mutable.
+    fn is_mutable(&self) -> bool {
+        matches!(self.data, BlockData::Mutable(_))
+    }
+
     /// Increment reference count.
     fn acquire(&self) {
         self.ref_count.fetch_add(1, Ordering::AcqRel);
@@ -426,6 +515,7 @@ impl fmt::Debug for PoolBlock {
         f.debug_struct("PoolBlock")
             .field("key", &self.key)
             .field("size", &self.data.len())
+            .field("mutable", &self.is_mutable())
             .field("ref_count", &self.ref_count.load(Ordering::Relaxed))
             .field("needs_flush", &self.needs_flush.load(Ordering::Relaxed))
             .finish()
@@ -477,7 +567,7 @@ impl MemoryPoolConfig {
 // Block Handle
 // ============================================================================
 
-/// RAII handle to a block in the pool.
+/// RAII handle to an immutable block in the pool.
 ///
 /// Provides direct access to block data without locks and automatically
 /// decrements the reference count when dropped.
@@ -516,6 +606,59 @@ impl Drop for BlockHandle {
 impl AsRef<[u8]> for BlockHandle {
     fn as_ref(&self) -> &[u8] {
         self.data()
+    }
+}
+
+/// RAII handle to a mutable (dirty) block in the pool.
+///
+/// Provides access to mutable block data and automatically decrements
+/// the reference count when dropped.
+pub struct MutableBlockHandle {
+    /// Reference to mutable block data.
+    data: Arc<RwLock<Vec<u8>>>,
+    /// Reference to the block for ref_count management.
+    block: Arc<PoolBlock>,
+}
+
+impl MutableBlockHandle {
+    /// Get a copy of the block's data.
+    ///
+    /// # Returns
+    /// A clone of the data. For read-only access, prefer using
+    /// `with_data()` to avoid copying.
+    pub fn data(&self) -> Vec<u8> {
+        self.data.read().unwrap().clone()
+    }
+
+    /// Access the data with a read lock.
+    ///
+    /// # Arguments
+    /// * `f` - Closure that receives a reference to the data
+    ///
+    /// # Returns
+    /// The result of the closure.
+    pub fn with_data<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
+        let guard = self.data.read().unwrap();
+        f(&guard)
+    }
+
+    /// Get the size of the block data in bytes.
+    pub fn len(&self) -> usize {
+        self.data.read().unwrap().len()
+    }
+
+    /// Check if the block is empty.
+    pub fn is_empty(&self) -> bool {
+        self.data.read().unwrap().is_empty()
+    }
+}
+
+impl Drop for MutableBlockHandle {
+    fn drop(&mut self) {
+        self.block.release();
     }
 }
 
@@ -592,7 +735,7 @@ impl MemoryPoolInner {
         self.lru_order.push_back(block_id);
     }
 
-    /// Insert a new block into the pool.
+    /// Insert a new immutable block into the pool.
     ///
     /// # Arguments
     /// * `key` - Content key for the block
@@ -607,6 +750,37 @@ impl MemoryPoolInner {
 
         let size: u64 = data.len() as u64;
         let block = Arc::new(PoolBlock::new(key.clone(), data, needs_flush));
+
+        self.blocks.insert(block_id, block.clone());
+        self.key_index.insert(key, block_id);
+        self.lru_order.push_back(block_id);
+        self.current_size += size;
+
+        block
+    }
+
+    /// Insert a new mutable block into the pool (for dirty blocks).
+    ///
+    /// Mutable blocks use `RwLock<Vec<u8>>` for in-place modification.
+    ///
+    /// # Arguments
+    /// * `key` - Content key for the block
+    /// * `data` - The chunk data (will be wrapped in RwLock)
+    /// * `capacity` - Optional pre-allocation capacity
+    ///
+    /// # Returns
+    /// The newly created mutable block.
+    fn insert_mutable(
+        &mut self,
+        key: BlockKey,
+        data: Vec<u8>,
+        capacity: Option<usize>,
+    ) -> Arc<PoolBlock> {
+        let block_id: PoolBlockId = self.next_id;
+        self.next_id += 1;
+
+        let size: u64 = data.len() as u64;
+        let block = Arc::new(PoolBlock::new_mutable(key.clone(), data, capacity));
 
         self.blocks.insert(block_id, block.clone());
         self.key_index.insert(key, block_id);
@@ -880,10 +1054,10 @@ impl MemoryPool {
             if let Some(block) = inner.lookup(key) {
                 block.acquire();
                 self.hit_count.fetch_add(1, Ordering::Relaxed);
-                return Ok(BlockHandle {
-                    data: block.data.clone(),
-                    block,
-                });
+                // Read-only blocks should always be immutable
+                let data: Arc<Vec<u8>> = block.data.as_immutable()
+                    .expect("Read-only block should be immutable");
+                return Ok(BlockHandle { data, block });
             }
 
             // Check if another thread is already fetching this key
@@ -928,10 +1102,9 @@ impl MemoryPool {
             if let Some(block) = inner.lookup(key) {
                 block.acquire();
                 self.hit_count.fetch_add(1, Ordering::Relaxed);
-                return Ok(BlockHandle {
-                    data: block.data.clone(),
-                    block,
-                });
+                let data: Arc<Vec<u8>> = block.data.as_immutable()
+                    .expect("Read-only block should be immutable");
+                return Ok(BlockHandle { data, block });
             }
 
             // Check again for pending fetch (race condition)
@@ -982,10 +1155,9 @@ impl MemoryPool {
                 if let Some(block) = inner.lookup(key) {
                     block.acquire();
                     self.hit_count.fetch_add(1, Ordering::Relaxed);
-                    return Ok(BlockHandle {
-                        data: block.data.clone(),
-                        block,
-                    });
+                    let data_ref: Arc<Vec<u8>> = block.data.as_immutable()
+                        .expect("Read-only block should be immutable");
+                    return Ok(BlockHandle { data: data_ref, block });
                 }
 
                 // Evict if necessary
@@ -993,14 +1165,11 @@ impl MemoryPool {
                 inner.evict_for_space(data_size)?;
 
                 // Insert new block (read-only blocks don't need flush)
-                let block: Arc<PoolBlock> = inner.insert(key.clone(), data, false);
+                let block: Arc<PoolBlock> = inner.insert(key.clone(), data.clone(), false);
                 block.acquire();
                 self.allocation_count.fetch_add(1, Ordering::Relaxed);
 
-                Ok(BlockHandle {
-                    data: block.data.clone(),
-                    block,
-                })
+                Ok(BlockHandle { data, block })
             }
             Err(msg) => Err(MemoryPoolError::RetrievalFailed(msg)),
         }
@@ -1020,19 +1189,15 @@ impl MemoryPool {
                 if let Some(block) = inner.lookup(key) {
                     block.acquire();
                     self.hit_count.fetch_add(1, Ordering::Relaxed);
-                    Ok(BlockHandle {
-                        data: block.data.clone(),
-                        block,
-                    })
+                    let data_ref: Arc<Vec<u8>> = block.data.as_immutable()
+                        .expect("Read-only block should be immutable");
+                    Ok(BlockHandle { data: data_ref, block })
                 } else {
                     // Block was evicted before we could get it - create handle from shared data
                     // This is a rare edge case
-                    let block = Arc::new(PoolBlock::new(key.clone(), data, false));
+                    let block = Arc::new(PoolBlock::new(key.clone(), data.clone(), false));
                     block.acquire();
-                    Ok(BlockHandle {
-                        data: block.data.clone(),
-                        block,
-                    })
+                    Ok(BlockHandle { data, block })
                 }
             }
             Err(msg) => Err(MemoryPoolError::RetrievalFailed(msg)),
@@ -1051,10 +1216,9 @@ impl MemoryPool {
         let block: Arc<PoolBlock> = inner.lookup(key)?;
         block.acquire();
         self.hit_count.fetch_add(1, Ordering::Relaxed);
-        Some(BlockHandle {
-            data: block.data.clone(),
-            block,
-        })
+        let data: Arc<Vec<u8>> = block.data.as_immutable()
+            .expect("Read-only block should be immutable");
+        Some(BlockHandle { data, block })
     }
 
     /// Get current pool statistics.
@@ -1124,10 +1288,10 @@ impl MemoryPool {
         inner.invalidate_hash(hash_hex)
     }
 
-    /// Insert or update a dirty block.
+    /// Insert or update a dirty block with mutable storage.
     ///
-    /// Dirty blocks are marked as needing flush before eviction.
-    /// If a block with the same key already exists, it is replaced.
+    /// Dirty blocks use `RwLock<Vec<u8>>` for efficient in-place modification.
+    /// Pre-allocates to `CHUNK_SIZE_V2` capacity to avoid reallocations.
     ///
     /// # Arguments
     /// * `inode_id` - Inode ID of the dirty file
@@ -1141,7 +1305,29 @@ impl MemoryPool {
         inode_id: u64,
         chunk_index: u32,
         data: Vec<u8>,
-    ) -> Result<BlockHandle, MemoryPoolError> {
+    ) -> Result<MutableBlockHandle, MemoryPoolError> {
+        // Pre-allocate to chunk size for efficient writes
+        let capacity: usize = CHUNK_SIZE_V2 as usize;
+        self.insert_dirty_with_capacity(inode_id, chunk_index, data, Some(capacity))
+    }
+
+    /// Insert a dirty block with custom capacity.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID of the dirty file
+    /// * `chunk_index` - Chunk index within the file
+    /// * `data` - The dirty chunk data
+    /// * `capacity` - Optional pre-allocation capacity
+    ///
+    /// # Returns
+    /// Handle to the dirty block.
+    pub fn insert_dirty_with_capacity(
+        &self,
+        inode_id: u64,
+        chunk_index: u32,
+        data: Vec<u8>,
+        capacity: Option<usize>,
+    ) -> Result<MutableBlockHandle, MemoryPoolError> {
         let key = BlockKey::from_inode(inode_id, chunk_index);
         let data_size: u64 = data.len() as u64;
 
@@ -1155,13 +1341,19 @@ impl MemoryPool {
         // Evict if necessary (only clean blocks)
         inner.evict_for_space(data_size)?;
 
-        // Insert new dirty block
-        let block: Arc<PoolBlock> = inner.insert(key, Arc::new(data), true);
+        // Insert new mutable dirty block with pre-allocation
+        let block: Arc<PoolBlock> = inner.insert_mutable(key, data, capacity);
         block.acquire();
         self.allocation_count.fetch_add(1, Ordering::Relaxed);
 
-        Ok(BlockHandle {
-            data: block.data.clone(),
+        // Extract the mutable data reference
+        let data_ref: Arc<RwLock<Vec<u8>>> = match &block.data {
+            BlockData::Mutable(d) => d.clone(),
+            BlockData::Immutable(_) => unreachable!("insert_mutable always creates Mutable blocks"),
+        };
+
+        Ok(MutableBlockHandle {
+            data: data_ref,
             block,
         })
     }
@@ -1182,9 +1374,98 @@ impl MemoryPool {
         inode_id: u64,
         chunk_index: u32,
         data: Vec<u8>,
-    ) -> Result<BlockHandle, MemoryPoolError> {
+    ) -> Result<MutableBlockHandle, MemoryPoolError> {
         // For now, update is the same as insert (replace)
         self.insert_dirty(inode_id, chunk_index, data)
+    }
+
+    /// Modify a dirty block in place using a closure.
+    ///
+    /// This is O(write_size) instead of O(chunk_size) because mutable blocks
+    /// use `RwLock<Vec<u8>>` for true in-place modification.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID of the dirty file
+    /// * `chunk_index` - Chunk index within the file
+    /// * `modifier` - Closure that modifies the data in place
+    ///
+    /// # Returns
+    /// Ok(new_size) on success, Err if block not found or not mutable.
+    pub fn modify_dirty_in_place<F>(
+        &self,
+        inode_id: u64,
+        chunk_index: u32,
+        modifier: F,
+    ) -> Result<usize, MemoryPoolError>
+    where
+        F: FnOnce(&mut Vec<u8>),
+    {
+        let key = BlockKey::from_inode(inode_id, chunk_index);
+        let inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
+
+        let block_id: u64 = *inner
+            .key_index
+            .get(&key)
+            .ok_or(MemoryPoolError::BlockNotFound(0))?;
+
+        let block: &Arc<PoolBlock> = inner
+            .blocks
+            .get(&block_id)
+            .ok_or(MemoryPoolError::BlockNotFound(block_id))?;
+
+        // Get mutable access to the data
+        let (old_size, new_size): (u64, u64) = match &block.data {
+            BlockData::Mutable(data) => {
+                let mut guard = data.write().unwrap();
+                let old_size: u64 = guard.len() as u64;
+                modifier(&mut guard);
+                let new_size: u64 = guard.len() as u64;
+                (old_size, new_size)
+            }
+            BlockData::Immutable(_) => {
+                return Err(MemoryPoolError::BlockNotMutable(block_id));
+            }
+        };
+
+        // Update pool size tracking (need to drop inner guard first, then re-acquire)
+        drop(inner);
+        let mut inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
+        if new_size > old_size {
+            inner.current_size += new_size - old_size;
+        } else if old_size > new_size {
+            inner.current_size -= old_size - new_size;
+        }
+
+        // Mark block as needing flush
+        if let Some(block) = inner.blocks.get(&block_id) {
+            block.mark_needs_flush();
+        }
+
+        Ok(new_size as usize)
+    }
+
+    /// Shrink a dirty block's allocation after flush to save memory.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID
+    /// * `chunk_index` - Chunk index
+    ///
+    /// # Returns
+    /// true if block was found and shrunk, false if not found.
+    pub fn shrink_dirty_block(&self, inode_id: u64, chunk_index: u32) -> bool {
+        let key = BlockKey::from_inode(inode_id, chunk_index);
+        let inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
+
+        if let Some(&block_id) = inner.key_index.get(&key) {
+            if let Some(block) = inner.blocks.get(&block_id) {
+                if let BlockData::Mutable(data) = &block.data {
+                    let mut guard = data.write().unwrap();
+                    guard.shrink_to_fit();
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Mark a dirty block as flushed (no longer needs flush before eviction).
@@ -1236,8 +1517,8 @@ impl MemoryPool {
     /// * `chunk_index` - Chunk index
     ///
     /// # Returns
-    /// Handle to the block if found, None otherwise.
-    pub fn get_dirty(&self, inode_id: u64, chunk_index: u32) -> Option<BlockHandle> {
+    /// Handle to the mutable block if found, None otherwise.
+    pub fn get_dirty(&self, inode_id: u64, chunk_index: u32) -> Option<MutableBlockHandle> {
         let key = BlockKey::from_inode(inode_id, chunk_index);
         let mut inner: std::sync::MutexGuard<'_, MemoryPoolInner> = self.inner.lock().unwrap();
 
@@ -1245,8 +1526,18 @@ impl MemoryPool {
         block.acquire();
         self.hit_count.fetch_add(1, Ordering::Relaxed);
 
-        Some(BlockHandle {
-            data: block.data.clone(),
+        // Extract mutable data reference
+        let data_ref: Arc<RwLock<Vec<u8>>> = match &block.data {
+            BlockData::Mutable(d) => d.clone(),
+            BlockData::Immutable(_) => {
+                // Block exists but is immutable - shouldn't happen for dirty blocks
+                block.release();
+                return None;
+            }
+        };
+
+        Some(MutableBlockHandle {
+            data: data_ref,
             block,
         })
     }
@@ -1447,8 +1738,8 @@ mod tests {
     fn test_insert_dirty() {
         let pool = MemoryPool::new(small_config());
 
-        let handle: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3, 4]).unwrap();
-        assert_eq!(handle.data(), &[1, 2, 3, 4]);
+        let handle: MutableBlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3, 4]).unwrap();
+        assert_eq!(handle.data(), vec![1, 2, 3, 4]);
 
         let stats: MemoryPoolStats = pool.stats();
         assert_eq!(stats.total_blocks, 1);
@@ -1467,13 +1758,13 @@ mod tests {
         let pool = MemoryPool::new(small_config());
 
         // Insert dirty block
-        let _h: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        let _h: MutableBlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
         drop(_h);
 
         // Get it back
-        let handle: Option<BlockHandle> = pool.get_dirty(42, 0);
+        let handle: Option<MutableBlockHandle> = pool.get_dirty(42, 0);
         assert!(handle.is_some());
-        assert_eq!(handle.unwrap().data(), &[1, 2, 3]);
+        assert_eq!(handle.unwrap().data(), vec![1, 2, 3]);
 
         // Non-existent
         assert!(pool.get_dirty(99, 0).is_none());
@@ -1486,7 +1777,7 @@ mod tests {
 
         assert!(!pool.has_dirty(42, 0));
 
-        let _h: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        let _h: MutableBlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
 
         assert!(pool.has_dirty(42, 0));
         assert!(!pool.has_dirty(42, 1));
@@ -1497,7 +1788,7 @@ mod tests {
     fn test_mark_flushed() {
         let pool = MemoryPool::new(small_config());
 
-        let _h: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        let _h: MutableBlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
         drop(_h);
 
         assert_eq!(pool.stats().dirty_blocks, 1);
@@ -1516,7 +1807,7 @@ mod tests {
     fn test_mark_needs_flush() {
         let pool = MemoryPool::new(small_config());
 
-        let _h: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        let _h: MutableBlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
         drop(_h);
 
         pool.mark_flushed(42, 0);
@@ -1532,9 +1823,9 @@ mod tests {
         let pool = MemoryPool::new(small_config());
 
         // Insert multiple chunks for same inode
-        let _h1: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
-        let _h2: BlockHandle = pool.insert_dirty(42, 1, vec![4, 5, 6]).unwrap();
-        let _h3: BlockHandle = pool.insert_dirty(99, 0, vec![7, 8, 9]).unwrap();
+        let _h1: MutableBlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        let _h2: MutableBlockHandle = pool.insert_dirty(42, 1, vec![4, 5, 6]).unwrap();
+        let _h3: MutableBlockHandle = pool.insert_dirty(99, 0, vec![7, 8, 9]).unwrap();
         drop(_h1);
         drop(_h2);
         drop(_h3);
@@ -1583,7 +1874,7 @@ mod tests {
         let pool = MemoryPool::new(config);
 
         // Insert a dirty block
-        let _h1: BlockHandle = pool.insert_dirty(42, 0, vec![0; 100]).unwrap();
+        let _h1: MutableBlockHandle = pool.insert_dirty(42, 0, vec![0; 100]).unwrap();
         drop(_h1);
 
         // Insert a clean block directly
@@ -1611,15 +1902,95 @@ mod tests {
     fn test_update_dirty_replaces() {
         let pool = MemoryPool::new(small_config());
 
-        let _h1: BlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        let _h1: MutableBlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
         drop(_h1);
 
         // Update with new data
-        let h2: BlockHandle = pool.update_dirty(42, 0, vec![4, 5, 6, 7]).unwrap();
-        assert_eq!(h2.data(), &[4, 5, 6, 7]);
+        let h2: MutableBlockHandle = pool.update_dirty(42, 0, vec![4, 5, 6, 7]).unwrap();
+        assert_eq!(h2.data(), vec![4, 5, 6, 7]);
 
         // Should still be just one block
         assert_eq!(pool.stats().total_blocks, 1);
+    }
+
+    #[test]
+    fn test_modify_dirty_in_place() {
+        let pool = MemoryPool::new(small_config());
+
+        // Insert initial data
+        let _h: MutableBlockHandle = pool.insert_dirty(42, 0, vec![0; 100]).unwrap();
+        drop(_h);
+
+        // Modify in place - this should NOT copy the entire buffer
+        let new_size: usize = pool
+            .modify_dirty_in_place(42, 0, |data: &mut Vec<u8>| {
+                data[10..20].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+            })
+            .unwrap();
+
+        assert_eq!(new_size, 100);
+
+        // Verify the modification
+        let handle: MutableBlockHandle = pool.get_dirty(42, 0).unwrap();
+        handle.with_data(|data: &[u8]| {
+            assert_eq!(&data[10..20], &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+            assert_eq!(data[0], 0); // Unchanged
+            assert_eq!(data[99], 0); // Unchanged
+        });
+    }
+
+    #[test]
+    fn test_modify_dirty_in_place_extend() {
+        let pool = MemoryPool::new(small_config());
+
+        // Insert small initial data
+        let _h: MutableBlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        drop(_h);
+
+        // Extend the buffer in place
+        let new_size: usize = pool
+            .modify_dirty_in_place(42, 0, |data: &mut Vec<u8>| {
+                data.resize(10, 0);
+                data[5..10].copy_from_slice(&[5, 6, 7, 8, 9]);
+            })
+            .unwrap();
+
+        assert_eq!(new_size, 10);
+
+        // Verify
+        let handle: MutableBlockHandle = pool.get_dirty(42, 0).unwrap();
+        assert_eq!(handle.data(), vec![1, 2, 3, 0, 0, 5, 6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn test_mutable_block_with_data() {
+        let pool = MemoryPool::new(small_config());
+
+        let handle: MutableBlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3, 4, 5]).unwrap();
+
+        // Use with_data for efficient read access
+        let sum: u8 = handle.with_data(|data: &[u8]| data.iter().sum());
+        assert_eq!(sum, 15);
+
+        assert_eq!(handle.len(), 5);
+        assert!(!handle.is_empty());
+    }
+
+    #[test]
+    fn test_shrink_dirty_block() {
+        let pool = MemoryPool::new(small_config());
+
+        // Insert with pre-allocation (default is CHUNK_SIZE_V2)
+        let _h: MutableBlockHandle = pool.insert_dirty(42, 0, vec![1, 2, 3]).unwrap();
+        drop(_h);
+
+        // Shrink the block
+        let result: bool = pool.shrink_dirty_block(42, 0);
+        assert!(result);
+
+        // Block should still work
+        let handle: MutableBlockHandle = pool.get_dirty(42, 0).unwrap();
+        assert_eq!(handle.data(), vec![1, 2, 3]);
     }
 
     // ========================================================================
