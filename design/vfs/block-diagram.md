@@ -82,13 +82,12 @@
             │                                         │
             ▼                                         ▼
 ┌─────────────────────────┐              ┌─────────────────────────┐
-│      MemoryPool         │              │   Arc<dyn INode>        │
+│   MemoryPool (v2)       │              │   Arc<dyn INode>        │
 │  ─────────────────────  │              │  (INodeFile/Dir/Symlink)│
-│  blocks: HashMap        │              └─────────────────────────┘
-│  key_index: HashMap     │
-│  pending_fetches: HMap  │
-│  lru_order: VecDeque    │
-│  current_size: u64      │
+│  blocks: DashMap        │              └─────────────────────────┘
+│  key_index: DashMap     │
+│  pending_fetches: DMap  │
+│  lru_state: Mutex       │
 └───────────┬─────────────┘
             │
             ▼
@@ -96,7 +95,7 @@
 │      PoolBlock          │
 │  ─────────────────────  │
 │  key: BlockKey          │
-│  data: Arc<Vec<u8>>     │
+│  data: BlockData        │
 │  ref_count: AtomicUsize │
 │  needs_flush: AtomicBool│
 └─────────────────────────┘
@@ -552,13 +551,16 @@
 | `INodeFile` | File metadata | `content: FileContent`, `size`, `mtime`, `executable` |
 | `INodeDir` | Directory metadata | `children: HashMap<String, INodeId>` |
 | `FileContent` | Hash reference | `SingleHash(String)` or `Chunked(Vec<String>)` |
-| `MemoryPool` | LRU block cache | `blocks`, `key_index`, `lru_order`, `pending_fetches` |
-| `PoolBlock` | Single cached chunk | `data: Arc<Vec<u8>>`, `ref_count`, `needs_flush` |
+| `MemoryPool` (v2) | LRU block cache (DashMap-based) | `blocks: DashMap`, `key_index: DashMap`, `lru_state: Mutex`, `pending_fetches: DashMap` |
+| `PoolBlock` | Single cached chunk | `data: BlockData`, `ref_count: AtomicUsize`, `needs_flush: AtomicBool` |
+| `BlockData` | Block storage | `Immutable(Arc<Vec<u8>>)` or `Mutable(Arc<RwLock<Vec<u8>>>)` |
+| `ContentId` | Block identifier | `Hash(u64)` (folded) or `Inode(u64)` |
 | `DirtyFileManager` | COW file tracking | `dirty_metadata`, `pool`, `cache`, `read_store` |
 | `DirtyFileMetadata` | Modified file state | `state`, `original_hashes`, `dirty_chunks`, `size` |
 | `DirtyDirManager` | Created/deleted dirs | `dirty_dirs`, `original_dirs` |
 | `ReadCache` | Disk cache for S3 content | `cache_dir`, `current_size` |
 | `MaterializedCache` | Disk cache for dirty files | `cache_dir`, `deleted_dir`, `meta_dir` |
+| `AsyncExecutor` | Deadlock-free sync/async bridge | `tx: mpsc::Sender`, `cancel_token`, `running: AtomicBool` |
 
 
 ---

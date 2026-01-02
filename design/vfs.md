@@ -12,17 +12,19 @@
 | MemoryFileStore (test) | ✅ | `src/content/store.rs` |
 | StorageClientAdapter | ✅ | `src/content/s3_adapter.rs` |
 | Manifest Builder (V1/V2) | ✅ | `src/builder.rs` |
-| MemoryPool (LRU, fetch coordination) | ✅ | `src/memory_pool.rs` |
+| MemoryPool v2 (DashMap, LRU, unified) | ✅ | `src/memory_pool_v2.rs` |
+| AsyncExecutor (deadlock-free) | ✅ | `src/executor.rs` |
 | VfsOptions | ✅ | `src/options.rs` |
 | FUSE Implementation (read-only) | ✅ | `src/fuse.rs` |
 | FUSE Implementation (writable) | ✅ | `src/fuse_writable.rs` |
 | Error Types | ✅ | `src/error.rs` |
 | Example Binary | ✅ | `examples/mount_vfs.rs` |
 | Stats Dashboard | ✅ | `src/fuse.rs`, `src/write/stats.rs` |
-| WriteCache Trait | ✅ | `src/write/cache.rs` |
-| MaterializedCache (disk) | ✅ | `src/write/cache.rs` |
-| MemoryWriteCache (test) | ✅ | `src/write/cache.rs` |
+| WriteCache Trait | ✅ | `src/diskcache/traits.rs` |
+| MaterializedCache (disk) | ✅ | `src/diskcache/materialized.rs` |
+| MemoryWriteCache (test) | ✅ | `src/diskcache/memory_cache.rs` |
 | DirtyFileManager (COW) | ✅ | `src/write/dirty.rs` |
+| DirtyDirManager | ✅ | `src/write/dirty_dir.rs` |
 | DiffManifestExporter | ✅ | `src/write/export.rs` |
 | ReadCache (disk cache) | ✅ | `src/diskcache/read_cache.rs` |
 | Hash Verification | ❌ | Future work |
@@ -357,8 +359,10 @@ let session = fuser::spawn_mount2(filesystem, "/mnt/vfs", &[MountOption::RO])?;
 crates/vfs/src/
 ├── lib.rs                # Public API exports
 ├── error.rs              # VfsError enum
-├── options.rs            # VfsOptions, PrefetchStrategy, ReadCacheConfig, etc.
-├── memory_pool.rs        # Layer 1: Memory pool for V2 chunks (unified for read/write)
+├── options.rs            # VfsOptions, PrefetchStrategy, ReadCacheConfig, ExecutorConfig
+├── memory_pool.rs        # Legacy memory pool (deprecated)
+├── memory_pool_v2.rs     # Layer 1: DashMap-based unified memory pool (current)
+├── executor.rs           # Layer 1: Dedicated async executor (deadlock-free)
 ├── builder.rs            # Layer 2: Build INode tree from Manifest
 │
 ├── inode/                # Layer 1: INode primitives
@@ -627,50 +631,56 @@ pub struct CachedStore<S: FileStore> {
 }
 ```
 
-### Memory Pool
+### Memory Pool (v2 - DashMap-based)
 
 The memory pool manages fixed-size blocks (256MB, matching V2 chunk size) with LRU eviction.
-Designed for efficient handling of V2 manifest chunks where large files are split into
-individually-hashed chunks.
+Uses DashMap for lock-free concurrent access on hot paths. Supports both immutable (read-only)
+and mutable (dirty) blocks in a unified pool.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      MemoryPool                                  │
+│                      MemoryPool (v2)                             │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │  blocks: HashMap<BlockId, Arc<PoolBlock>>               │    │
-│  │  key_index: HashMap<BlockKey, BlockId>                  │    │
-│  │  pending_fetches: HashMap<BlockKey, Shared<Future>>     │    │
-│  │  lru_order: VecDeque<BlockId>  (front=oldest)           │    │
-│  │  current_size / max_size                                │    │
+│  │  blocks: DashMap<PoolBlockId, Arc<PoolBlock>>           │    │
+│  │  key_index: DashMap<BlockKey, PoolBlockId>              │    │
+│  │  pending_fetches: DashMap<BlockKey, SharedFetch>        │    │
+│  │  lru_state: Mutex<LruState>  (cold path only)           │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
 
 PoolBlock:
-  - data: Arc<Vec<u8>>  (shared, lock-free reads)
+  - data: BlockData (Immutable or Mutable)
   - key: BlockKey
   - ref_count: AtomicUsize
+  - needs_flush: AtomicBool (for dirty blocks)
+
+BlockData:
+  - Immutable(Arc<Vec<u8>>)  - lock-free reads for read-only content
+  - Mutable(Arc<RwLock<Vec<u8>>>)  - in-place modification for dirty content
 ```
 
 #### Core Types
 
 ```rust
 /// Identifier for block content - either hash-based or inode-based.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContentId {
-    /// Hash-based ID for read-only content (can be re-fetched from S3).
-    Hash(String),
+    /// Folded hash for read-only content (64-bit for efficiency).
+    Hash(u64),
     /// Inode-based ID for dirty content (must be flushed before eviction).
     Inode(u64),
 }
 
 /// Key identifying a unique block (content ID + chunk_index).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BlockKey {
     pub id: ContentId,
     pub chunk_index: u32,
 }
 
 impl BlockKey {
-    /// Create a block key from a content hash.
-    pub fn from_hash(hash: impl Into<String>, chunk_index: u32) -> Self;
+    /// Create a block key from a content hash hex string.
+    pub fn from_hash_hex(hash_hex: &str, chunk_index: u32) -> Self;
     /// Create a block key from an inode ID (for dirty blocks).
     pub fn from_inode(inode_id: u64, chunk_index: u32) -> Self;
 }
@@ -681,17 +691,23 @@ pub struct MemoryPoolConfig {
     pub block_size: u64,  // Default: 256MB (CHUNK_SIZE_V2)
 }
 
-/// RAII handle - holds Arc to data, auto-releases on drop.
+/// RAII handle for immutable blocks - holds Arc to data, auto-releases on drop.
 pub struct BlockHandle {
     data: Arc<Vec<u8>>,   // Direct access, no lock needed
-    pool: Arc<...>,       // For ref_count decrement on drop
-    block_id: BlockId,
+    block: Arc<PoolBlock>,
 }
 
-/// Trait for content providers (S3, disk, etc.).
-#[async_trait]
-pub trait BlockContentProvider: Send + Sync {
-    async fn fetch(&self, key: &BlockKey) -> Result<Vec<u8>, MemoryPoolError>;
+/// RAII handle for mutable (dirty) blocks.
+pub struct MutableBlockHandle {
+    data: Arc<RwLock<Vec<u8>>>,
+    block: Arc<PoolBlock>,
+}
+
+impl MutableBlockHandle {
+    /// Access data with a read lock (efficient, no copy).
+    pub fn with_data<F, R>(&self, f: F) -> R where F: FnOnce(&[u8]) -> R;
+    /// Get a copy of the data.
+    pub fn data(&self) -> Vec<u8>;
 }
 ```
 
@@ -773,27 +789,45 @@ impl MemoryPool {
     /// Get pool statistics.
     pub fn stats(&self) -> MemoryPoolStats;
     
-    // Dirty block management (unified memory pool)
+    // ========== Dirty block management (unified memory pool) ==========
+    
+    /// Check if a dirty block exists (lock-free).
+    pub fn has_dirty(&self, inode_id: u64, chunk_index: u32) -> bool;
+    
+    /// Get a dirty block if it exists (lock-free lookup).
+    pub fn get_dirty(&self, inode_id: u64, chunk_index: u32) -> Option<MutableBlockHandle>;
+    
+    /// Insert or update a dirty block with mutable storage.
+    pub fn insert_dirty(&self, inode_id: u64, chunk_index: u32, data: Vec<u8>) 
+        -> Result<MutableBlockHandle, MemoryPoolError>;
+    
+    /// Modify a dirty block in place using a closure (zero-copy).
+    pub fn modify_dirty_in_place<F>(&self, inode_id: u64, chunk_index: u32, modifier: F)
+        -> Result<usize, MemoryPoolError>
+    where F: FnOnce(&mut Vec<u8>);
+    
+    /// Modify a dirty block in place with a slice (zero-copy, no Vec clone).
+    pub fn modify_dirty_in_place_with_slice(&self, inode_id: u64, chunk_index: u32, 
+        offset: usize, data: &[u8]) -> Result<(), MemoryPoolError>;
+    
+    /// Mark a dirty block as flushed (can be evicted without flush).
+    pub fn mark_flushed(&self, inode_id: u64, chunk_index: u32) -> bool;
+    
+    /// Mark a dirty block as needing flush.
+    pub fn mark_needs_flush(&self, inode_id: u64, chunk_index: u32) -> bool;
     
     /// Invalidate all read-only blocks for a given hash.
     /// Called when a file is modified to prevent stale reads.
     pub fn invalidate_hash(&self, hash: &str) -> usize;
     
-    /// Insert or update a dirty block.
-    pub fn insert_dirty(&self, inode_id: u64, chunk_index: u32, data: Vec<u8>) 
-        -> Result<BlockHandle, MemoryPoolError>;
-    
-    /// Mark a dirty block as flushed (no longer needs flush before eviction).
-    pub fn mark_flushed(&self, inode_id: u64, chunk_index: u32) -> bool;
-    
-    /// Get a dirty block if it exists.
-    pub fn get_dirty(&self, inode_id: u64, chunk_index: u32) -> Option<BlockHandle>;
-    
     /// Remove all blocks for an inode (clean up on file delete).
     pub fn remove_inode_blocks(&self, inode_id: u64) -> usize;
     
-    /// Check if a dirty block exists.
-    pub fn has_dirty(&self, inode_id: u64, chunk_index: u32) -> bool;
+    /// Shrink a dirty block's allocation after flush to save memory.
+    pub fn shrink_dirty_block(&self, inode_id: u64, chunk_index: u32) -> bool;
+    
+    /// Get the number of dirty blocks for an inode.
+    pub fn dirty_block_count(&self, inode_id: u64) -> usize;
 }
 ```
 
@@ -1033,94 +1067,82 @@ Note: The storage crates are dev-dependencies because the VFS crate only defines
 
 ## Future Considerations
 
-1. **Chunk-based retrieval** - Use V2 chunk hashes for parallel/partial downloads
-2. **Multiple manifests** - Mount multiple manifests as subdirectories
-3. **Windows support** - WinFSP or Dokan integration
-4. **Memory pool enhancements**:
-   - Sharded locks (`DashMap`) for reduced contention under high concurrency
-   - Prefetching adjacent chunks for sequential read patterns
-   - Tiered eviction (prioritize evicting cold chunks over recently-accessed)
+1. **Multiple manifests** - Mount multiple manifests as subdirectories
+2. **Windows support** - WinFSP or Dokan integration
+3. **Trace-based prefetching** - Use access traces to predict and prefetch files (see `design/vfs-trace-precaching.md`)
+4. **Hash verification** - Verify content integrity on read using xxhash
 
 ---
 
-## Write Support Design (Future)
+## Write Support Design (✅ IMPLEMENTED)
 
-The current memory pool is optimized for read-only access. If write support is needed in the future, here's the recommended approach:
+Write support is now fully implemented using a Copy-on-Write (COW) approach with the unified memory pool.
 
-### Current Limitations
+### Implementation Overview
 
-The read-optimized design has these constraints for writes:
+The writable VFS (`fuse_writable.rs`) provides full read-write support:
 
-| Aspect | Current Design | Write Limitation |
-|--------|----------------|------------------|
-| Data storage | `Arc<Vec<u8>>` | Immutable once created - shared readers |
-| Block API | `data(&self) -> &[u8]` | Read-only, no `data_mut()` |
-| CAS model | Content identified by hash | Modified data = different hash = different block |
-| Dirty tracking | None | No mechanism to track modified blocks |
+| Component | Location | Description |
+|-----------|----------|-------------|
+| `WritableDeadlineVfs` | `src/fuse_writable.rs` | FUSE filesystem with write support |
+| `DirtyFileManager` | `src/write/dirty.rs` | Tracks modified files using unified pool |
+| `DirtyDirManager` | `src/write/dirty_dir.rs` | Tracks directory modifications |
+| `MaterializedCache` | `src/diskcache/materialized.rs` | Disk cache for dirty content |
+| `DiffManifestExporter` | `src/write/export.rs` | Export changes as diff manifest |
 
-### Recommended Approach: Copy-on-Write with Dirty Cache
+### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      WritableMemoryPool                          │
+│                    WritableDeadlineVfs                           │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │  read_pool: MemoryPool (existing, immutable)            │    │
-│  │  dirty_blocks: HashMap<BlockKey, DirtyBlock>            │    │
-│  │  write_log: Vec<WriteOperation>                         │    │
+│  │  pool: Arc<MemoryPool>  (unified - read + dirty blocks) │    │
+│  │  dirty_files: DirtyFileManager                          │    │
+│  │  dirty_dirs: DirtyDirManager                            │    │
+│  │  write_cache: Arc<dyn WriteCache>                       │    │
+│  │  executor: Arc<AsyncExecutor>                           │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
-
-DirtyBlock:
-  - data: Vec<u8>  (mutable, owned)
-  - original_hash: Option<String>  (for COW tracking)
-  - modified_ranges: Vec<Range<u64>>
 ```
 
 ### Write Flow
 
 ```
-write(key, offset, data):
-  1. Check dirty_blocks for existing dirty copy
+write(ino, offset, data):
+  1. Check if file is already dirty in pool
   2. If not dirty:
-     a. Fetch original from read_pool (or S3 if not cached)
-     b. Copy to new Vec<u8> in dirty_blocks (COW)
-  3. Apply write to dirty block
-  4. Track modified range for partial flush optimization
+     a. Fetch original content from S3 (or use empty for new files)
+     b. Insert as mutable block in pool (COW)
+  3. Modify dirty block in place (zero-copy via modify_dirty_in_place_with_slice)
+  4. Update DirtyFileMetadata (size, mtime)
+  5. Periodically flush to disk cache (MaterializedCache)
 
-flush(key):
-  1. Compute new hash of dirty block
-  2. Upload to S3 CAS with new hash
-  3. Update manifest entry (new hash, size, mtime)
-  4. Move block to read_pool with new key
-  5. Remove from dirty_blocks
+flush/fsync(ino):
+  1. Get dirty block data from pool
+  2. Write to MaterializedCache on disk
+  3. Mark block as flushed (can be evicted without data loss)
 ```
 
 ### Read Flow with Dirty Blocks
 
 ```
-read(key, offset, size):
-  1. Check dirty_blocks first (dirty data takes precedence)
+read(ino, offset, size):
+  1. Check pool for dirty block (pool.get_dirty)
   2. If dirty: return from dirty block
-  3. Else: return from read_pool (existing flow)
+  3. Else: fetch from S3 via pool.acquire (existing read-only flow)
 ```
 
 ### Key Design Decisions
 
-1. **Separate dirty cache**: Keep read pool immutable for lock-free reads. Dirty blocks are separate and use standard `Vec<u8>` for mutability.
+1. **Unified memory pool**: Both read-only and dirty blocks share the same pool with LRU eviction. Dirty blocks are marked `needs_flush` and must be flushed before eviction.
 
-2. **Copy-on-Write**: Only copy when first write occurs. Reads of unmodified data still use the efficient `Arc<Vec<u8>>` path.
+2. **Zero-copy writes**: `modify_dirty_in_place_with_slice` writes directly to the block buffer without intermediate copies.
 
-3. **Write-back, not write-through**: Buffer writes locally, flush on `fsync()` or `release()`. Reduces S3 round-trips.
+3. **Async executor**: All async I/O (S3 fetches, disk cache writes) runs on a dedicated executor to avoid FUSE callback deadlocks.
 
-4. **New hash on flush**: Since CAS uses content hashes, modified blocks get new hashes. Original blocks remain valid for other readers.
+4. **Disk cache persistence**: `MaterializedCache` stores dirty content on disk, surviving process restarts and memory pressure.
 
-### Alternative Approaches (Not Recommended)
-
-| Approach | Pros | Cons |
-|----------|------|------|
-| `Arc<RwLock<Vec<u8>>>` | Simple API | Lock overhead on every read |
-| In-place mutation | No copy | Breaks shared readers, unsafe |
-| Write-through | Simple consistency | High latency, many S3 calls |
+5. **Diff manifest export**: Changes can be exported as a diff manifest for upload to S3.
 
 
 ---

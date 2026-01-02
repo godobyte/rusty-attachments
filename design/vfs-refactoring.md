@@ -1,5 +1,10 @@
 # VFS Memory Pool Hash Optimization Refactoring
 
+**Status: ✅ IMPLEMENTED**
+
+The folded hash optimization is complete. `ContentId::Hash` now uses `u64` instead of `String`.
+See `crates/vfs/src/memory_pool_v2.rs` and `crates/common/src/hash.rs` for the implementation.
+
 ## Problem Analysis
 
 The current VFS memory pool design has a critical performance issue:

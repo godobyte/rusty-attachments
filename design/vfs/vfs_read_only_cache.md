@@ -1,5 +1,10 @@
 # VFS Read-Only Disk Cache
 
+**Status: ✅ CORE IMPLEMENTED | 🚧 EVICTION DEFERRED**
+
+Tasks 1-4 and 6 are complete. See `crates/vfs/src/diskcache/read_cache.rs` for the implementation.
+Cache eviction (Task 5) is deferred to Future Considerations.
+
 ## Problem
 
 Currently, immutable files from the manifest are only cached in the in-memory `MemoryPool`. When memory pressure causes LRU eviction, content is discarded and must be re-fetched from S3 on the next read. This is inefficient for large files or repeated access patterns.
