@@ -548,8 +548,16 @@ mod impl_fuse {
         ) {
             // Check dirty layer first
             if self.dirty_manager.is_dirty(ino) {
-                let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
                 let offset_u64: u64 = offset as u64;
+
+                // Fast path: try synchronous read for already-loaded chunks
+                if let Some(data) = self.dirty_manager.read_sync(ino, offset_u64, size) {
+                    reply.data(&data);
+                    return;
+                }
+
+                // Slow path: need async (chunk loading from S3/cache)
+                let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
 
                 let exec_result = self.executor.block_on(async move { dm.read(ino, offset_u64, size).await });
                 match exec_result {

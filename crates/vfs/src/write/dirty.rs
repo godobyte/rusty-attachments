@@ -546,6 +546,108 @@ impl DirtyFileManager {
         Ok(result)
     }
 
+    /// Synchronous read for dirty files with data already in pool.
+    ///
+    /// This is a fast path for files that are already dirty and have their
+    /// chunks loaded in the pool. Returns `None` if async path is needed.
+    ///
+    /// # Arguments
+    /// * `inode_id` - Inode ID
+    /// * `offset` - Byte offset
+    /// * `size` - Bytes to read
+    ///
+    /// # Returns
+    /// `Some(data)` if read succeeded synchronously, `None` if async load needed.
+    pub fn read_sync(&self, inode_id: INodeId, offset: u64, size: u32) -> Option<Vec<u8>> {
+        // Get file metadata
+        let (file_size, chunk_size, chunk_count): (u64, u64, u32) = {
+            let guard = self.dirty_metadata.read().ok()?;
+            let meta: &DirtyFileMetadata = guard.get(&inode_id)?;
+            (meta.size(), meta.chunk_size(), meta.chunk_count())
+        };
+
+        // Handle empty file or read past end
+        if offset >= file_size {
+            return Some(Vec::new());
+        }
+
+        let read_end: u64 = (offset + size as u64).min(file_size);
+
+        // Single chunk case
+        if chunk_count <= 1 {
+            // Check if chunk 0 is in pool
+            if !self.pool.has_dirty(inode_id, 0) {
+                return None; // Need async load
+            }
+
+            let handle = self.pool.get_dirty(inode_id, 0)?;
+            return Some(handle.with_data(|chunk_data: &[u8]| {
+                let start: usize = offset as usize;
+                let end: usize = read_end as usize;
+                let read_len: usize = end - start;
+                let mut result: Vec<u8> = Vec::with_capacity(read_len);
+
+                if end <= chunk_data.len() {
+                    // Fast path: all data in chunk
+                    result.extend_from_slice(&chunk_data[start..end]);
+                } else {
+                    // Slow path: chunk is smaller than file size (truncate extended)
+                    let chunk_end: usize = chunk_data.len().min(end);
+                    if start < chunk_end {
+                        result.extend_from_slice(&chunk_data[start..chunk_end]);
+                    }
+                    // Fill remaining with zeros
+                    let zeros_needed: usize = end - start - result.len();
+                    if zeros_needed > 0 {
+                        result.resize(result.len() + zeros_needed, 0);
+                    }
+                }
+
+                result
+            }));
+        }
+
+        // Multi-chunk: check all needed chunks are in pool
+        let start_chunk: u32 = (offset / chunk_size) as u32;
+        let end_chunk: u32 = ((read_end - 1) / chunk_size) as u32;
+
+        for chunk_idx in start_chunk..=end_chunk {
+            if !self.pool.has_dirty(inode_id, chunk_idx) {
+                return None; // Need async load
+            }
+        }
+
+        // All chunks in pool - read synchronously
+        let actual_size: u64 = read_end - offset;
+        let mut result: Vec<u8> = Vec::with_capacity(actual_size as usize);
+
+        for chunk_idx in start_chunk..=end_chunk {
+            if let Some(handle) = self.pool.get_dirty(inode_id, chunk_idx) {
+                let chunk_start_offset: u64 = chunk_idx as u64 * chunk_size;
+
+                handle.with_data(|chunk_data: &[u8]| {
+                    let read_start: usize = if chunk_idx == start_chunk {
+                        (offset - chunk_start_offset) as usize
+                    } else {
+                        0
+                    };
+                    let read_end_in_chunk: usize = if chunk_idx == end_chunk {
+                        (read_end - chunk_start_offset) as usize
+                    } else {
+                        chunk_data.len()
+                    };
+
+                    let actual_end: usize = read_end_in_chunk.min(chunk_data.len());
+                    if read_start < actual_end {
+                        result.extend_from_slice(&chunk_data[read_start..actual_end]);
+                    }
+                });
+            }
+        }
+
+        Some(result)
+    }
+
     /// Read a single chunk (optimized for small files).
     ///
     /// # Arguments
@@ -570,14 +672,6 @@ impl DirtyFileManager {
         // Ensure chunk 0 is loaded
         self.ensure_chunk_in_pool(inode_id, 0).await?;
 
-        // Read from pool - get a copy of the data
-        let pool_data: Vec<u8> = if let Some(handle) = self.pool.get_dirty(inode_id, 0) {
-            handle.data()
-        } else {
-            // New file with no content yet - treat as empty
-            Vec::new()
-        };
-
         // Calculate read range
         let start: usize = offset as usize;
         let end: usize = (offset + size as u64).min(file_size) as usize;
@@ -586,18 +680,34 @@ impl DirtyFileManager {
             return Ok(Vec::new());
         }
 
-        let read_len: usize = end - start;
-        let mut result: Vec<u8> = Vec::with_capacity(read_len);
+        // Read from pool using with_data() to avoid cloning entire chunk
+        let result: Vec<u8> = if let Some(handle) = self.pool.get_dirty(inode_id, 0) {
+            handle.with_data(|chunk_data: &[u8]| {
+                let read_len: usize = end - start;
+                let mut result: Vec<u8> = Vec::with_capacity(read_len);
 
-        // Handle case where file was extended via truncate (pool data < file size)
-        for i in start..end {
-            if i < pool_data.len() {
-                result.push(pool_data[i]);
-            } else {
-                // Extended region - return zeros
-                result.push(0);
-            }
-        }
+                if end <= chunk_data.len() {
+                    // Fast path: all requested data is within chunk
+                    result.extend_from_slice(&chunk_data[start..end]);
+                } else {
+                    // Slow path: file was extended via truncate (pool data < file size)
+                    let chunk_end: usize = chunk_data.len().min(end);
+                    if start < chunk_end {
+                        result.extend_from_slice(&chunk_data[start..chunk_end]);
+                    }
+                    // Fill remaining with zeros
+                    let zeros_needed: usize = end - start - result.len();
+                    if zeros_needed > 0 {
+                        result.resize(result.len() + zeros_needed, 0);
+                    }
+                }
+
+                result
+            })
+        } else {
+            // New file with no content yet - return zeros
+            vec![0u8; end - start]
+        };
 
         Ok(result)
     }
@@ -1810,5 +1920,66 @@ mod tests {
         // Read starting past end of file
         let data: Vec<u8> = manager.read(100, 100, 50).await.unwrap();
         assert!(data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_read_sync_basic() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+        manager.write(100, 0, b"hello world").await.unwrap();
+
+        // Sync read should work since chunk is in pool
+        let data: Option<Vec<u8>> = manager.read_sync(100, 0, 100);
+        assert!(data.is_some());
+        assert_eq!(data.unwrap(), b"hello world");
+    }
+
+    #[tokio::test]
+    async fn test_read_sync_partial() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+        manager.write(100, 0, b"hello world").await.unwrap();
+
+        // Partial sync read
+        let data: Option<Vec<u8>> = manager.read_sync(100, 6, 5);
+        assert!(data.is_some());
+        assert_eq!(data.unwrap(), b"world");
+    }
+
+    #[test]
+    fn test_read_sync_not_dirty() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        // File not dirty - should return None
+        let data: Option<Vec<u8>> = manager.read_sync(100, 0, 100);
+        assert!(data.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_sync_past_end() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+        manager.write(100, 0, b"hello").await.unwrap();
+
+        // Read past end should return empty
+        let data: Option<Vec<u8>> = manager.read_sync(100, 100, 50);
+        assert!(data.is_some());
+        assert!(data.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_read_sync_new_file_no_chunk() {
+        let (manager, _inodes, _pool) = create_test_manager();
+
+        // Create file but don't write (no chunk in pool, size is 0)
+        manager.create_file(100, "test.txt".to_string(), 1).unwrap();
+
+        // Sync read returns empty vec since file size is 0 (read past end)
+        let data: Option<Vec<u8>> = manager.read_sync(100, 0, 100);
+        assert!(data.is_some());
+        assert!(data.unwrap().is_empty());
     }
 }
