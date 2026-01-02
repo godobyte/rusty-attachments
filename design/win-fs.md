@@ -114,9 +114,17 @@ VFSForGit loads ALL enumeration data in `StartDirectoryEnumerationCallback`, not
 - Multiple calls to `GetDirectoryEnumerationCallback` don't re-fetch data
 - Enumeration state is consistent throughout the session
 
+**Our approach:** Same pattern. The entire manifest is loaded into `ManifestProjection` at startup. `StartDirectoryEnumerationCallback` retrieves the pre-sorted children from memory and stores them in `ActiveEnumeration`. No I/O is ever needed for enumeration.
+
 ### 4. Worker Thread Pool for I/O
 
 VFSForGit uses a dedicated worker thread pool (`BlockingCollection<FileOrNetworkRequest>`) for operations that may block on I/O. This prevents ProjFS worker threads from being exhausted.
+
+**Our approach:** We reuse the `AsyncExecutor` from `crates/vfs` (same as FUSE). Instead of a custom worker pool:
+- `AsyncExecutor` runs a dedicated Tokio runtime in a background thread
+- ProjFS callbacks call `executor.block_on()` which blocks on a oneshot channel (condvar wait)
+- Async work (S3 fetches) runs on the executor's Tokio runtime
+- This is simpler than VFSForGit's approach and shares code with FUSE
 
 ### 5. Background Task Queue
 
