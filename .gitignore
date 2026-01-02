@@ -1,3 +1,4 @@
+creds.sh
 /target
 Cargo.lock
 *.pyc
