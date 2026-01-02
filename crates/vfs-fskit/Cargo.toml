@@ -1,0 +1,43 @@
+[package]
+name = "rusty-attachments-vfs-fskit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FSKit-based virtual filesystem for Deadline Cloud job attachments (macOS 15.4+)"
+
+[features]
+default = []
+
+[target.'cfg(target_os = "macos")'.dependencies]
+fskit-rs = "0.1.0"
+
+[dependencies]
+async-trait = "0.1"
+dashmap = "6"
+libc = "0.2"
+parking_lot = "0.12"
+prost-types = "0.14"
+thiserror = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tracing = "0.1"
+uuid = { version = "1.0", features = ["v4"] }
+
+# Internal crates (shared primitives)
+rusty-attachments-common = { path = "../common" }
+rusty-attachments-model = { path = "../model" }
+rusty-attachments-storage = { path = "../storage" }
+rusty-attachments-storage-crt = { path = "../storage-crt" }
+
+# Shared VFS primitives
+rusty-attachments-vfs = { path = "../vfs", default-features = false }
+
+[dev-dependencies]
+ctrlc = "3.4"
+dirs = "5.0"
+tempfile = "3.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
+tracing-subscriber = "0.3"
+
+[[example]]
+name = "mount_fskit"

@@ -1,17 +1,20 @@
 # Rusty Attachments: macOS FSKit VFS Module Design
 
-**Status: 📋 DESIGN**
+**Status: ✅ IMPLEMENTED**
 
 ## Overview
 
-This document describes the design for a new `rusty-attachments-vfs-fskit` crate that provides a macOS-native virtual filesystem using Apple's FSKit framework (macOS 15.4+). This crate bridges the existing VFS primitives to FSKit via the [fskit-rs](https://github.com/debox-network/fskit-rs) Rust crate.
+This document describes the design for the `rusty-attachments-vfs-fskit` crate that provides a macOS-native virtual filesystem using Apple's FSKit framework (macOS 15.4+). This crate bridges the existing VFS primitives to FSKit via the [fskit-rs](https://github.com/debox-network/fskit-rs) Rust crate.
 
-**Feature Parity Goal**: Full feature equivalence with the FUSE-based `WritableVfs`, including:
-- Read-only manifest mounting
+**Implemented Features**:
+- Read-only manifest mounting (v2023-03-03 and v2025-12-04-beta formats)
 - Copy-on-write (COW) file modifications
 - New file/directory creation
 - File/directory deletion
-- Diff manifest export
+- Chunked file support (v2025 format)
+- Symlink support (v2025 format)
+- Live statistics dashboard (`--stats` flag)
+- Dirty state tracking for diff manifest export
 
 ### Why FSKit?
 
@@ -445,7 +448,6 @@ pub struct FsKitMountOptions {
 **Note**: `KernelCacheOptions` and `ExecutorConfig` are not needed for FSKit:
 - FSKit manages kernel caching internally (no user control)
 - FSKit-rs runs in Tokio context, so no `AsyncExecutor` bridge is needed
-```
 
 ### Item ID Mapping
 
@@ -1112,6 +1114,66 @@ async fn set_attributes(
     
     // Return updated attributes
     self.get_attributes(item_id).await
+}
+```
+
+#### get_attributes
+
+```rust
+async fn get_attributes(&mut self, item_id: u64) -> Result<ItemAttributes> {
+    // Check manifest inodes first
+    if let Some(inode) = self.inner.inodes.get(item_id) {
+        // Check if deleted
+        if self.inner.dirty_manager.get_state(item_id) == Some(DirtyState::Deleted) {
+            return Err(Error::Posix(libc::ENOENT));
+        }
+        if self.inner.dirty_dir_manager.get_state(item_id) == Some(DirtyDirState::Deleted) {
+            return Err(Error::Posix(libc::ENOENT));
+        }
+        
+        let mut attrs: ItemAttributes = to_item_attributes(inode.as_ref());
+        
+        // Override with dirty state if applicable
+        if let Some(size) = self.inner.dirty_manager.get_size(item_id) {
+            attrs.size = Some(size);
+        }
+        if let Some(mtime) = self.inner.dirty_manager.get_mtime(item_id) {
+            attrs.modify_time = Some(to_proto_timestamp(mtime));
+            attrs.access_time = Some(to_proto_timestamp(mtime));
+        }
+        
+        return Ok(attrs);
+    }
+    
+    // Check new files
+    if self.inner.dirty_manager.is_new_file(item_id) {
+        let size: u64 = self.inner.dirty_manager.get_size(item_id).unwrap_or(0);
+        let mtime: SystemTime = self.inner.dirty_manager.get_mtime(item_id)
+            .unwrap_or(SystemTime::now());
+        
+        return Ok(ItemAttributes {
+            item_id: Some(item_id),
+            r#type: Some(ItemType::File as i32),
+            mode: Some(0o644),
+            size: Some(size),
+            modify_time: Some(to_proto_timestamp(mtime)),
+            access_time: Some(to_proto_timestamp(mtime)),
+            ..Default::default()
+        });
+    }
+    
+    // Check new directories
+    if self.inner.dirty_dir_manager.is_new_dir(item_id) {
+        return Ok(ItemAttributes {
+            item_id: Some(item_id),
+            r#type: Some(ItemType::Directory as i32),
+            mode: Some(0o755),
+            link_count: Some(2),
+            ..Default::default()
+        });
+    }
+    
+    Err(Error::Posix(libc::ENOENT))
 }
 ```
 

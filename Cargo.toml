@@ -10,6 +10,7 @@ members = [
     "crates/storage-crt",
     "crates/python",
     "crates/vfs",
+    "crates/vfs-fskit",
     "crates/wasm",
 ]
 exclude = [
