@@ -43,11 +43,87 @@ rusty-attachments/
 | `rusty-attachments-python` | Python bindings via PyO3 |
 | `rusty-attachments-wasm` | WebAssembly bindings |
 
+## Prerequisites
+
+Before building, ensure you have the required tools installed for your platform.
+
+### All Platforms
+
+1. **Rust Toolchain**
+   ```bash
+   # Install rustup (Rust installer and version manager)
+   # Visit: https://rustup.rs/
+   
+   # Verify installation
+   cargo --version
+   rustc --version
+   ```
+
+### Windows
+
+2. **Visual Studio Build Tools** (Required for MSVC linker)
+   - Download: [Build Tools for Visual Studio 2022](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
+   - During installation, select:
+     - **"Desktop development with C++"** workload, OR
+     - **"MSVC v143 - VS 2022 C++ x64/x86 build tools"** + **"Windows 11 SDK"**
+   - After installation, restart your terminal
+
+3. **CMake** (Required for AWS SDK dependencies)
+   - Download: [CMake Windows Installer](https://cmake.org/download/)
+   - During installation, select **"Add CMake to system PATH"**
+   - Verify: `cmake --version`
+
+4. **Building on Windows**
+   ```powershell
+   # Option 1: Use Developer Command Prompt (Recommended)
+   # Search for "Developer Command Prompt for VS 2022" in Start Menu
+   # Navigate to project directory and run:
+   cargo build
+   
+   # Option 2: Set up environment in PowerShell
+   & "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64
+   cargo build
+   ```
+
+### macOS
+
+2. **Xcode Command Line Tools**
+   ```bash
+   xcode-select --install
+   ```
+
+3. **CMake** (Required for AWS SDK dependencies)
+   ```bash
+   brew install cmake
+   ```
+
+### Linux
+
+2. **Build Essentials**
+   ```bash
+   # Debian/Ubuntu
+   sudo apt-get install build-essential pkg-config cmake
+   
+   # Fedora/RHEL
+   sudo dnf install gcc gcc-c++ make pkg-config cmake
+   
+   # Arch
+   sudo pacman -S base-devel pkg-config cmake
+   ```
+
 ## Building
 
+After installing the prerequisites above, you can build the project:
+
 ```bash
-# Build all crates
+# Quick check (recommended first step - faster than full build)
+cargo check
+
+# Build all crates in debug mode
 cargo build
+
+# Build all crates in release mode (optimized)
+cargo build --release
 
 # Build specific crates
 cargo build -p rusty-attachments-common
@@ -63,10 +139,24 @@ cargo build -p rusty-attachments-vfs
 
 # Build VFS with FUSE support (requires platform setup - see VFS section)
 cargo build -p rusty-attachments-vfs --features fuse
-
-# Check without building (faster)
-cargo check
 ```
+
+### Troubleshooting Build Issues
+
+**Windows: "linker `link.exe` not found"**
+- Install Visual Studio Build Tools with C++ support (see Prerequisites)
+- Use Developer Command Prompt for VS 2022, or run the Launch-VsDevShell.ps1 script
+
+**Windows: "Missing dependency: cmake"**
+- Install CMake and ensure it's in your PATH (see Prerequisites)
+- Restart your terminal after installation
+
+**All Platforms: "failed to compile aws-lc-sys"**
+- Ensure CMake is installed and accessible: `cmake --version`
+- On Windows, ensure you're using Developer Command Prompt or have run Launch-VsDevShell.ps1
+
+**macOS/Linux: FUSE build errors**
+- Install platform-specific FUSE development libraries (see VFS Platform Setup section below)
 
 ## Testing
 
