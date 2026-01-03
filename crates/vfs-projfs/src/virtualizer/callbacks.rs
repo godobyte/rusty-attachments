@@ -275,14 +275,18 @@ pub unsafe extern "system" fn get_file_data_cb(
     let data_stream_id: GUID = (*callback_data).DataStreamId;
     let context = SendableContext::new((*callback_data).NamespaceVirtualizationContext);
 
-    // Get content hash from file info
-    let content_hash: String = match ctx.callbacks.get_file_info(&relative_path) {
-        Some(info) => match info.content_hash {
-            Some(ref hash) => hash.to_string(),
-            None => return HRESULT::from(ERROR_FILE_NOT_FOUND),
-        },
+    // Get file info for size (needed for chunked file fetching)
+    let file_info = match ctx.callbacks.get_file_info(&relative_path) {
+        Some(info) => info,
         None => return HRESULT::from(ERROR_FILE_NOT_FOUND),
     };
+
+    // Verify file has content hash
+    if file_info.content_hash.is_none() {
+        return HRESULT::from(ERROR_FILE_NOT_FOUND);
+    }
+
+    let file_size: u64 = file_info.size;
 
     // Clone for async closure
     let callbacks: Arc<VfsCallbacks> = ctx.callbacks.clone();
@@ -290,9 +294,9 @@ pub unsafe extern "system" fn get_file_data_cb(
 
     // Use executor.block_on - blocks on oneshot channel, NOT Tokio
     let result = ctx.executor.block_on_cancellable(async move {
-        // Fetch content (may hit memory pool or S3)
+        // Fetch content (handles both single-hash and chunked files)
         let data: Vec<u8> = callbacks
-            .fetch_file_content(&content_hash, byte_offset, length)
+            .fetch_file_content_for_path(&path_clone, byte_offset, length, file_size)
             .await?;
 
         // Write to ProjFS with aligned buffer
@@ -352,7 +356,7 @@ pub unsafe extern "system" fn notification_cb(
     match notification {
         PRJ_NOTIFICATION_NEW_FILE_CREATED => {
             if is_directory.as_bool() {
-                tracing::debug!("Folder created: {}", relative_path);
+                ctx.callbacks.on_dir_created(&relative_path);
             } else {
                 ctx.callbacks.on_file_created(&relative_path);
             }
@@ -364,7 +368,7 @@ pub unsafe extern "system" fn notification_cb(
 
         PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_DELETED => {
             if is_directory.as_bool() {
-                tracing::debug!("Folder deleted: {}", relative_path);
+                ctx.callbacks.on_dir_deleted(&relative_path);
             } else {
                 ctx.callbacks.on_file_deleted(&relative_path);
             }
@@ -576,8 +580,7 @@ fn write_file_data_aligned(
 
         match result {
             Ok(()) => Ok(()),
-            Err(e) => Err(rusty_attachments_vfs::VfsError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            Err(e) => Err(rusty_attachments_vfs::VfsError::Io(std::io::Error::other(
                 format!("PrjWriteFileData failed: {:?}", e),
             ))),
         }

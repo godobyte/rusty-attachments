@@ -44,6 +44,9 @@ pub use error::ProjFsError;
 pub use options::{NotificationMask, ProjFsOptions, ProjFsWriteOptions};
 pub use virtualizer::WritableProjFs;
 
+// Export callbacks layer types for advanced usage
+pub use callbacks::{ModificationSummary, ModifiedPathsDatabase, PathRegistry, VfsCallbacks};
+
 // Re-export shared VFS primitives for convenience
 pub use rusty_attachments_vfs::{
     DirtyFileManager, DirtySummary, FileStore, INodeManager, MemoryPool,

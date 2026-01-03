@@ -4,6 +4,10 @@
 //! the ProjFS virtualizer and the manifest projection.
 
 mod background;
+mod modified_paths;
+mod path_registry;
 mod vfs_callbacks;
 
+pub use modified_paths::{ModificationSummary, ModifiedPathsDatabase};
+pub use path_registry::PathRegistry;
 pub use vfs_callbacks::VfsCallbacks;

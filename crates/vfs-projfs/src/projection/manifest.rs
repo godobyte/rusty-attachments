@@ -201,7 +201,7 @@ impl ManifestProjection {
         let folder: Option<Arc<[ProjectedFileInfo]>> = {
             let root = self.root.read();
             let target_folder: &FolderData = if normalized.is_empty() {
-                &*root
+                &root
             } else {
                 Self::navigate_to_folder(&root, &normalized)?
             };
@@ -243,7 +243,7 @@ impl ManifestProjection {
 
         // Navigate to parent
         let parent_folder: &FolderData = if components.len() == 1 {
-            &*root
+            &root
         } else {
             let parent_path: String = components[..components.len() - 1].join("/");
             Self::navigate_to_folder(&root, &parent_path)?
@@ -274,7 +274,7 @@ impl ManifestProjection {
 
         // Navigate to parent
         let parent_folder: &FolderData = if components.len() == 1 {
-            &*root
+            &root
         } else {
             let parent_path: String = components[..components.len() - 1].join("/");
             Self::navigate_to_folder(&root, &parent_path)?
@@ -302,6 +302,48 @@ impl ManifestProjection {
     /// Get hash algorithm used by manifest.
     pub fn hash_algorithm(&self) -> HashAlgorithm {
         self.hash_algorithm
+    }
+
+    /// Get content hash info for a file (including chunk hashes for V2 chunked files).
+    ///
+    /// # Arguments
+    /// * `relative_path` - Path to file
+    ///
+    /// # Returns
+    /// ContentHash (Single or Chunked) if file exists.
+    pub fn get_content_hash(&self, relative_path: &str) -> Option<ContentHash> {
+        let normalized: String = Self::normalize_path(relative_path);
+        let root = self.root.read();
+        let components: Vec<&str> = normalized.split('/').filter(|s| !s.is_empty()).collect();
+
+        if components.is_empty() {
+            return None;
+        }
+
+        // Navigate to parent
+        let parent_folder: &FolderData = if components.len() == 1 {
+            &root
+        } else {
+            let parent_path: String = components[..components.len() - 1].join("/");
+            Self::navigate_to_folder(&root, &parent_path)?
+        };
+
+        // Find file
+        let file_name: &str = components[components.len() - 1];
+        let entry = parent_folder.find_child(file_name)?;
+
+        match entry {
+            crate::projection::types::FolderEntry::File(f) => Some(f.content_hash.clone()),
+            _ => None,
+        }
+    }
+
+    /// Get reference to root folder for iteration.
+    ///
+    /// # Returns
+    /// Reference to the root folder data.
+    pub fn root(&self) -> parking_lot::RwLockReadGuard<'_, FolderData> {
+        self.root.read()
     }
 
     /// Normalize path (remove leading/trailing slashes, convert backslashes).
@@ -494,5 +536,51 @@ mod tests {
         assert!(projection.is_path_projected("a/b/c/d").is_some());
         assert!(projection.is_path_projected("a/b/c/d/e").is_some());
         assert!(projection.is_path_projected("a/b/c/d/e/file.txt").is_some());
+    }
+
+    #[test]
+    fn test_get_content_hash_single() {
+        let manifest = create_test_manifest_v1();
+        let projection = ManifestProjection::from_manifest(&manifest).unwrap();
+
+        let hash = projection.get_content_hash("file1.txt").unwrap();
+        assert!(matches!(hash, ContentHash::Single(h) if h == "hash1"));
+
+        // Non-existent file
+        assert!(projection.get_content_hash("nonexistent.txt").is_none());
+
+        // Directory (not a file)
+        assert!(projection.get_content_hash("dir1").is_none());
+    }
+
+    #[test]
+    fn test_get_content_hash_chunked_v2() {
+        use rusty_attachments_model::v2025_12_04::{AssetManifest as ManifestV2, ManifestFilePath};
+
+        let chunked_file = ManifestFilePath::chunked(
+            "large_file.bin",
+            vec![
+                "chunk0_hash".to_string(),
+                "chunk1_hash".to_string(),
+                "chunk2_hash".to_string(),
+            ],
+            600 * 1024 * 1024, // 600MB
+            1000,
+        );
+
+        let manifest = ManifestV2::snapshot(vec![], vec![chunked_file]);
+        let manifest = Manifest::V2025_12_04_beta(manifest);
+        let projection = ManifestProjection::from_manifest(&manifest).unwrap();
+
+        let hash = projection.get_content_hash("large_file.bin").unwrap();
+        match hash {
+            ContentHash::Chunked(hashes) => {
+                assert_eq!(hashes.len(), 3);
+                assert_eq!(hashes[0], "chunk0_hash");
+                assert_eq!(hashes[1], "chunk1_hash");
+                assert_eq!(hashes[2], "chunk2_hash");
+            }
+            ContentHash::Single(_) => panic!("Expected chunked hash"),
+        }
     }
 }

@@ -31,10 +31,15 @@ crates/vfs-projfs/
 │   ├── callbacks/                      # Layer 2: Coordination
 │   │   ├── mod.rs
 │   │   ├── background.rs               # Background task runner
-│   │   └── vfs_callbacks.rs            # VFS callbacks
+│   │   ├── modified_paths.rs           # Diff manifest tracking
+│   │   ├── path_registry.rs            # Path↔inode mapping
+│   │   └── vfs_callbacks.rs            # VFS callbacks with dirty state
 │   │
 │   └── virtualizer/                    # Layer 3: ProjFS
 │       ├── mod.rs
+│       ├── callbacks.rs                # ProjFS callback implementations
+│       ├── enumeration.rs              # Active enumeration sessions
+│       ├── sendable.rs                 # Thread-safe context wrapper
 │       └── projfs.rs                   # ProjFS virtualizer
 │
 ├── examples/
@@ -64,15 +69,21 @@ Key features:
 
 ### Layer 2: Callbacks (Coordination)
 - **background.rs**: Background task runner for non-critical operations
-- **vfs_callbacks.rs**: Coordination between virtualizer and projection
+- **modified_paths.rs**: Database tracking modifications for diff manifest generation
+- **path_registry.rs**: Bidirectional path↔inode mapping with case-insensitive lookup
+- **vfs_callbacks.rs**: Coordination between virtualizer and projection with dirty state
 
 Key features:
 - Dirty state tracking (files and directories)
 - Background task queue for notifications
-- Memory pool coordination
-- S3 content fetching
+- Memory pool coordination with acquire/try_get pattern
+- S3 content fetching with caching
+- Modification tracking for diff manifest generation
 
 ### Layer 3: Virtualizer (ProjFS)
+- **callbacks.rs**: ProjFS callback implementations
+- **enumeration.rs**: Active enumeration session management
+- **sendable.rs**: Thread-safe ProjFS context wrapper
 - **projfs.rs**: Main ProjFS virtualizer implementation
 
 Key features:
@@ -123,32 +134,38 @@ Each layer only depends on the layer below it:
 
 ## Testing
 
-### Unit Tests
+### Unit Tests (60 tests)
 - Utility functions (wstr, filetime, compare)
 - Folder data structures and sorting
 - Manifest projection and caching
 - Background task runner
+- Path registry (case-insensitive, normalization)
+- Modified paths database (create, modify, delete, rename)
+- Active enumeration sessions
 
-### Integration Tests
+### Integration Tests (5 tests)
 - Virtualizer creation and lifecycle
 - Enumeration through callbacks
 - Path lookup (case-insensitive)
 - File info retrieval
-- Multiple virtualizers
 - Edge cases (empty manifest, deep nesting)
 
-## Current Status
+## Implementation Status
 
-### ✅ Implemented
+### ✅ Completed
 - Complete project structure
 - All data types and utilities
 - Manifest projection with caching
-- Callbacks coordination layer
-- Background task runner
+- **PathRegistry**: Bidirectional path↔inode mapping
+- **ModifiedPathsDatabase**: Diff manifest tracking
+- **VfsCallbacks dirty state integration**: Full write support wiring
+- **fetch_file_content with caching**: Memory pool acquire/try_get pattern
+- **V2 chunked file support**: Multi-chunk fetching via fetch_file_content_for_path
+- **Directory notification handlers**: on_dir_created, on_dir_deleted
 - ProjFS callback implementations (enumeration, placeholder info, file data)
 - Virtualizer lifecycle management
 - Memory pool v2 integration (DashMap-based)
-- Comprehensive tests
+- Comprehensive tests (60 unit + 5 integration)
 - Example and documentation
 
 ### 🔧 Runtime Dependencies
@@ -181,6 +198,12 @@ vfs.start()?;
 
 // Use filesystem...
 
+// Get modification summary for diff manifest
+let summary = vfs.callbacks().get_modification_summary();
+println!("Created files: {:?}", summary.created_files);
+println!("Modified files: {:?}", summary.modified_files);
+println!("Deleted files: {:?}", summary.deleted_files);
+
 // Unmount
 vfs.stop()?;
 ```
@@ -188,15 +211,6 @@ vfs.stop()?;
 ## References
 
 - Design document: `design/win-fs.md`
+- Remaining work: `design/win-fs-remaining-work.md`
 - VFSForGit: https://github.com/microsoft/VFSForGit
 - ProjFS docs: https://learn.microsoft.com/en-us/windows/win32/projfs/
-
-## Next Steps
-
-See `design/win-fs.md` "Remaining Implementation Work" section for detailed designs:
-
-1. Wire up background task handler for modification tracking
-2. Integrate DirtyFileManager for file write support
-3. Integrate DirtyDirManager for directory operations
-4. Add V2 chunked file fetching
-5. Performance testing and optimization

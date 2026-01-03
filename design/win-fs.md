@@ -1966,185 +1966,185 @@ unsafe impl Sync for SendableContext {}
 
 ## Remaining Implementation Work
 
-**Status: Core read path implemented, write path and optimizations pending**
+**Status: Core read path implemented, write path integration pending**
 
-### 1. Write Path (COW Layer)
+### Implementation Gap Analysis
 
-The dirty file/directory managers are stored but not fully wired into the callbacks.
+| Component | Design | Implemented | Gap |
+|-----------|--------|-------------|-----|
+| ManifestProjection | ✅ | ✅ | None |
+| FolderData/SortedFolderEntries | ✅ | ✅ | None |
+| ActiveEnumeration | ✅ | ✅ | None |
+| VfsCallbacks | ✅ | ⚠️ Partial | Dirty state not applied |
+| BackgroundTaskRunner | ✅ | ⚠️ Partial | Handler only logs |
+| ProjFS Callbacks | ✅ | ✅ | None |
+| AsyncExecutor integration | ✅ | ✅ | None |
+| DirtyFileManager | ✅ (vfs crate) | ✅ | Not wired to VfsCallbacks |
+| DirtyDirManager | ✅ (vfs crate) | ✅ | Not wired to VfsCallbacks |
+| MemoryPool v2 | ✅ (vfs crate) | ✅ | fetch_file_content doesn't use it |
+| AsyncExecutor integration | ✅ | ✅ | None |
+| DirtyFileManager | ✅ (vfs crate) | ✅ | Not wired to VfsCallbacks |
+| DirtyDirManager | ✅ (vfs crate) | ✅ | Not wired to VfsCallbacks |
+| MemoryPool v2 | ✅ (vfs crate) | ✅ | fetch_file_content doesn't use it |
+| V2 Chunked files | ✅ | ⚠️ Partial | ContentHash::Chunked exists, fetch not wired |
+| ModifiedPathsDatabase | ✅ | ❌ | Not implemented |
+| PathRegistry | ❌ | ❌ | New - needed for path↔inode mapping |
 
-#### 1.1 DirtyFileManager Integration
+### 1. VfsCallbacks - Dirty State Integration
 
+The `VfsCallbacks` struct has `dirty_files` and `dirty_dirs` but they're marked `#[allow(dead_code)]` and not used.
+
+**Current state:**
 ```rust
-// In vfs_callbacks.rs - wire up dirty file tracking
-impl VfsCallbacks {
-    /// Handle file write notification.
-    ///
-    /// # Arguments
-    /// * `relative_path` - Path to the modified file
-    /// * `data` - New file content
-    /// * `offset` - Write offset
-    pub fn on_file_write(
-        &self,
-        relative_path: &str,
-        data: &[u8],
-        offset: u64,
-    ) -> Result<(), VfsError> {
-        // Get or create inode for this path
-        let inode: u64 = self.get_or_create_inode(relative_path)?;
-        
-        // Calculate chunk index for V2 chunking
-        let chunk_size: u64 = self.memory_pool.config().block_size;
-        let chunk_index: u32 = (offset / chunk_size) as u32;
-        let chunk_offset: usize = (offset % chunk_size) as usize;
-        
-        // Write to memory pool (creates dirty block if needed)
-        if self.memory_pool.has_dirty(inode, chunk_index) {
-            self.memory_pool.modify_dirty_in_place_with_slice(
-                inode,
-                chunk_index,
-                chunk_offset,
-                data,
-            )?;
-        } else {
-            // First write to this chunk - copy from source or create new
-            self.create_dirty_chunk(inode, chunk_index, relative_path)?;
-            self.memory_pool.modify_dirty_in_place_with_slice(
-                inode,
-                chunk_index,
-                chunk_offset,
-                data,
-            )?;
-        }
-        
-        // Track in dirty file manager
-        self.dirty_files.mark_modified(relative_path, inode);
-        
-        Ok(())
+// vfs_callbacks.rs - TODOs not implemented
+pub fn get_projected_items(&self, relative_path: &str) -> Option<Arc<[ProjectedFileInfo]>> {
+    let items = self.projection.get_projected_items(relative_path)?;
+    // TODO: Apply dirty state (new files, deleted files, modified sizes)
+    Some(items)
+}
+
+pub fn is_path_projected(&self, relative_path: &str) -> Option<(String, bool)> {
+    if let Some(result) = self.projection.is_path_projected(relative_path) {
+        // TODO: Check if deleted in dirty managers
+        return Some(result);
     }
-    
-    /// Flush dirty file to disk cache.
-    ///
-    /// # Arguments
-    /// * `relative_path` - Path to flush
-    pub async fn flush_dirty_file(&self, relative_path: &str) -> Result<(), VfsError> {
-        let inode: u64 = match self.dirty_files.get_inode(relative_path) {
-            Some(id) => id,
-            None => return Ok(()), // Not dirty
-        };
-        
-        // Collect all dirty chunks for this inode
-        let chunk_count: u32 = self.dirty_files.get_chunk_count(inode);
-        
-        for chunk_index in 0..chunk_count {
-            if let Some(handle) = self.memory_pool.get_dirty(inode, chunk_index) {
-                // Write to disk cache
-                let cache_path: PathBuf = self.get_cache_path(relative_path, chunk_index);
-                let data: Vec<u8> = handle.data();
-                tokio::fs::write(&cache_path, &data).await?;
-                
-                // Mark as flushed in pool
-                self.memory_pool.mark_flushed(inode, chunk_index);
-            }
-        }
-        
-        Ok(())
-    }
+    // TODO: Check new files/dirs from dirty managers
+    None
+}
+
+pub async fn fetch_file_content(&self, content_hash: &str, _offset: u64, _length: u32) 
+    -> Result<Vec<u8>, VfsError> 
+{
+    // TODO: Check dirty manager first (COW files)
+    // TODO: Check memory pool
+    self.storage.retrieve(content_hash, hash_alg).await
 }
 ```
 
-#### 1.2 DirtyDirManager Integration
+**Required implementation:**
 
 ```rust
 impl VfsCallbacks {
-    /// Handle directory creation.
+    /// Apply dirty state to enumeration items.
     ///
     /// # Arguments
-    /// * `relative_path` - Path to new directory
-    pub fn on_dir_created(&self, relative_path: &str) {
-        self.dirty_dirs.mark_created(relative_path);
-        self.background_tasks.enqueue(BackgroundTask::FolderCreated(
-            relative_path.to_string(),
-        ));
-    }
-    
-    /// Handle directory deletion.
+    /// * `items` - Base items from projection
+    /// * `parent_path` - Parent directory path
     ///
-    /// # Arguments
-    /// * `relative_path` - Path to deleted directory
-    pub fn on_dir_deleted(&self, relative_path: &str) {
-        self.dirty_dirs.mark_deleted(relative_path);
-        self.background_tasks.enqueue(BackgroundTask::FolderDeleted(
-            relative_path.to_string(),
-        ));
+    /// # Returns
+    /// Items with dirty state applied.
+    fn apply_dirty_state(
+        &self,
+        items: &[ProjectedFileInfo],
+        parent_path: &str,
+    ) -> Vec<ProjectedFileInfo> {
+        let mut result: Vec<ProjectedFileInfo> = Vec::with_capacity(items.len());
+        
+        for item in items {
+            let item_path: String = if parent_path.is_empty() {
+                item.name.to_string()
+            } else {
+                format!("{}/{}", parent_path, item.name)
+            };
+            
+            // Check if deleted
+            if self.is_deleted(&item_path) {
+                continue;
+            }
+            
+            // Check if modified (update size/mtime)
+            if let Some(inode_id) = self.path_to_inode(&item_path) {
+                if let Some(size) = self.dirty_files.get_size(inode_id) {
+                    let mut modified_item: ProjectedFileInfo = item.clone();
+                    modified_item.size = size;
+                    if let Some(mtime) = self.dirty_files.get_mtime(inode_id) {
+                        modified_item.mtime = mtime;
+                    }
+                    result.push(modified_item);
+                    continue;
+                }
+            }
+            
+            result.push(item.clone());
+        }
+        
+        // Add new files from dirty manager
+        self.add_new_files(&mut result, parent_path);
+        
+        // Add new directories from dirty dir manager
+        self.add_new_dirs(&mut result, parent_path);
+        
+        // Re-sort after modifications
+        result.sort_by(|a, b| crate::util::compare::prj_file_name_compare(&a.name, &b.name));
+        
+        result
     }
     
     /// Check if path is deleted.
-    ///
-    /// # Arguments
-    /// * `relative_path` - Path to check
-    fn is_deleted(&self, relative_path: &str) -> bool {
-        self.dirty_files.is_deleted(relative_path) 
-            || self.dirty_dirs.is_deleted(relative_path)
+    fn is_deleted(&self, path: &str) -> bool {
+        // Check dirty files
+        if let Some(inode_id) = self.path_to_inode(path) {
+            if let Some(state) = self.dirty_files.get_state(inode_id) {
+                if state == DirtyState::Deleted {
+                    return true;
+                }
+            }
+            if let Some(state) = self.dirty_dirs.get_state(inode_id) {
+                if state == DirtyDirState::Deleted {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 ```
 
-### 2. Background Task Processing
+### 2. Memory Pool Integration for Content Fetching
 
-The `BackgroundTaskRunner` is implemented but the task handler needs to be wired up.
+`fetch_file_content` should check memory pool before hitting S3.
 
 ```rust
 impl VfsCallbacks {
-    /// Create callbacks with background task processing.
-    pub fn new(
-        projection: Arc<ManifestProjection>,
-        storage: Arc<dyn FileStore>,
-        memory_pool: Arc<MemoryPool>,
-        dirty_files: Arc<DirtyFileManager>,
-        dirty_dirs: Arc<DirtyDirManager>,
-    ) -> Self {
-        // Create background runner with handler
-        let modified_paths: Arc<RwLock<ModifiedPathsDatabase>> = 
-            Arc::new(RwLock::new(ModifiedPathsDatabase::new()));
-        let paths_clone: Arc<RwLock<ModifiedPathsDatabase>> = modified_paths.clone();
-        
-        let background_tasks = BackgroundTaskRunner::new(move |task: BackgroundTask| {
-            match task {
-                BackgroundTask::FileCreated(path) => {
-                    paths_clone.write().add_created(&path);
-                }
-                BackgroundTask::FileModified(path) => {
-                    paths_clone.write().add_modified(&path);
-                }
-                BackgroundTask::FileDeleted(path) => {
-                    paths_clone.write().add_deleted(&path);
-                }
-                BackgroundTask::FileRenamed { old_path, new_path } => {
-                    let mut db = paths_clone.write();
-                    db.add_deleted(&old_path);
-                    db.add_created(&new_path);
-                }
-                BackgroundTask::FolderCreated(path) => {
-                    paths_clone.write().add_dir_created(&path);
-                }
-                BackgroundTask::FolderDeleted(path) => {
-                    paths_clone.write().add_dir_deleted(&path);
-                }
+    /// Fetch file content with memory pool and dirty file support.
+    ///
+    /// # Arguments
+    /// * `content_hash` - Hash of content to fetch
+    /// * `offset` - Byte offset
+    /// * `length` - Bytes to read
+    pub async fn fetch_file_content(
+        &self,
+        content_hash: &str,
+        offset: u64,
+        length: u32,
+    ) -> Result<Vec<u8>, VfsError> {
+        // 1. Check memory pool first (read-only cached blocks)
+        let block_key = BlockKey::from_hash_hex(content_hash, 0);
+        if let Ok(handle) = self.memory_pool.get_or_fetch(
+            block_key,
+            || async {
+                // Fetch from S3 on cache miss
+                self.storage.retrieve(content_hash, self.projection.hash_algorithm()).await
             }
-        });
-        
-        Self {
-            projection,
-            storage,
-            memory_pool,
-            dirty_files,
-            dirty_dirs,
-            background_tasks,
-            modified_paths,
+        ).await {
+            // Return requested range
+            let data: &[u8] = handle.data();
+            let start: usize = offset as usize;
+            let end: usize = (offset + length as u64).min(data.len() as u64) as usize;
+            return Ok(data[start..end].to_vec());
         }
+        
+        // Fallback: direct S3 fetch
+        self.storage.retrieve(content_hash, self.projection.hash_algorithm()).await
     }
 }
+```
 
+### 3. Background Task Handler - ModifiedPathsDatabase
+
+The background task handler currently just logs. It should track modifications for diff manifest generation.
+
+```rust
 /// Database tracking modified paths for diff manifest generation.
 pub struct ModifiedPathsDatabase {
     created_files: HashSet<String>,
@@ -2153,65 +2153,117 @@ pub struct ModifiedPathsDatabase {
     created_dirs: HashSet<String>,
     deleted_dirs: HashSet<String>,
 }
+
+impl ModifiedPathsDatabase {
+    pub fn new() -> Self {
+        Self {
+            created_files: HashSet::new(),
+            modified_files: HashSet::new(),
+            deleted_files: HashSet::new(),
+            created_dirs: HashSet::new(),
+            deleted_dirs: HashSet::new(),
+        }
+    }
+    
+    pub fn add_created(&mut self, path: &str) {
+        self.deleted_files.remove(path);
+        self.created_files.insert(path.to_string());
+    }
+    
+    pub fn add_modified(&mut self, path: &str) {
+        if !self.created_files.contains(path) {
+            self.modified_files.insert(path.to_string());
+        }
+    }
+    
+    pub fn add_deleted(&mut self, path: &str) {
+        if self.created_files.remove(path) {
+            // Was created then deleted - no net change
+            return;
+        }
+        self.modified_files.remove(path);
+        self.deleted_files.insert(path.to_string());
+    }
+    
+    pub fn add_dir_created(&mut self, path: &str) {
+        self.deleted_dirs.remove(path);
+        self.created_dirs.insert(path.to_string());
+    }
+    
+    pub fn add_dir_deleted(&mut self, path: &str) {
+        if self.created_dirs.remove(path) {
+            return;
+        }
+        self.deleted_dirs.insert(path.to_string());
+    }
+}
+
+// Wire into VfsCallbacks::new()
+impl VfsCallbacks {
+    pub fn new(...) -> Self {
+        let modified_paths = Arc::new(RwLock::new(ModifiedPathsDatabase::new()));
+        let paths_clone = modified_paths.clone();
+        
+        let background_tasks = BackgroundTaskRunner::new(move |task: BackgroundTask| {
+            let mut db = paths_clone.write().unwrap();
+            match task {
+                BackgroundTask::FileCreated(path) => db.add_created(&path),
+                BackgroundTask::FileModified(path) => db.add_modified(&path),
+                BackgroundTask::FileDeleted(path) => db.add_deleted(&path),
+                BackgroundTask::FileRenamed { old_path, new_path } => {
+                    db.add_deleted(&old_path);
+                    db.add_created(&new_path);
+                }
+                BackgroundTask::FolderCreated(path) => db.add_dir_created(&path),
+                BackgroundTask::FolderDeleted(path) => db.add_dir_deleted(&path),
+            }
+        });
+        
+        Self {
+            // ...
+            modified_paths,
+            background_tasks,
+        }
+    }
+}
 ```
 
-### 3. V2 Chunked File Support
+### 4. V2 Chunked File Support
 
-The `ContentHash::Chunked` variant exists but chunk fetching isn't wired up.
+`ContentHash::Chunked` exists but fetching chunked files isn't implemented.
 
 ```rust
 impl VfsCallbacks {
     /// Fetch content for a file, handling chunked files.
-    ///
-    /// # Arguments
-    /// * `relative_path` - File path
-    /// * `offset` - Byte offset
-    /// * `length` - Bytes to read
-    ///
-    /// # Returns
-    /// File content bytes.
-    pub async fn fetch_file_content(
+    pub async fn fetch_file_content_chunked(
         &self,
-        relative_path: &str,
+        file_info: &ProjectedFileInfo,
         offset: u64,
         length: u32,
     ) -> Result<Vec<u8>, VfsError> {
-        // Check dirty files first (COW layer)
-        if let Some(inode) = self.dirty_files.get_inode(relative_path) {
-            return self.fetch_dirty_content(inode, offset, length).await;
-        }
-        
-        // Get file info from projection
-        let file_info: ProjectedFileInfo = self.projection
-            .get_file_info(relative_path)
-            .ok_or(VfsError::NotFound)?;
-        
         match &file_info.content_hash {
             Some(ContentHash::Single(hash)) => {
                 self.fetch_single_hash(hash, offset, length).await
             }
             Some(ContentHash::Chunked(chunk_hashes)) => {
-                self.fetch_chunked(chunk_hashes, offset, length).await
+                self.fetch_chunked(chunk_hashes, file_info.size, offset, length).await
             }
             None => Err(VfsError::NotFound),
         }
     }
     
     /// Fetch content from chunked file.
-    ///
-    /// # Arguments
-    /// * `chunk_hashes` - List of chunk hashes
-    /// * `offset` - Byte offset into file
-    /// * `length` - Bytes to read
     async fn fetch_chunked(
         &self,
         chunk_hashes: &[String],
+        file_size: u64,
         offset: u64,
         length: u32,
     ) -> Result<Vec<u8>, VfsError> {
         let chunk_size: u64 = CHUNK_SIZE_V2;
         let start_chunk: usize = (offset / chunk_size) as usize;
-        let end_chunk: usize = ((offset + length as u64 - 1) / chunk_size) as usize;
+        let end_offset: u64 = (offset + length as u64).min(file_size);
+        let end_chunk: usize = ((end_offset - 1) / chunk_size) as usize;
         
         let mut result: Vec<u8> = Vec::with_capacity(length as usize);
         
@@ -2227,17 +2279,16 @@ impl VfsCallbacks {
                 0
             };
             let read_end: u64 = if chunk_idx == end_chunk {
-                (offset + length as u64) - chunk_start
+                end_offset - chunk_start
             } else {
                 chunk_size
             };
-            let read_len: u64 = read_end - read_start;
             
-            // Fetch chunk (may hit memory pool)
+            // Fetch chunk
             let chunk_data: Vec<u8> = self.fetch_single_hash(
                 chunk_hash,
                 read_start,
-                read_len as u32,
+                (read_end - read_start) as u32,
             ).await?;
             
             result.extend_from_slice(&chunk_data);
@@ -2248,68 +2299,54 @@ impl VfsCallbacks {
 }
 ```
 
-### 4. Folder Helper Methods
+### 5. Path-to-Inode Mapping
 
-Currently marked `#[allow(dead_code)]` - wire into enumeration:
+VfsCallbacks needs a way to map paths to inode IDs for dirty state lookups.
 
 ```rust
-// In projection/folder.rs - use these in enumeration
-impl SortedFolderEntries {
-    /// Get entry count (used for pre-allocation).
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-    
-    /// Check if empty (used for empty directory handling).
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-}
-
-impl FolderData {
-    /// Get mutable children (used for dirty state application).
-    pub fn children_mut(&mut self) -> &mut SortedFolderEntries {
-        &mut self.children
-    }
-    
-    /// Check if included in projection (used for sparse checkout).
-    pub fn is_included(&self) -> bool {
-        self.is_included
+impl VfsCallbacks {
+    /// Map a relative path to its inode ID.
+    ///
+    /// # Arguments
+    /// * `path` - Relative path
+    ///
+    /// # Returns
+    /// Inode ID if path exists.
+    fn path_to_inode(&self, path: &str) -> Option<INodeId> {
+        // This requires either:
+        // 1. A path -> inode cache in VfsCallbacks
+        // 2. Access to INodeManager (add to VfsCallbacks)
+        // 3. Store inode IDs in ProjectedFileInfo
+        
+        // Option 3 is cleanest - extend ProjectedFileInfo:
+        // pub struct ProjectedFileInfo {
+        //     pub inode_id: Option<INodeId>,  // Add this
+        //     ...
+        // }
+        todo!("Implement path to inode mapping")
     }
 }
 ```
 
-### 5. ContentHash Helper Methods
+### 6. Notification Callback - Directory Tracking
+
+The notification callback handles file events but doesn't fully track directory events.
 
 ```rust
-// In projection/types.rs - use for V2 chunking
-impl ContentHash {
-    /// Check if this is chunked (V2 large files).
-    pub fn is_chunked(&self) -> bool {
-        matches!(self, ContentHash::Chunked(_))
+// In callbacks.rs notification_cb
+PRJ_NOTIFICATION_NEW_FILE_CREATED => {
+    if is_directory.as_bool() {
+        ctx.callbacks.on_dir_created(&relative_path);  // Add this method
+    } else {
+        ctx.callbacks.on_file_created(&relative_path);
     }
-    
-    /// Get chunk count (1 for single hash).
-    pub fn chunk_count(&self) -> usize {
-        match self {
-            ContentHash::Single(_) => 1,
-            ContentHash::Chunked(hashes) => hashes.len(),
-        }
-    }
-    
-    /// Get hash for chunk index.
-    ///
-    /// # Arguments
-    /// * `index` - Chunk index (0 for single hash)
-    ///
-    /// # Returns
-    /// Hash string for the chunk.
-    pub fn get_chunk_hash(&self, index: usize) -> Option<&str> {
-        match self {
-            ContentHash::Single(h) if index == 0 => Some(h),
-            ContentHash::Single(_) => None,
-            ContentHash::Chunked(hashes) => hashes.get(index).map(|s| s.as_str()),
-        }
+}
+
+PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_DELETED => {
+    if is_directory.as_bool() {
+        ctx.callbacks.on_dir_deleted(&relative_path);  // Add this method
+    } else {
+        ctx.callbacks.on_file_deleted(&relative_path);
     }
 }
 ```
@@ -2318,14 +2355,15 @@ impl ContentHash {
 
 ## Implementation Priority
 
-| Priority | Item | Effort | Impact |
-|----------|------|--------|--------|
-| 1 | Enable ProjFS feature | 5 min | Required for tests |
-| 2 | Background task handler | 1 hr | Enables modification tracking |
-| 3 | DirtyFileManager integration | 2 hr | Enables file writes |
-| 4 | DirtyDirManager integration | 1 hr | Enables directory operations |
-| 5 | V2 chunked file support | 2 hr | Large file support |
-| 6 | Memory optimizations | 4 hr | Performance (optional) |
+| Priority | Item | Effort | Impact | Dependencies |
+|----------|------|--------|--------|--------------|
+| 1 | ModifiedPathsDatabase | 1 hr | Enables diff manifest | None |
+| 2 | Memory pool in fetch_file_content | 1 hr | Performance | None |
+| 3 | Path-to-inode mapping | 2 hr | Required for dirty state | None |
+| 4 | apply_dirty_state in get_projected_items | 2 hr | Write support | #3 |
+| 5 | is_deleted check in is_path_projected | 30 min | Write support | #3 |
+| 6 | V2 chunked file fetching | 2 hr | Large file support | #2 |
+| 7 | Directory notification handlers | 30 min | Full write support | #1 |
 
 ---
 

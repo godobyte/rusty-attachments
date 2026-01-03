@@ -7,7 +7,6 @@ use std::thread::{self, JoinHandle};
 
 /// Background task types.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum BackgroundTask {
     /// File was created.
     FileCreated(String),
@@ -26,7 +25,6 @@ pub enum BackgroundTask {
 /// Background task runner for non-critical operations.
 ///
 /// Queues tasks to a background thread to keep ProjFS callbacks fast.
-#[allow(dead_code)]
 pub struct BackgroundTaskRunner {
     /// Task queue.
     queue: Arc<(Mutex<VecDeque<BackgroundTask>>, Condvar)>,
