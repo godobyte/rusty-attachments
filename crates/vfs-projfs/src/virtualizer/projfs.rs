@@ -7,9 +7,11 @@ use std::collections::HashSet;
 use std::ffi::c_void;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use parking_lot::RwLock;
 use rusty_attachments_model::Manifest;
+use rusty_attachments_vfs::diskcache::{ReadCache, ReadCacheOptions};
 use rusty_attachments_vfs::write::DirtyDirManager;
 use rusty_attachments_vfs::{AsyncExecutor, DirtyFileManager, FileStore, INodeManager, MemoryPool};
 use windows::core::PCWSTR;
@@ -22,7 +24,7 @@ use windows::Win32::Storage::ProjectedFileSystem::{
     PRJ_NOTIFY_PRE_DELETE, PRJ_NOTIFY_PRE_RENAME,
 };
 
-use crate::callbacks::VfsCallbacks;
+use crate::callbacks::{ModifiedPathsDatabase, ProjFsStatsCollector, VfsCallbacks};
 use crate::error::ProjFsError;
 use crate::options::{NotificationMask, ProjFsOptions, ProjFsWriteOptions};
 use crate::projection::ManifestProjection;
@@ -38,10 +40,18 @@ pub struct WritableProjFs {
     callbacks: Arc<VfsCallbacks>,
     /// Async executor for bridging sync callbacks to async I/O.
     executor: Arc<AsyncExecutor>,
+    /// Memory pool for content caching.
+    memory_pool: Arc<MemoryPool>,
+    /// Modified paths database for stats.
+    modified_paths: Arc<ModifiedPathsDatabase>,
+    /// Optional disk-based read cache.
+    read_cache: Option<Arc<ReadCache>>,
     /// Configuration options.
     options: ProjFsOptions,
     /// Whether virtualization is started.
     started: RwLock<bool>,
+    /// VFS start time (for stats).
+    start_time: Instant,
     /// ProjFS namespace virtualization context (set after start).
     namespace_context: RwLock<Option<PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT>>,
     /// Callback context (must outlive virtualization).
@@ -97,21 +107,45 @@ impl WritableProjFs {
         let dirty_dirs: Arc<DirtyDirManager> =
             Arc::new(DirtyDirManager::new(inodes.clone(), original_dirs));
 
+        // Create modified paths database (shared with VfsCallbacks for stats)
+        let modified_paths = Arc::new(ModifiedPathsDatabase::new());
+
         let callbacks: Arc<VfsCallbacks> = Arc::new(VfsCallbacks::new(
             projection,
             storage,
-            memory_pool,
+            memory_pool.clone(),
             dirty_files,
             dirty_dirs,
         ));
+
+        // Initialize read cache if configured
+        let read_cache: Option<Arc<ReadCache>> = if options.read_cache.enabled {
+            let cache_options = ReadCacheOptions {
+                cache_dir: options.read_cache.cache_dir.clone(),
+                write_through: options.read_cache.write_through,
+            };
+            let cache = ReadCache::new(cache_options).map_err(|e| ProjFsError::Io(
+                std::io::Error::other(format!("Failed to create read cache: {}", e))
+            ))?;
+            let cache_arc = Arc::new(cache);
+            // Wire read cache to callbacks
+            callbacks.set_read_cache(cache_arc.clone());
+            Some(cache_arc)
+        } else {
+            None
+        };
 
         let executor: Arc<AsyncExecutor> = Arc::new(AsyncExecutor::new(options.executor_config()));
 
         Ok(Self {
             callbacks,
             executor,
+            memory_pool,
+            modified_paths,
+            read_cache,
             options,
             started: RwLock::new(false),
+            start_time: Instant::now(),
             namespace_context: RwLock::new(None),
             callback_context_ptr: RwLock::new(None),
         })
@@ -226,6 +260,30 @@ impl WritableProjFs {
     /// Get virtualization root path.
     pub fn root_path(&self) -> &PathBuf {
         &self.options.root_path
+    }
+
+    /// Get reference to the read cache (if enabled).
+    ///
+    /// # Returns
+    /// Optional reference to the disk-based read cache.
+    pub fn read_cache(&self) -> Option<&Arc<ReadCache>> {
+        self.read_cache.as_ref()
+    }
+
+    /// Get a stats collector for monitoring.
+    ///
+    /// The collector can be cloned and used from another thread
+    /// to periodically query statistics.
+    ///
+    /// # Returns
+    /// Stats collector instance.
+    pub fn stats_collector(&self) -> ProjFsStatsCollector {
+        ProjFsStatsCollector::new(
+            self.memory_pool.clone(),
+            self.modified_paths.clone(),
+            self.read_cache.clone(),
+            self.start_time,
+        )
     }
 }
 

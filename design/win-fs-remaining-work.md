@@ -80,8 +80,8 @@ For job attachments (read-mostly workload), the notification-based approach is s
 | Memory pool | ✅ | ✅ | Full parity |
 | Async executor | ✅ | ✅ | Full parity |
 | Diff manifest | ✅ | ✅ | Via ModifiedPathsDatabase |
-| Read cache | ✅ | ❌ | Optional enhancement |
-| Stats collection | ✅ | ❌ | Optional enhancement |
+| Read cache | ✅ | ✅ | Reuses shared ReadCache from vfs crate |
+| Stats collection | ✅ | ✅ | ProjFsStatsCollector with display_grid() |
 
 ---
 
@@ -146,11 +146,11 @@ For job attachments (read-mostly workload), the notification-based approach is s
 
 | Category | Count | Status |
 |----------|-------|--------|
-| Unit tests | 65 | ✅ All passing |
+| Unit tests | 68 | ✅ All passing |
 | Integration tests | 5 | ✅ All passing |
 | Clippy warnings | 0 | ✅ Clean |
 
-**Total: 70 tests passing**
+**Total: 73 tests passing**
 
 ---
 
@@ -164,6 +164,7 @@ For job attachments (read-mostly workload), the notification-based approach is s
 | `virtualizer/sendable.rs` | Thread-safe wrapper for ProjFS context |
 | `callbacks/vfs_callbacks.rs` | Coordination layer for all operations |
 | `callbacks/path_registry.rs` | Bidirectional path↔inode mapping |
+| `callbacks/stats.rs` | ProjFsStats and ProjFsStatsCollector |
 | `callbacks/modified_paths.rs` | Tracks file/dir modifications |
 | `callbacks/background.rs` | Background task runner |
 | `projection/manifest.rs` | Manifest to folder tree projection |
@@ -172,7 +173,7 @@ For job attachments (read-mostly workload), the notification-based approach is s
 | `util/wstr.rs` | UTF-8 ↔ UTF-16 conversion |
 | `util/filetime.rs` | SystemTime ↔ FILETIME conversion |
 | `util/compare.rs` | ProjFS-compatible name comparison |
-| `options.rs` | Configuration options |
+| `options.rs` | Configuration options (including ReadCacheConfig) |
 | `error.rs` | Error types |
 | `lib.rs` | Public API exports |
 
@@ -180,33 +181,7 @@ For job attachments (read-mostly workload), the notification-based approach is s
 
 ## Optional Future Enhancements
 
-### 1. Read Cache Integration
-
-Add optional disk-based read cache like FUSE:
-
-```rust
-pub struct ProjFsOptions {
-    pub read_cache: Option<ReadCacheOptions>,
-}
-```
-
-**Effort:** ~2 hours | **Benefit:** Reduced S3 calls for repeated reads
-
-### 2. Stats Collection API
-
-Add monitoring similar to FUSE's `VfsStatsCollector`:
-
-```rust
-pub struct ProjFsStatsCollector {
-    pool: Arc<MemoryPool>,
-    modified_paths: Arc<ModifiedPathsDatabase>,
-    start_time: Instant,
-}
-```
-
-**Effort:** ~1 hour | **Benefit:** Operational visibility
-
-### 3. Pre-delete/Pre-rename Veto
+### 1. Pre-delete/Pre-rename Veto
 
 Add policy-based veto for notifications:
 

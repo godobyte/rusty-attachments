@@ -7,7 +7,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use parking_lot::RwLock;
 use rusty_attachments_model::HashAlgorithm;
+use rusty_attachments_vfs::diskcache::ReadCache;
 use rusty_attachments_vfs::memory_pool_v2::BlockKey;
 use rusty_attachments_vfs::write::DirtyDirManager;
 use rusty_attachments_vfs::{DirtyFileManager, FileStore, MemoryPool, VfsError};
@@ -40,6 +42,8 @@ pub struct VfsCallbacks {
     path_registry: Arc<PathRegistry>,
     /// Modified paths database for diff manifest.
     modified_paths: Arc<ModifiedPathsDatabase>,
+    /// Optional disk-based read cache for S3 content.
+    read_cache: RwLock<Option<Arc<ReadCache>>>,
 }
 
 impl VfsCallbacks {
@@ -105,7 +109,27 @@ impl VfsCallbacks {
             dirty_dirs,
             path_registry,
             modified_paths,
+            read_cache: RwLock::new(None),
         }
+    }
+
+    /// Set the disk-based read cache for S3 content.
+    ///
+    /// When set, fetched content is written through to disk for
+    /// subsequent reads without hitting S3.
+    ///
+    /// # Arguments
+    /// * `cache` - Read cache instance
+    pub fn set_read_cache(&self, cache: Arc<ReadCache>) {
+        *self.read_cache.write() = Some(cache);
+    }
+
+    /// Get reference to the read cache (if enabled).
+    ///
+    /// # Returns
+    /// Optional reference to the read cache.
+    pub fn read_cache(&self) -> Option<Arc<ReadCache>> {
+        self.read_cache.read().clone()
     }
 
     /// Get projected items for enumeration with dirty state applied.
@@ -476,6 +500,9 @@ impl VfsCallbacks {
 
     /// Fetch content for a single hash with caching.
     ///
+    /// Checks: 1) Memory pool cache, 2) Disk cache, 3) S3 CAS
+    /// Writes through to disk cache on S3 fetch.
+    ///
     /// # Arguments
     /// * `hash` - Content hash
     /// * `offset` - Byte offset within the content
@@ -491,13 +518,23 @@ impl VfsCallbacks {
     ) -> Result<Vec<u8>, VfsError> {
         let key = BlockKey::from_hash_hex(hash, 0);
 
-        // Try cache first (synchronous)
+        // 1. Try memory pool cache first (synchronous, fastest)
         if let Some(handle) = self.memory_pool.try_get(&key) {
             let data: Vec<u8> = self.extract_range(handle.data(), offset, length);
             return Ok(data);
         }
 
-        // Fetch from S3 with caching via acquire
+        // 2. Try disk cache (if enabled)
+        let read_cache: Option<Arc<ReadCache>> = self.read_cache.read().clone();
+        if let Some(ref cache) = read_cache {
+            if let Ok(Some(data)) = cache.get(hash) {
+                // Found in disk cache - extract range and return
+                let result: Vec<u8> = self.extract_range(&data, offset, length);
+                return Ok(result);
+            }
+        }
+
+        // 3. Fetch from S3 with memory pool caching via acquire
         let hash_alg: HashAlgorithm = self.projection.hash_algorithm();
         let storage: Arc<dyn FileStore> = self.storage.clone();
         let hash_clone: String = hash.to_string();
@@ -510,6 +547,11 @@ impl VfsCallbacks {
                     .map_err(|e| rusty_attachments_vfs::memory_pool_v2::MemoryPoolError::RetrievalFailed(e.to_string()))
             }
         }).await.map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
+
+        // 4. Write through to disk cache (best-effort, ignore errors)
+        if let Some(ref cache) = read_cache {
+            let _ = cache.put(hash, handle.data());
+        }
 
         // Extract requested range
         let data: Vec<u8> = self.extract_range(handle.data(), offset, length);

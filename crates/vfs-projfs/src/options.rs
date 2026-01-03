@@ -6,6 +6,55 @@ use std::time::Duration;
 use rusty_attachments_vfs::{ExecutorConfig, MemoryPoolConfig};
 use windows::core::GUID;
 
+/// Configuration for disk-based read cache.
+#[derive(Debug, Clone)]
+pub struct ReadCacheConfig {
+    /// Whether disk caching is enabled.
+    pub enabled: bool,
+    /// Directory for CAS cache storage.
+    pub cache_dir: PathBuf,
+    /// Whether to write through to disk on fetch.
+    pub write_through: bool,
+}
+
+impl Default for ReadCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cache_dir: PathBuf::from("C:\\Temp\\vfs-read-cache"),
+            write_through: true,
+        }
+    }
+}
+
+impl ReadCacheConfig {
+    /// Create a disabled read cache config.
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Default::default()
+        }
+    }
+
+    /// Create config with custom cache directory.
+    ///
+    /// # Arguments
+    /// * `cache_dir` - Directory for CAS cache storage
+    pub fn with_cache_dir(mut self, cache_dir: PathBuf) -> Self {
+        self.cache_dir = cache_dir;
+        self
+    }
+
+    /// Enable or disable the cache.
+    ///
+    /// # Arguments
+    /// * `enabled` - Whether to enable disk caching
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+}
+
 /// Configuration for ProjFS virtualizer.
 #[derive(Debug, Clone)]
 pub struct ProjFsOptions {
@@ -32,6 +81,9 @@ pub struct ProjFsOptions {
 
     /// Notifications to receive.
     pub notifications: NotificationMask,
+
+    /// Read cache configuration (disk cache for S3 content).
+    pub read_cache: ReadCacheConfig,
 }
 
 impl ProjFsOptions {
@@ -49,6 +101,7 @@ impl ProjFsOptions {
             concurrent_thread_count: 0,
             memory_pool: MemoryPoolConfig::default(),
             notifications: NotificationMask::for_writable(),
+            read_cache: ReadCacheConfig::default(),
         }
     }
 
@@ -85,6 +138,15 @@ impl ProjFsOptions {
     /// * `mask` - Notification mask
     pub fn with_notifications(mut self, mask: NotificationMask) -> Self {
         self.notifications = mask;
+        self
+    }
+
+    /// Set read cache configuration.
+    ///
+    /// # Arguments
+    /// * `config` - Read cache configuration
+    pub fn with_read_cache(mut self, config: ReadCacheConfig) -> Self {
+        self.read_cache = config;
         self
     }
 

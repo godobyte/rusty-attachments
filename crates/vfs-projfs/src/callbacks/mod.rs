@@ -6,8 +6,10 @@
 mod background;
 mod modified_paths;
 mod path_registry;
+mod stats;
 mod vfs_callbacks;
 
 pub use modified_paths::{ModificationSummary, ModifiedPathsDatabase};
 pub use path_registry::PathRegistry;
+pub use stats::{ProjFsStats, ProjFsStatsCollector};
 pub use vfs_callbacks::VfsCallbacks;

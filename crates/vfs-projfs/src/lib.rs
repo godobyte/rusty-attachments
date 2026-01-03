@@ -41,19 +41,23 @@ mod util;
 mod virtualizer;
 
 pub use error::ProjFsError;
-pub use options::{NotificationMask, ProjFsOptions, ProjFsWriteOptions};
+pub use options::{NotificationMask, ProjFsOptions, ProjFsWriteOptions, ReadCacheConfig};
 pub use virtualizer::WritableProjFs;
 
 // Export callbacks layer types for advanced usage
-pub use callbacks::{ModificationSummary, ModifiedPathsDatabase, PathRegistry, VfsCallbacks};
+pub use callbacks::{
+    ModificationSummary, ModifiedPathsDatabase, PathRegistry, ProjFsStats, ProjFsStatsCollector,
+    VfsCallbacks,
+};
 
 // Re-export shared VFS primitives for convenience
 pub use rusty_attachments_vfs::{
     DirtyFileManager, DirtySummary, FileStore, INodeManager, MemoryPool,
-    MemoryPoolConfig, PrefetchStrategy, ReadAheadOptions, ReadCacheConfig, StorageClientAdapter,
+    MemoryPoolConfig, PrefetchStrategy, ReadAheadOptions, StorageClientAdapter,
     TimeoutOptions, VfsError, WritableVfsStats, WritableVfsStatsCollector,
 };
 pub use rusty_attachments_vfs::write::DirtyDirManager;
+pub use rusty_attachments_vfs::diskcache::ReadCache;
 
 // Re-export storage types
 pub use rusty_attachments_storage::{S3Location, StorageSettings};
