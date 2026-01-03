@@ -4,6 +4,10 @@
 //! Projected File System (ProjFS). The design is heavily influenced by VFSForGit,
 //! a production-grade ProjFS implementation.
 //!
+//! # Platform Support
+//!
+//! This crate is Windows-only. It will fail to compile on other platforms.
+//!
 //! # Architecture
 //!
 //! ```text
@@ -25,32 +29,28 @@
 //! vfs.start()?;
 //! ```
 
-#[cfg(target_os = "windows")]
+// This crate is Windows-only
+#[cfg(not(target_os = "windows"))]
+compile_error!("rusty-attachments-vfs-projfs is only supported on Windows");
+
 mod callbacks;
-#[cfg(target_os = "windows")]
 mod error;
-#[cfg(target_os = "windows")]
 mod options;
-#[cfg(target_os = "windows")]
 mod projection;
-#[cfg(target_os = "windows")]
 mod util;
-#[cfg(target_os = "windows")]
 mod virtualizer;
 
-#[cfg(target_os = "windows")]
 pub use error::ProjFsError;
-#[cfg(target_os = "windows")]
 pub use options::{NotificationMask, ProjFsOptions, ProjFsWriteOptions};
-#[cfg(target_os = "windows")]
 pub use virtualizer::WritableProjFs;
 
 // Re-export shared VFS primitives for convenience
 pub use rusty_attachments_vfs::{
-    DirtyFileManager, DirtyDirManager, DirtySummary, FileStore, INodeManager, MemoryPool,
+    DirtyFileManager, DirtySummary, FileStore, INodeManager, MemoryPool,
     MemoryPoolConfig, PrefetchStrategy, ReadAheadOptions, ReadCacheConfig, StorageClientAdapter,
     TimeoutOptions, VfsError, WritableVfsStats, WritableVfsStatsCollector,
 };
+pub use rusty_attachments_vfs::write::DirtyDirManager;
 
 // Re-export storage types
 pub use rusty_attachments_storage::{S3Location, StorageSettings};
@@ -59,19 +59,9 @@ pub use rusty_attachments_storage_crt::CrtStorageClient;
 /// Check if ProjFS is available on this system.
 ///
 /// # Returns
-/// True if running on Windows where ProjFS is available.
-#[cfg(target_os = "windows")]
+/// True on Windows where ProjFS is available.
 pub fn projfs_available() -> bool {
     // ProjFS is available on Windows 10 1809+ and Windows Server 2019+
-    // For now, assume it's available on Windows - runtime will fail if not
+    // For now, assume it's available - runtime will fail if not enabled
     true
-}
-
-/// Check if ProjFS is available on this system.
-///
-/// # Returns
-/// Always false on non-Windows platforms.
-#[cfg(not(target_os = "windows"))]
-pub fn projfs_available() -> bool {
-    false
 }

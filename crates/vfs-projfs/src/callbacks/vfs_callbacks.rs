@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use rusty_attachments_model::HashAlgorithm;
-use rusty_attachments_vfs::{DirtyDirManager, DirtyFileManager, FileStore, MemoryPool};
+use rusty_attachments_vfs::write::DirtyDirManager;
+use rusty_attachments_vfs::{DirtyFileManager, FileStore, MemoryPool};
 
 use crate::callbacks::background::{BackgroundTask, BackgroundTaskRunner};
 use crate::projection::types::ProjectedFileInfo;
@@ -22,8 +23,10 @@ pub struct VfsCallbacks {
     /// Memory pool for caching fetched content.
     memory_pool: Arc<MemoryPool>,
     /// Dirty file manager (COW layer).
+    #[allow(dead_code)]
     dirty_files: Arc<DirtyFileManager>,
     /// Dirty directory manager.
+    #[allow(dead_code)]
     dirty_dirs: Arc<DirtyDirManager>,
 }
 
@@ -69,7 +72,7 @@ impl VfsCallbacks {
     /// Arc-wrapped slice of items to enumerate (shared, no cloning).
     pub fn get_projected_items(&self, relative_path: &str) -> Option<Arc<[ProjectedFileInfo]>> {
         // Get base items from projection
-        let items = self.projection.get_projected_items(relative_path)?;
+        let items: Arc<[ProjectedFileInfo]> = self.projection.get_projected_items(relative_path)?;
 
         // TODO: Apply dirty state (new files, deleted files, modified sizes)
         // For now, return projection items directly
@@ -109,16 +112,16 @@ impl VfsCallbacks {
     ///
     /// # Arguments
     /// * `content_hash` - Hash of content to fetch
-    /// * `offset` - Byte offset
-    /// * `length` - Bytes to read
+    /// * `_offset` - Byte offset (reserved for future use)
+    /// * `_length` - Bytes to read (reserved for future use)
     ///
     /// # Returns
     /// File content bytes.
     pub async fn fetch_file_content(
         &self,
         content_hash: &str,
-        offset: u64,
-        length: u32,
+        _offset: u64,
+        _length: u32,
     ) -> Result<Vec<u8>, rusty_attachments_vfs::VfsError> {
         // TODO: Check dirty manager first (COW files)
         // TODO: Check memory pool

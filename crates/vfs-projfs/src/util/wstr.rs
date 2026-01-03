@@ -1,8 +1,6 @@
 //! Wide string conversion utilities.
 
 use smallvec::SmallVec;
-
-#[cfg(target_os = "windows")]
 use windows::core::PCWSTR;
 
 use crate::error::ProjFsError;
@@ -16,7 +14,6 @@ use crate::error::ProjFsError;
 ///
 /// # Returns
 /// UTF-8 string.
-#[cfg(target_os = "windows")]
 pub fn pcwstr_to_string(s: PCWSTR) -> Result<String, ProjFsError> {
     if s.is_null() {
         return Ok(String::new());
@@ -63,6 +60,7 @@ pub fn pcwstr_to_string(s: PCWSTR) -> Result<String, ProjFsError> {
 ///
 /// # Returns
 /// UTF-8 string.
+#[allow(dead_code)] // Used in tests
 pub fn wide_to_string(wide: &[u16]) -> Result<String, ProjFsError> {
     String::from_utf16(wide).map_err(|e| ProjFsError::PathConversion(e.to_string()))
 }

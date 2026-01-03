@@ -5,8 +5,6 @@
 
 mod folder;
 mod manifest;
-mod types;
+pub mod types;
 
-pub use folder::{FolderData, SortedFolderEntries};
 pub use manifest::ManifestProjection;
-pub use types::{ContentHash, FileData, FolderEntry, ProjectedFileInfo, SymlinkData};

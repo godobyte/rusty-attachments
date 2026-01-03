@@ -8,6 +8,7 @@ use crate::util::prj_file_name_compare;
 /// Sorted collection of folder entries.
 ///
 /// Maintains entries in ProjFS sort order for efficient enumeration.
+#[derive(Clone, Debug)]
 pub struct SortedFolderEntries {
     /// Entries sorted by name using PrjFileNameCompare order.
     entries: Vec<FolderEntry>,
@@ -41,11 +42,13 @@ impl SortedFolderEntries {
     }
 
     /// Get entry count.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Check if empty.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -66,7 +69,7 @@ impl SortedFolderEntries {
                     f.mtime,
                     f.executable,
                 ),
-                FolderEntry::Folder(f) => ProjectedFileInfo::folder(f.name.clone()),
+                FolderEntry::Folder(f) => ProjectedFileInfo::folder(f.name().to_string()),
                 FolderEntry::Symlink(s) => ProjectedFileInfo::symlink(s.name.clone(), s.target.clone()),
             })
             .collect();
@@ -82,12 +85,14 @@ impl Default for SortedFolderEntries {
 }
 
 /// Data about a folder in the projection.
+#[derive(Clone, Debug)]
 pub struct FolderData {
     /// Folder name (empty for root).
     name: String,
     /// Sorted child entries.
     children: SortedFolderEntries,
     /// Whether this folder is included in projection.
+    #[allow(dead_code)]
     is_included: bool,
 }
 
@@ -120,11 +125,13 @@ impl FolderData {
     }
 
     /// Get mutable children.
+    #[allow(dead_code)]
     pub fn children_mut(&mut self) -> &mut SortedFolderEntries {
         &mut self.children
     }
 
     /// Check if included in projection.
+    #[allow(dead_code)]
     pub fn is_included(&self) -> bool {
         self.is_included
     }
@@ -168,24 +175,23 @@ impl FolderData {
             .children
             .entries
             .iter()
-            .position(|e| matches!(e, FolderEntry::Folder(f) if f.name.eq_ignore_ascii_case(name)));
+            .position(|e| matches!(e, FolderEntry::Folder(f) if f.name().eq_ignore_ascii_case(name)));
 
-        if let Some(idx) = existing_idx {
-            if let FolderEntry::Folder(ref mut folder) = self.children.entries[idx] {
-                return folder;
+        let idx: usize = match existing_idx {
+            Some(idx) => idx,
+            None => {
+                // Create new folder
+                let new_folder = FolderData::new(name.to_string());
+                self.children.add(FolderEntry::Folder(Box::new(new_folder)));
+                self.children.entries.len() - 1
             }
-        }
+        };
 
-        // Create new folder
-        let new_folder = FolderData::new(name.to_string());
-        self.children.add(FolderEntry::Folder(Box::new(new_folder)));
-
-        // Return reference to the newly added folder
-        let last_idx: usize = self.children.entries.len() - 1;
-        if let FolderEntry::Folder(ref mut folder) = self.children.entries[last_idx] {
-            folder
+        // Return reference to the folder at idx
+        if let FolderEntry::Folder(ref mut folder) = self.children.entries[idx] {
+            folder.as_mut()
         } else {
-            unreachable!("Just added a folder")
+            unreachable!("Expected folder at index")
         }
     }
 
@@ -209,7 +215,7 @@ impl FolderData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::projection::types::{ContentHash, FileData, SymlinkData};
+    use crate::projection::types::{ContentHash, FileData};
     use std::time::SystemTime;
 
     #[test]

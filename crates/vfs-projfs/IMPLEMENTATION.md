@@ -93,7 +93,11 @@ Each layer only depends on the layer below it:
 - **Arc-wrapped slices**: Enumeration data shared, not cloned
 - **Stack allocation**: Paths <256 chars use stack (SmallVec)
 - **Path caching**: Frequently accessed directories cached
-- **Unified memory pool**: Global memory limit across all caches
+- **Memory Pool v2**: DashMap-based implementation with lock-free hot paths
+  - `blocks: DashMap<PoolBlockId, Arc<PoolBlock>>` for concurrent block access
+  - `key_index: DashMap<BlockKey, PoolBlockId>` for lock-free lookups
+  - `pending_fetches: DashMap<BlockKey, SharedFetch>` for deduplication
+  - `lru_state: Mutex<LruState>` for cold path eviction only
 
 ### 3. Threading Model
 - **AsyncExecutor**: Reused from FUSE implementation
@@ -141,39 +145,15 @@ Each layer only depends on the layer below it:
 - Manifest projection with caching
 - Callbacks coordination layer
 - Background task runner
-- Basic virtualizer structure
+- ProjFS callback implementations (enumeration, placeholder info, file data)
+- Virtualizer lifecycle management
+- Memory pool v2 integration (DashMap-based)
 - Comprehensive tests
 - Example and documentation
 
-### 🚧 TODO (Windows-specific)
-The following require Windows-specific ProjFS API calls:
-
-1. **ProjFS Callback Implementations**:
-   - `StartDirectoryEnumerationCallback`
-   - `GetDirectoryEnumerationCallback`
-   - `EndDirectoryEnumerationCallback`
-   - `GetPlaceholderInfoCallback`
-   - `GetFileDataCallback`
-   - `QueryFileNameCallback`
-   - `NotificationCallback`
-   - `CancelCommandCallback`
-
-2. **Virtualization Lifecycle**:
-   - `PrjMarkDirectoryAsPlaceholder`
-   - `PrjStartVirtualizing`
-   - `PrjStopVirtualizing`
-
-3. **Data Writing**:
-   - `PrjWritePlaceholderInfo`
-   - `PrjWriteFileData`
-   - `PrjAllocateAlignedBuffer`
-   - `PrjFreeAlignedBuffer`
-
-4. **Enumeration**:
-   - `PrjFillDirEntryBuffer`
-   - `ActiveEnumeration` state management
-
-These implementations follow the patterns documented in `design/win-fs.md` and can be added when Windows development environment is available.
+### 🔧 Runtime Dependencies
+- AWS CRT DLLs required for storage client tests
+- ProjFS Windows feature must be enabled
 
 ## Usage Example
 
@@ -213,9 +193,10 @@ vfs.stop()?;
 
 ## Next Steps
 
-1. Implement Windows-specific ProjFS callbacks
-2. Add ActiveEnumeration state management
-3. Implement aligned buffer handling
-4. Add comprehensive Windows integration tests
+See `design/win-fs.md` "Remaining Implementation Work" section for detailed designs:
+
+1. Wire up background task handler for modification tracking
+2. Integrate DirtyFileManager for file write support
+3. Integrate DirtyDirManager for directory operations
+4. Add V2 chunked file fetching
 5. Performance testing and optimization
-6. Add telemetry and metrics

@@ -2,7 +2,6 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[cfg(target_os = "windows")]
 use windows::Win32::Foundation::FILETIME;
 
 /// Convert SystemTime to FILETIME.
@@ -15,7 +14,6 @@ use windows::Win32::Foundation::FILETIME;
 ///
 /// # Returns
 /// FILETIME structure.
-#[cfg(target_os = "windows")]
 pub fn systemtime_to_filetime(time: SystemTime) -> FILETIME {
     // FILETIME epoch: January 1, 1601
     // Unix epoch: January 1, 1970
@@ -44,7 +42,6 @@ pub fn systemtime_to_filetime(time: SystemTime) -> FILETIME {
 ///
 /// # Returns
 /// System time.
-#[cfg(target_os = "windows")]
 pub fn filetime_to_systemtime(filetime: FILETIME) -> SystemTime {
     const FILETIME_UNIX_DIFF_SECS: u64 = 11644473600;
     const INTERVALS_PER_SEC: u64 = 10_000_000;
@@ -68,7 +65,6 @@ pub fn filetime_to_systemtime(filetime: FILETIME) -> SystemTime {
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn test_systemtime_to_filetime_epoch() {
         let filetime: FILETIME = systemtime_to_filetime(UNIX_EPOCH);
@@ -78,7 +74,6 @@ mod tests {
         assert_eq!(intervals, 116444736000000000);
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn test_filetime_to_systemtime_epoch() {
         let filetime = FILETIME {
@@ -89,7 +84,6 @@ mod tests {
         assert_eq!(time, UNIX_EPOCH);
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn test_roundtrip() {
         let now: SystemTime = SystemTime::now();

@@ -107,12 +107,12 @@ impl ManifestProjection {
     ) -> Result<(), ProjFsError> {
         // Create explicit directories first
         for dir in &manifest.dirs {
-            if dir.deleted {
+            if dir.delete {
                 continue;
             }
 
             let path: &str = &dir.name;
-            let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            let components: Vec<&str> = path.split('/').filter(|s: &&str| !s.is_empty()).collect();
 
             if components.is_empty() {
                 continue;
@@ -127,12 +127,12 @@ impl ManifestProjection {
 
         // Add files and symlinks
         for entry in &manifest.files {
-            if entry.deleted {
+            if entry.delete {
                 continue;
             }
 
-            let path: &str = &entry.path;
-            let components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            let path: &str = &entry.name;
+            let components: Vec<&str> = path.split('/').filter(|s: &&str| !s.is_empty()).collect();
 
             if components.is_empty() {
                 continue;
@@ -145,7 +145,9 @@ impl ManifestProjection {
             }
 
             let file_name: &str = components[components.len() - 1];
-            let mtime: SystemTime = UNIX_EPOCH + Duration::from_secs(entry.mtime as u64);
+            let mtime: SystemTime = UNIX_EPOCH + Duration::from_secs(
+                entry.mtime.unwrap_or(0).max(0) as u64
+            );
 
             // Check if symlink
             if let Some(ref target) = entry.symlink_target {
@@ -158,15 +160,15 @@ impl ManifestProjection {
                 let content_hash: ContentHash = if let Some(ref chunks) = entry.chunkhashes {
                     ContentHash::Chunked(chunks.clone())
                 } else {
-                    ContentHash::Single(entry.hash.clone())
+                    ContentHash::Single(entry.hash.clone().unwrap_or_default())
                 };
 
                 current_folder.add_file(FileData {
                     name: file_name.to_string(),
-                    size: entry.size,
+                    size: entry.size.unwrap_or(0),
                     content_hash,
                     mtime,
-                    executable: entry.executable.unwrap_or(false),
+                    executable: entry.runnable,
                 });
             }
         }
@@ -328,10 +330,10 @@ impl ManifestProjection {
 
         let mut current: &FolderData = root;
         for component in components {
-            let entry = current.find_child(component)?;
+            let entry: &crate::projection::types::FolderEntry = current.find_child(component)?;
             match entry {
                 crate::projection::types::FolderEntry::Folder(f) => {
-                    current = f;
+                    current = f.as_ref();
                 }
                 _ => return None, // Not a folder
             }
@@ -345,20 +347,22 @@ impl ManifestProjection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusty_attachments_model::v2023_03_03::{AssetManifest as ManifestV1, PathEntry};
+    use rusty_attachments_model::v2023_03_03::{AssetManifest as ManifestV1, ManifestPath};
+    use rusty_attachments_model::ManifestVersion;
 
     fn create_test_manifest_v1() -> Manifest {
         let manifest = ManifestV1 {
             hash_alg: HashAlgorithm::Xxh128,
+            manifest_version: ManifestVersion::V2023_03_03,
             total_size: 300,
             paths: vec![
-                PathEntry {
+                ManifestPath {
                     path: "file1.txt".to_string(),
                     hash: "hash1".to_string(),
                     size: 100,
                     mtime: 1000,
                 },
-                PathEntry {
+                ManifestPath {
                     path: "dir1/file2.txt".to_string(),
                     hash: "hash2".to_string(),
                     size: 200,
@@ -471,8 +475,9 @@ mod tests {
     fn test_deeply_nested_paths() {
         let manifest = ManifestV1 {
             hash_alg: HashAlgorithm::Xxh128,
+            manifest_version: ManifestVersion::V2023_03_03,
             total_size: 100,
-            paths: vec![PathEntry {
+            paths: vec![ManifestPath {
                 path: "a/b/c/d/e/file.txt".to_string(),
                 hash: "hash".to_string(),
                 size: 100,

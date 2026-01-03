@@ -27,8 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    let manifest_path: PathBuf = PathBuf::from(&args[1]);
-    let mount_point: PathBuf = PathBuf::from(&args[2]);
+    let manifest_path = PathBuf::from(&args[1]);
+    let mount_point = PathBuf::from(&args[2]);
 
     // Load manifest
     println!("Loading manifest from {:?}...", manifest_path);
@@ -41,19 +41,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         manifest.total_size()
     );
 
-    // Create storage client
-    let storage_settings = StorageSettings {
-        s3_location: S3Location {
-            bucket_name: std::env::var("S3_BUCKET")
-                .unwrap_or_else(|_| "my-bucket".to_string()),
-            key_prefix: std::env::var("S3_PREFIX").unwrap_or_else(|_| "cas/".to_string()),
-        },
-        ..Default::default()
-    };
+    // Create S3 location configuration
+    let s3_location = S3Location::new(
+        std::env::var("S3_BUCKET").unwrap_or_else(|_| "my-bucket".to_string()),
+        std::env::var("S3_ROOT_PREFIX").unwrap_or_else(|_| "DeadlineCloud".to_string()),
+        std::env::var("S3_CAS_PREFIX").unwrap_or_else(|_| "Data".to_string()),
+        std::env::var("S3_MANIFEST_PREFIX").unwrap_or_else(|_| "Manifests".to_string()),
+    );
 
-    println!("Connecting to S3: {}", storage_settings.s3_location.bucket_name);
-    let crt_client = CrtStorageClient::new(storage_settings)?;
-    let storage = Arc::new(StorageClientAdapter::new(Arc::new(crt_client)));
+    // Create storage client
+    let storage_settings = StorageSettings::default();
+
+    println!("Connecting to S3: {}", s3_location.bucket);
+    let crt_client: CrtStorageClient = CrtStorageClient::new(storage_settings).await?;
+    let storage = Arc::new(StorageClientAdapter::new(crt_client, s3_location));
 
     // Create ProjFS options
     let options = ProjFsOptions::new(mount_point.clone())

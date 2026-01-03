@@ -4,8 +4,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use rusty_attachments_vfs::{ExecutorConfig, MemoryPoolConfig};
-
-#[cfg(target_os = "windows")]
 use windows::core::GUID;
 
 /// Configuration for ProjFS virtualizer.
@@ -15,7 +13,6 @@ pub struct ProjFsOptions {
     pub root_path: PathBuf,
 
     /// Instance GUID (unique per mount).
-    #[cfg(target_os = "windows")]
     pub instance_guid: GUID,
 
     /// Number of worker threads for async executor.
@@ -45,7 +42,6 @@ impl ProjFsOptions {
     pub fn new(root_path: PathBuf) -> Self {
         Self {
             root_path,
-            #[cfg(target_os = "windows")]
             instance_guid: GUID::new().unwrap(),
             worker_threads: 4,
             default_timeout: None,

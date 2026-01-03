@@ -2,7 +2,6 @@
 
 use std::cmp::Ordering;
 
-#[cfg(target_os = "windows")]
 use windows::Win32::Storage::ProjectedFileSystem::PrjFileNameCompare;
 
 /// Compare two file names using ProjFS collation order.
@@ -15,7 +14,6 @@ use windows::Win32::Storage::ProjectedFileSystem::PrjFileNameCompare;
 ///
 /// # Returns
 /// Ordering result.
-#[cfg(target_os = "windows")]
 pub fn prj_file_name_compare(a: &str, b: &str) -> Ordering {
     use crate::util::wstr::string_to_wide;
 
@@ -34,21 +32,6 @@ pub fn prj_file_name_compare(a: &str, b: &str) -> Ordering {
             _ => Ordering::Equal,
         }
     }
-}
-
-/// Compare two file names using ProjFS collation order (non-Windows fallback).
-///
-/// Uses case-insensitive comparison as a fallback.
-///
-/// # Arguments
-/// * `a` - First file name
-/// * `b` - Second file name
-///
-/// # Returns
-/// Ordering result.
-#[cfg(not(target_os = "windows"))]
-pub fn prj_file_name_compare(a: &str, b: &str) -> Ordering {
-    a.to_lowercase().cmp(&b.to_lowercase())
 }
 
 #[cfg(test)]
@@ -76,8 +59,6 @@ mod tests {
     fn test_compare_numbers() {
         // ProjFS uses natural sort order
         let result: Ordering = prj_file_name_compare("file1", "file10");
-        // On Windows, this should be Less (natural sort)
-        // On non-Windows, it depends on string comparison
         assert!(result != Ordering::Equal);
     }
 }

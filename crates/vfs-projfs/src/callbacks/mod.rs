@@ -6,5 +6,4 @@
 mod background;
 mod vfs_callbacks;
 
-pub use background::{BackgroundTask, BackgroundTaskRunner};
 pub use vfs_callbacks::VfsCallbacks;

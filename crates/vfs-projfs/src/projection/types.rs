@@ -102,11 +102,13 @@ impl ContentHash {
     }
 
     /// Check if this is chunked.
+    #[allow(dead_code)]
     pub fn is_chunked(&self) -> bool {
         matches!(self, ContentHash::Chunked(_))
     }
 
     /// Get chunk count.
+    #[allow(dead_code)]
     pub fn chunk_count(&self) -> usize {
         match self {
             ContentHash::Single(_) => 1,
@@ -145,7 +147,7 @@ pub enum FolderEntry {
     /// File entry.
     File(FileData),
     /// Subfolder entry.
-    Folder(Box<FolderData>),
+    Folder(Box<crate::projection::folder::FolderData>),
     /// Symlink entry.
     Symlink(SymlinkData),
 }
@@ -155,7 +157,7 @@ impl FolderEntry {
     pub fn name(&self) -> &str {
         match self {
             FolderEntry::File(f) => &f.name,
-            FolderEntry::Folder(f) => &f.name,
+            FolderEntry::Folder(f) => f.name(),
             FolderEntry::Symlink(s) => &s.name,
         }
     }
@@ -166,32 +168,4 @@ impl FolderEntry {
     }
 }
 
-/// Data about a folder in the projection.
-#[derive(Clone, Debug)]
-pub struct FolderData {
-    /// Folder name (empty for root).
-    pub name: String,
-    /// Child entries (files and subfolders).
-    pub children: Vec<FolderEntry>,
-    /// Whether this folder is included in projection.
-    pub is_included: bool,
-}
-
-impl FolderData {
-    /// Create a new folder.
-    ///
-    /// # Arguments
-    /// * `name` - Folder name (empty for root)
-    pub fn new(name: String) -> Self {
-        Self {
-            name,
-            children: Vec::new(),
-            is_included: true,
-        }
-    }
-
-    /// Create root folder.
-    pub fn root() -> Self {
-        Self::new(String::new())
-    }
-}
+// Note: FolderData is defined in crate::projection::folder to avoid circular dependency

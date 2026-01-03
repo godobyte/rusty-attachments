@@ -1960,3 +1960,391 @@ unsafe impl Sync for SendableContext {}
 3. **Consistent behavior**: Same timeout, cancellation, and error handling
 4. **Simpler design**: No custom worker pool needed for ProjFS
 
+
+
+---
+
+## Remaining Implementation Work
+
+**Status: Core read path implemented, write path and optimizations pending**
+
+### 1. Write Path (COW Layer)
+
+The dirty file/directory managers are stored but not fully wired into the callbacks.
+
+#### 1.1 DirtyFileManager Integration
+
+```rust
+// In vfs_callbacks.rs - wire up dirty file tracking
+impl VfsCallbacks {
+    /// Handle file write notification.
+    ///
+    /// # Arguments
+    /// * `relative_path` - Path to the modified file
+    /// * `data` - New file content
+    /// * `offset` - Write offset
+    pub fn on_file_write(
+        &self,
+        relative_path: &str,
+        data: &[u8],
+        offset: u64,
+    ) -> Result<(), VfsError> {
+        // Get or create inode for this path
+        let inode: u64 = self.get_or_create_inode(relative_path)?;
+        
+        // Calculate chunk index for V2 chunking
+        let chunk_size: u64 = self.memory_pool.config().block_size;
+        let chunk_index: u32 = (offset / chunk_size) as u32;
+        let chunk_offset: usize = (offset % chunk_size) as usize;
+        
+        // Write to memory pool (creates dirty block if needed)
+        if self.memory_pool.has_dirty(inode, chunk_index) {
+            self.memory_pool.modify_dirty_in_place_with_slice(
+                inode,
+                chunk_index,
+                chunk_offset,
+                data,
+            )?;
+        } else {
+            // First write to this chunk - copy from source or create new
+            self.create_dirty_chunk(inode, chunk_index, relative_path)?;
+            self.memory_pool.modify_dirty_in_place_with_slice(
+                inode,
+                chunk_index,
+                chunk_offset,
+                data,
+            )?;
+        }
+        
+        // Track in dirty file manager
+        self.dirty_files.mark_modified(relative_path, inode);
+        
+        Ok(())
+    }
+    
+    /// Flush dirty file to disk cache.
+    ///
+    /// # Arguments
+    /// * `relative_path` - Path to flush
+    pub async fn flush_dirty_file(&self, relative_path: &str) -> Result<(), VfsError> {
+        let inode: u64 = match self.dirty_files.get_inode(relative_path) {
+            Some(id) => id,
+            None => return Ok(()), // Not dirty
+        };
+        
+        // Collect all dirty chunks for this inode
+        let chunk_count: u32 = self.dirty_files.get_chunk_count(inode);
+        
+        for chunk_index in 0..chunk_count {
+            if let Some(handle) = self.memory_pool.get_dirty(inode, chunk_index) {
+                // Write to disk cache
+                let cache_path: PathBuf = self.get_cache_path(relative_path, chunk_index);
+                let data: Vec<u8> = handle.data();
+                tokio::fs::write(&cache_path, &data).await?;
+                
+                // Mark as flushed in pool
+                self.memory_pool.mark_flushed(inode, chunk_index);
+            }
+        }
+        
+        Ok(())
+    }
+}
+```
+
+#### 1.2 DirtyDirManager Integration
+
+```rust
+impl VfsCallbacks {
+    /// Handle directory creation.
+    ///
+    /// # Arguments
+    /// * `relative_path` - Path to new directory
+    pub fn on_dir_created(&self, relative_path: &str) {
+        self.dirty_dirs.mark_created(relative_path);
+        self.background_tasks.enqueue(BackgroundTask::FolderCreated(
+            relative_path.to_string(),
+        ));
+    }
+    
+    /// Handle directory deletion.
+    ///
+    /// # Arguments
+    /// * `relative_path` - Path to deleted directory
+    pub fn on_dir_deleted(&self, relative_path: &str) {
+        self.dirty_dirs.mark_deleted(relative_path);
+        self.background_tasks.enqueue(BackgroundTask::FolderDeleted(
+            relative_path.to_string(),
+        ));
+    }
+    
+    /// Check if path is deleted.
+    ///
+    /// # Arguments
+    /// * `relative_path` - Path to check
+    fn is_deleted(&self, relative_path: &str) -> bool {
+        self.dirty_files.is_deleted(relative_path) 
+            || self.dirty_dirs.is_deleted(relative_path)
+    }
+}
+```
+
+### 2. Background Task Processing
+
+The `BackgroundTaskRunner` is implemented but the task handler needs to be wired up.
+
+```rust
+impl VfsCallbacks {
+    /// Create callbacks with background task processing.
+    pub fn new(
+        projection: Arc<ManifestProjection>,
+        storage: Arc<dyn FileStore>,
+        memory_pool: Arc<MemoryPool>,
+        dirty_files: Arc<DirtyFileManager>,
+        dirty_dirs: Arc<DirtyDirManager>,
+    ) -> Self {
+        // Create background runner with handler
+        let modified_paths: Arc<RwLock<ModifiedPathsDatabase>> = 
+            Arc::new(RwLock::new(ModifiedPathsDatabase::new()));
+        let paths_clone: Arc<RwLock<ModifiedPathsDatabase>> = modified_paths.clone();
+        
+        let background_tasks = BackgroundTaskRunner::new(move |task: BackgroundTask| {
+            match task {
+                BackgroundTask::FileCreated(path) => {
+                    paths_clone.write().add_created(&path);
+                }
+                BackgroundTask::FileModified(path) => {
+                    paths_clone.write().add_modified(&path);
+                }
+                BackgroundTask::FileDeleted(path) => {
+                    paths_clone.write().add_deleted(&path);
+                }
+                BackgroundTask::FileRenamed { old_path, new_path } => {
+                    let mut db = paths_clone.write();
+                    db.add_deleted(&old_path);
+                    db.add_created(&new_path);
+                }
+                BackgroundTask::FolderCreated(path) => {
+                    paths_clone.write().add_dir_created(&path);
+                }
+                BackgroundTask::FolderDeleted(path) => {
+                    paths_clone.write().add_dir_deleted(&path);
+                }
+            }
+        });
+        
+        Self {
+            projection,
+            storage,
+            memory_pool,
+            dirty_files,
+            dirty_dirs,
+            background_tasks,
+            modified_paths,
+        }
+    }
+}
+
+/// Database tracking modified paths for diff manifest generation.
+pub struct ModifiedPathsDatabase {
+    created_files: HashSet<String>,
+    modified_files: HashSet<String>,
+    deleted_files: HashSet<String>,
+    created_dirs: HashSet<String>,
+    deleted_dirs: HashSet<String>,
+}
+```
+
+### 3. V2 Chunked File Support
+
+The `ContentHash::Chunked` variant exists but chunk fetching isn't wired up.
+
+```rust
+impl VfsCallbacks {
+    /// Fetch content for a file, handling chunked files.
+    ///
+    /// # Arguments
+    /// * `relative_path` - File path
+    /// * `offset` - Byte offset
+    /// * `length` - Bytes to read
+    ///
+    /// # Returns
+    /// File content bytes.
+    pub async fn fetch_file_content(
+        &self,
+        relative_path: &str,
+        offset: u64,
+        length: u32,
+    ) -> Result<Vec<u8>, VfsError> {
+        // Check dirty files first (COW layer)
+        if let Some(inode) = self.dirty_files.get_inode(relative_path) {
+            return self.fetch_dirty_content(inode, offset, length).await;
+        }
+        
+        // Get file info from projection
+        let file_info: ProjectedFileInfo = self.projection
+            .get_file_info(relative_path)
+            .ok_or(VfsError::NotFound)?;
+        
+        match &file_info.content_hash {
+            Some(ContentHash::Single(hash)) => {
+                self.fetch_single_hash(hash, offset, length).await
+            }
+            Some(ContentHash::Chunked(chunk_hashes)) => {
+                self.fetch_chunked(chunk_hashes, offset, length).await
+            }
+            None => Err(VfsError::NotFound),
+        }
+    }
+    
+    /// Fetch content from chunked file.
+    ///
+    /// # Arguments
+    /// * `chunk_hashes` - List of chunk hashes
+    /// * `offset` - Byte offset into file
+    /// * `length` - Bytes to read
+    async fn fetch_chunked(
+        &self,
+        chunk_hashes: &[String],
+        offset: u64,
+        length: u32,
+    ) -> Result<Vec<u8>, VfsError> {
+        let chunk_size: u64 = CHUNK_SIZE_V2;
+        let start_chunk: usize = (offset / chunk_size) as usize;
+        let end_chunk: usize = ((offset + length as u64 - 1) / chunk_size) as usize;
+        
+        let mut result: Vec<u8> = Vec::with_capacity(length as usize);
+        
+        for chunk_idx in start_chunk..=end_chunk {
+            let chunk_hash: &str = chunk_hashes.get(chunk_idx)
+                .ok_or(VfsError::InvalidChunkIndex)?;
+            
+            // Calculate offsets within this chunk
+            let chunk_start: u64 = chunk_idx as u64 * chunk_size;
+            let read_start: u64 = if chunk_idx == start_chunk {
+                offset - chunk_start
+            } else {
+                0
+            };
+            let read_end: u64 = if chunk_idx == end_chunk {
+                (offset + length as u64) - chunk_start
+            } else {
+                chunk_size
+            };
+            let read_len: u64 = read_end - read_start;
+            
+            // Fetch chunk (may hit memory pool)
+            let chunk_data: Vec<u8> = self.fetch_single_hash(
+                chunk_hash,
+                read_start,
+                read_len as u32,
+            ).await?;
+            
+            result.extend_from_slice(&chunk_data);
+        }
+        
+        Ok(result)
+    }
+}
+```
+
+### 4. Folder Helper Methods
+
+Currently marked `#[allow(dead_code)]` - wire into enumeration:
+
+```rust
+// In projection/folder.rs - use these in enumeration
+impl SortedFolderEntries {
+    /// Get entry count (used for pre-allocation).
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    
+    /// Check if empty (used for empty directory handling).
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl FolderData {
+    /// Get mutable children (used for dirty state application).
+    pub fn children_mut(&mut self) -> &mut SortedFolderEntries {
+        &mut self.children
+    }
+    
+    /// Check if included in projection (used for sparse checkout).
+    pub fn is_included(&self) -> bool {
+        self.is_included
+    }
+}
+```
+
+### 5. ContentHash Helper Methods
+
+```rust
+// In projection/types.rs - use for V2 chunking
+impl ContentHash {
+    /// Check if this is chunked (V2 large files).
+    pub fn is_chunked(&self) -> bool {
+        matches!(self, ContentHash::Chunked(_))
+    }
+    
+    /// Get chunk count (1 for single hash).
+    pub fn chunk_count(&self) -> usize {
+        match self {
+            ContentHash::Single(_) => 1,
+            ContentHash::Chunked(hashes) => hashes.len(),
+        }
+    }
+    
+    /// Get hash for chunk index.
+    ///
+    /// # Arguments
+    /// * `index` - Chunk index (0 for single hash)
+    ///
+    /// # Returns
+    /// Hash string for the chunk.
+    pub fn get_chunk_hash(&self, index: usize) -> Option<&str> {
+        match self {
+            ContentHash::Single(h) if index == 0 => Some(h),
+            ContentHash::Single(_) => None,
+            ContentHash::Chunked(hashes) => hashes.get(index).map(|s| s.as_str()),
+        }
+    }
+}
+```
+
+---
+
+## Implementation Priority
+
+| Priority | Item | Effort | Impact |
+|----------|------|--------|--------|
+| 1 | Enable ProjFS feature | 5 min | Required for tests |
+| 2 | Background task handler | 1 hr | Enables modification tracking |
+| 3 | DirtyFileManager integration | 2 hr | Enables file writes |
+| 4 | DirtyDirManager integration | 1 hr | Enables directory operations |
+| 5 | V2 chunked file support | 2 hr | Large file support |
+| 6 | Memory optimizations | 4 hr | Performance (optional) |
+
+---
+
+## Prerequisites
+
+### ProjFS Windows Feature
+
+Tests require the Windows Projected File System feature:
+
+```powershell
+# Enable ProjFS (requires admin)
+Enable-WindowsOptionalFeature -Online -FeatureName Client-ProjFS -NoRestart
+
+# Verify
+Get-WindowsOptionalFeature -Online -FeatureName Client-ProjFS
+```
+
+Or via GUI: Settings → Apps → Optional Features → More Windows features → "Windows Projected File System"
+
+### No AWS Dependencies for Tests
+
+Tests use `MockFileStore` - no AWS credentials or SDK needed. The `STATUS_DLL_NOT_FOUND` error is from missing `projectedfslib.dll`, not AWS.

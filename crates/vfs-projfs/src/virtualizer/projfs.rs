@@ -1,14 +1,13 @@
 //! ProjFS virtualizer implementation for Windows.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 use rusty_attachments_model::Manifest;
-use rusty_attachments_vfs::{
-    AsyncExecutor, DirtyDirManager, DirtyFileManager, FileStore, INodeManager, MemoryPool,
-};
+use rusty_attachments_vfs::write::DirtyDirManager;
+use rusty_attachments_vfs::{AsyncExecutor, DirtyFileManager, FileStore, INodeManager, MemoryPool};
 
 use crate::callbacks::VfsCallbacks;
 use crate::error::ProjFsError;
@@ -58,9 +57,10 @@ impl WritableProjFs {
 
         // Create write cache
         let write_cache: Arc<dyn rusty_attachments_vfs::WriteCache> = if write_options.use_disk_cache {
-            Arc::new(rusty_attachments_vfs::MaterializedCache::new(
+            let cache = rusty_attachments_vfs::MaterializedCache::new(
                 write_options.cache_dir.clone(),
-            ))
+            ).map_err(ProjFsError::Io)?;
+            Arc::new(cache)
         } else {
             Arc::new(rusty_attachments_vfs::MemoryWriteCache::new())
         };
@@ -168,17 +168,41 @@ impl Drop for WritableProjFs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusty_attachments_model::v2023_03_03::{AssetManifest, PathEntry};
-    use rusty_attachments_model::HashAlgorithm;
-    use rusty_attachments_vfs::StorageClientAdapter;
-    use rusty_attachments_storage_crt::CrtStorageClient;
+    use async_trait::async_trait;
+    use rusty_attachments_model::v2023_03_03::{AssetManifest, ManifestPath};
+    use rusty_attachments_model::{HashAlgorithm, ManifestVersion};
     use tempfile::TempDir;
+
+    /// Mock file store that returns empty data for testing.
+    struct MockFileStore;
+
+    #[async_trait]
+    impl FileStore for MockFileStore {
+        async fn retrieve(
+            &self,
+            _hash: &str,
+            _algorithm: HashAlgorithm,
+        ) -> std::result::Result<Vec<u8>, rusty_attachments_vfs::VfsError> {
+            Ok(vec![0u8; 100])
+        }
+
+        async fn retrieve_range(
+            &self,
+            _hash: &str,
+            _algorithm: HashAlgorithm,
+            _offset: u64,
+            _length: u64,
+        ) -> std::result::Result<Vec<u8>, rusty_attachments_vfs::VfsError> {
+            Ok(vec![0u8; 100])
+        }
+    }
 
     fn create_test_manifest() -> Manifest {
         let manifest = AssetManifest {
             hash_alg: HashAlgorithm::Xxh128,
+            manifest_version: ManifestVersion::V2023_03_03,
             total_size: 100,
-            paths: vec![PathEntry {
+            paths: vec![ManifestPath {
                 path: "test.txt".to_string(),
                 hash: "testhash".to_string(),
                 size: 100,
@@ -194,14 +218,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let cache_dir = TempDir::new().unwrap();
 
-        // Create mock storage client
-        let storage_settings = rusty_attachments_storage::StorageSettings::default();
-        let crt_client = CrtStorageClient::new(storage_settings).unwrap();
-        let storage: Arc<dyn FileStore> = Arc::new(StorageClientAdapter::new(Arc::new(crt_client)));
+        let storage: Arc<dyn FileStore> = Arc::new(MockFileStore);
 
         let options = ProjFsOptions::new(temp_dir.path().to_path_buf());
-        let write_options = ProjFsWriteOptions::default()
-            .with_cache_dir(cache_dir.path().to_path_buf());
+        let write_options =
+            ProjFsWriteOptions::default().with_cache_dir(cache_dir.path().to_path_buf());
 
         let vfs = WritableProjFs::new(&manifest, storage, options, write_options);
         assert!(vfs.is_ok());
@@ -213,19 +234,15 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let cache_dir = TempDir::new().unwrap();
 
-        let storage_settings = rusty_attachments_storage::StorageSettings::default();
-        let crt_client = CrtStorageClient::new(storage_settings).unwrap();
-        let storage: Arc<dyn FileStore> = Arc::new(StorageClientAdapter::new(Arc::new(crt_client)));
+        let storage: Arc<dyn FileStore> = Arc::new(MockFileStore);
 
         let options = ProjFsOptions::new(temp_dir.path().to_path_buf());
         let write_options = ProjFsWriteOptions::default()
             .with_cache_dir(cache_dir.path().to_path_buf());
 
         let vfs = WritableProjFs::new(&manifest, storage, options, write_options).unwrap();
-
         assert!(!vfs.is_started());
-
-        // Note: start() will fail on non-Windows or without ProjFS
-        // This test just verifies the API structure
     }
+
+
 }

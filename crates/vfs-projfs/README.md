@@ -16,7 +16,7 @@ The implementation follows a layered pyramid architecture:
 Layer 3: ProjFsVirtualizer (ProjFS callbacks)
 Layer 2: VfsCallbacks (coordination & dirty state)
 Layer 1: ManifestProjection (in-memory manifest tree)
-Layer 0: Shared VFS primitives (INodeManager, MemoryPool, etc.)
+Layer 0: Shared VFS primitives (INodeManager, MemoryPool v2, etc.)
 ```
 
 ### Key Design Patterns
@@ -37,14 +37,19 @@ Layer 0: Shared VFS primitives (INodeManager, MemoryPool, etc.)
 
 - **On-demand content fetching**: Files appear immediately but content is fetched only when accessed
 - **Copy-on-write support**: Modifications create dirty copies without affecting original manifest
-- **Memory-efficient**: Unified memory pool with LRU eviction across read and write caches
+- **Memory-efficient**: DashMap-based memory pool v2 with lock-free concurrent access and LRU eviction
 - **Fast enumeration**: Pre-sorted in-memory tree structure for instant directory listings
 - **Manifest version support**: Both V1 (v2023-03-03) and V2 (v2025-12-04-beta) formats
 
 ## Requirements
 
 - Windows 10 1809+ or Windows Server 2019+
-- ProjFS Windows feature enabled
+- ProjFS Windows feature enabled:
+
+```powershell
+# Run as Administrator
+Enable-WindowsOptionalFeature -Online -FeatureName Client-ProjFS -NoRestart
+```
 
 ## Usage
 
@@ -100,7 +105,7 @@ cargo run --example mount_projfs -- manifest.json C:\mount\point
 1. **Enumeration Data Sharing**: Uses `Arc<[ProjectedFileInfo]>` to avoid cloning
 2. **Stack-allocated Strings**: Paths under 256 chars use stack allocation
 3. **Path Caching**: Frequently accessed directory listings are cached
-4. **Unified Memory Pool**: Global memory limit enforcement across all caches
+4. **Memory Pool v2**: DashMap-based implementation with lock-free hot paths and mutex-protected LRU eviction (cold path only)
 
 ## Testing
 

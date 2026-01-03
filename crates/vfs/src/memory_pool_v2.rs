@@ -315,6 +315,7 @@ impl BlockData {
     }
 
     /// Get the mutable RwLock reference if this is a mutable block.
+    #[allow(dead_code)]
     fn as_mutable(&self) -> Option<Arc<RwLock<Vec<u8>>>> {
         match self {
             BlockData::Immutable(_) => None,

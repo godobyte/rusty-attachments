@@ -11,6 +11,7 @@ members = [
     "crates/python",
     "crates/vfs",
     "crates/vfs-fskit",
+    "crates/vfs-projfs",
     "crates/wasm",
 ]
 exclude = [
