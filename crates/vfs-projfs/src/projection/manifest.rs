@@ -11,6 +11,19 @@ use crate::error::ProjFsError;
 use crate::projection::folder::FolderData;
 use crate::projection::types::{ContentHash, FileData, ProjectedFileInfo, SymlinkData};
 
+/// Convert microseconds since Unix epoch to SystemTime.
+///
+/// # Arguments
+/// * `micros` - Microseconds since Unix epoch
+///
+/// # Returns
+/// SystemTime representing the timestamp.
+fn micros_to_system_time(micros: u64) -> SystemTime {
+    let secs: u64 = micros / 1_000_000;
+    let nanos: u32 = ((micros % 1_000_000) * 1_000) as u32;
+    UNIX_EPOCH + Duration::new(secs, nanos)
+}
+
 /// In-memory projection of manifest contents.
 ///
 /// Builds a tree structure from the manifest for fast enumeration and lookup.
@@ -82,7 +95,8 @@ impl ManifestProjection {
 
             // Add file to parent folder
             let file_name: &str = components[components.len() - 1];
-            let mtime: SystemTime = UNIX_EPOCH + Duration::from_secs(entry.mtime as u64);
+            // V1 mtime is in microseconds
+            let mtime: SystemTime = micros_to_system_time(entry.mtime as u64);
 
             current_folder.add_file(FileData {
                 name: file_name.to_string(),
@@ -145,9 +159,8 @@ impl ManifestProjection {
             }
 
             let file_name: &str = components[components.len() - 1];
-            let mtime: SystemTime = UNIX_EPOCH + Duration::from_secs(
-                entry.mtime.unwrap_or(0).max(0) as u64
-            );
+            // V2 mtime is in microseconds
+            let mtime: SystemTime = micros_to_system_time(entry.mtime.unwrap_or(0).max(0) as u64);
 
             // Check if symlink
             if let Some(ref target) = entry.symlink_target {

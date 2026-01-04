@@ -101,7 +101,35 @@ pub unsafe extern "system" fn start_dir_enum_cb(
     callback_data: *const PRJ_CALLBACK_DATA,
     enumeration_id: *const GUID,
 ) -> HRESULT {
-    let ctx: &CallbackContext = &*((*callback_data).InstanceContext as *const CallbackContext);
+    // Catch panics to prevent UB
+    let result = std::panic::catch_unwind(|| {
+        start_dir_enum_cb_inner(callback_data, enumeration_id)
+    });
+    match result {
+        Ok(hr) => hr,
+        Err(_) => {
+            eprintln!("PANIC in start_dir_enum_cb");
+            E_FAIL
+        }
+    }
+}
+
+unsafe fn start_dir_enum_cb_inner(
+    callback_data: *const PRJ_CALLBACK_DATA,
+    enumeration_id: *const GUID,
+) -> HRESULT {
+    if callback_data.is_null() {
+        eprintln!("start_dir_enum_cb: callback_data is null");
+        return E_FAIL;
+    }
+    
+    let instance_ctx = (*callback_data).InstanceContext;
+    if instance_ctx.is_null() {
+        eprintln!("start_dir_enum_cb: InstanceContext is null");
+        return E_FAIL;
+    }
+    
+    let ctx: &CallbackContext = &*(instance_ctx as *const CallbackContext);
 
     let relative_path: String = match pcwstr_to_string((*callback_data).FilePathName) {
         Ok(p) => p,
@@ -592,6 +620,16 @@ fn write_file_data_aligned(
 /// # Returns
 /// PRJ_CALLBACKS structure with all callbacks set.
 pub fn build_callbacks() -> PRJ_CALLBACKS {
+    println!("build_callbacks: Creating callback structure");
+    println!("  start_dir_enum_cb addr: {:p}", start_dir_enum_cb as *const ());
+    println!("  end_dir_enum_cb addr: {:p}", end_dir_enum_cb as *const ());
+    println!("  get_dir_enum_cb addr: {:p}", get_dir_enum_cb as *const ());
+    println!("  get_placeholder_info_cb addr: {:p}", get_placeholder_info_cb as *const ());
+    println!("  get_file_data_cb addr: {:p}", get_file_data_cb as *const ());
+    println!("  query_file_name_cb addr: {:p}", query_file_name_cb as *const ());
+    println!("  notification_cb addr: {:p}", notification_cb as *const ());
+    println!("  cancel_command_cb addr: {:p}", cancel_command_cb as *const ());
+    
     PRJ_CALLBACKS {
         StartDirectoryEnumerationCallback: Some(start_dir_enum_cb),
         EndDirectoryEnumerationCallback: Some(end_dir_enum_cb),

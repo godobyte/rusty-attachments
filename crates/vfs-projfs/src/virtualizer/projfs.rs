@@ -165,26 +165,36 @@ impl WritableProjFs {
         }
 
         // Ensure directory exists
+        println!("Creating directory: {:?}", &self.options.root_path);
         std::fs::create_dir_all(&self.options.root_path)?;
 
         // Step 1: Mark root directory as placeholder
+        println!("Marking directory as placeholder...");
         mark_directory_as_placeholder(&self.options.root_path, &self.options.instance_guid)?;
+        println!("Directory marked as placeholder");
 
         // Step 2: Build callbacks structure
+        println!("Building callbacks...");
         let callbacks: PRJ_CALLBACKS = build_callbacks();
+        println!("Callbacks built");
 
         // Step 3: Create callback context (must outlive virtualization)
+        println!("Creating callback context...");
         let ctx = Box::new(CallbackContext::new(
             self.callbacks.clone(),
             self.executor.clone(),
         ));
         let ctx_ptr: *mut CallbackContext = Box::into_raw(ctx);
+        println!("Callback context created at {:p}", ctx_ptr);
 
         // Step 4: Build notification mappings
+        println!("Building notification mappings...");
         let mut notification_mappings: Vec<PRJ_NOTIFICATION_MAPPING> =
             build_notification_mappings(&self.options.notifications);
+        println!("Notification mappings built: {} mappings", notification_mappings.len());
 
         // Step 5: Start virtualization
+        println!("Calling PrjStartVirtualizing...");
         let namespace_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT =
             start_virtualizing(
                 &self.options.root_path,
@@ -193,6 +203,7 @@ impl WritableProjFs {
                 &self.options,
                 &mut notification_mappings,
             )?;
+        println!("PrjStartVirtualizing succeeded");
 
         // Store context for stop()
         *self.namespace_context.write() = Some(namespace_context);
@@ -422,7 +433,7 @@ fn start_virtualizing(
     callbacks: &PRJ_CALLBACKS,
     instance_context: *const c_void,
     options: &ProjFsOptions,
-    notification_mappings: &mut [PRJ_NOTIFICATION_MAPPING],
+    _notification_mappings: &mut [PRJ_NOTIFICATION_MAPPING],
 ) -> Result<PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT, ProjFsError> {
     let root_path_str: String = root_path
         .to_str()
@@ -430,18 +441,23 @@ fn start_virtualizing(
         .to_string();
 
     let root_path_wide: Vec<u16> = string_to_wide(&root_path_str);
+    
+    println!("start_virtualizing: root_path = {}", root_path_str);
+    println!("start_virtualizing: root_path_wide len = {}", root_path_wide.len());
+    println!("start_virtualizing: instance_context = {:p}", instance_context);
+    println!("start_virtualizing: pool_thread_count = {}", options.pool_thread_count);
+    println!("start_virtualizing: concurrent_thread_count = {}", options.concurrent_thread_count);
 
+    // Try without notification mappings first to isolate the issue
     let start_options = PRJ_STARTVIRTUALIZING_OPTIONS {
         Flags: windows::Win32::Storage::ProjectedFileSystem::PRJ_STARTVIRTUALIZING_FLAGS(0),
         PoolThreadCount: options.pool_thread_count,
         ConcurrentThreadCount: options.concurrent_thread_count,
-        NotificationMappings: if notification_mappings.is_empty() {
-            std::ptr::null_mut()
-        } else {
-            notification_mappings.as_mut_ptr()
-        },
-        NotificationMappingsCount: notification_mappings.len() as u32,
+        NotificationMappings: std::ptr::null_mut(),
+        NotificationMappingsCount: 0,
     };
+    
+    println!("start_virtualizing: calling PrjStartVirtualizing...");
 
     unsafe {
         PrjStartVirtualizing(
