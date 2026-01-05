@@ -9,6 +9,10 @@ description = "Python bindings for rusty-attachments"
 name = "rusty_attachments"
 crate-type = ["cdylib"]
 
+[lints.rust]
+# Silence pyo3 macro cfg warnings about internal features
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(feature, values(\"gil-refs\"))"] }
+
 [dependencies]
 rusty-attachments-common = { path = "../common" }
 rusty-attachments-model = { path = "../model" }

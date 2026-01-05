@@ -6,7 +6,8 @@
 //!
 //! # Platform Support
 //!
-//! This crate is Windows-only. It will fail to compile on other platforms.
+//! This crate is Windows-only. On non-Windows platforms, only stub types are
+//! available and `projfs_available()` returns false.
 //!
 //! # Architecture
 //!
@@ -29,22 +30,28 @@
 //! vfs.start()?;
 //! ```
 
-// This crate is Windows-only
-#[cfg(not(target_os = "windows"))]
-compile_error!("rusty-attachments-vfs-projfs is only supported on Windows");
-
+#[cfg(target_os = "windows")]
 mod callbacks;
+#[cfg(target_os = "windows")]
 mod error;
+#[cfg(target_os = "windows")]
 mod options;
+#[cfg(target_os = "windows")]
 mod projection;
+#[cfg(target_os = "windows")]
 mod util;
+#[cfg(target_os = "windows")]
 mod virtualizer;
 
+#[cfg(target_os = "windows")]
 pub use error::ProjFsError;
+#[cfg(target_os = "windows")]
 pub use options::{NotificationMask, ProjFsOptions, ProjFsWriteOptions, ReadCacheConfig};
+#[cfg(target_os = "windows")]
 pub use virtualizer::WritableProjFs;
 
 // Export callbacks layer types for advanced usage
+#[cfg(target_os = "windows")]
 pub use callbacks::{
     ModificationSummary, ModifiedPathsDatabase, PathRegistry, ProjFsStats, ProjFsStatsCollector,
     VfsCallbacks,
@@ -56,7 +63,9 @@ pub use rusty_attachments_vfs::{
     MemoryPoolConfig, PrefetchStrategy, ReadAheadOptions, StorageClientAdapter,
     TimeoutOptions, VfsError, WritableVfsStats, WritableVfsStatsCollector,
 };
+#[cfg(target_os = "windows")]
 pub use rusty_attachments_vfs::write::DirtyDirManager;
+#[cfg(target_os = "windows")]
 pub use rusty_attachments_vfs::diskcache::ReadCache;
 
 // Re-export storage types
@@ -67,8 +76,18 @@ pub use rusty_attachments_storage_crt::CrtStorageClient;
 ///
 /// # Returns
 /// True on Windows where ProjFS is available.
+#[cfg(target_os = "windows")]
 pub fn projfs_available() -> bool {
     // ProjFS is available on Windows 10 1809+ and Windows Server 2019+
     // For now, assume it's available - runtime will fail if not enabled
     true
+}
+
+/// Check if ProjFS is available on this system.
+///
+/// # Returns
+/// Always false on non-Windows platforms.
+#[cfg(not(target_os = "windows"))]
+pub fn projfs_available() -> bool {
+    false
 }
