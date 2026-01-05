@@ -19,7 +19,9 @@ rusty-attachments/
 │   ├── storage/         # S3 storage abstraction, caching layers
 │   ├── storage-crt/     # AWS SDK S3 backend implementation
 │   ├── ja-deadline-utils/# High-level Deadline Cloud utilities
-│   ├── vfs/             # FUSE virtual filesystem
+│   ├── vfs/             # FUSE virtual filesystem (Linux/macOS)
+│   ├── vfs-fskit/       # FSKit virtual filesystem (macOS 15.4+)
+│   ├── vfs-projfs/      # ProjFS virtual filesystem (Windows)
 │   ├── example/         # Example applications
 │   │   └── tauri/       # Tauri v2 desktop app
 │   ├── python/          # PyO3 bindings
@@ -29,19 +31,23 @@ rusty-attachments/
 
 ## Crates
 
-| Crate | Description |
-|-------|-------------|
-| `rusty-attachments-common` | Path utilities, hash functions, progress callbacks, constants |
-| `rusty-attachments-model` | Manifest structures, encode/decode, validation |
-| `rusty-attachments-filesystem` | Directory scanning, snapshot/diff operations, glob filtering |
-| `rusty-attachments-profiles` | Storage profiles, path grouping, asset root management |
-| `rusty-attachments-storage` | S3 storage traits, upload/download orchestration, caching |
-| `rusty-attachments-storage-crt` | AWS SDK S3 backend (`StorageClient` implementation) |
-| `ja-deadline-utils` | High-level utilities for Deadline Cloud job attachment workflows |
-| `rusty-attachments-vfs` | FUSE-based virtual filesystem for mounting manifests (Linux/macOS) |
-| `tauri-example` | Tauri v2 desktop application for managing job attachments |
-| `rusty-attachments-python` | Python bindings via PyO3 |
-| `rusty-attachments-wasm` | WebAssembly bindings |
+| Crate | Platform | Description |
+|-------|----------|-------------|
+| `rusty-attachments-common` | All | Path utilities, hash functions, progress callbacks, constants |
+| `rusty-attachments-model` | All | Manifest structures, encode/decode, validation |
+| `rusty-attachments-filesystem` | All | Directory scanning, snapshot/diff operations, glob filtering |
+| `rusty-attachments-profiles` | All | Storage profiles, path grouping, asset root management |
+| `rusty-attachments-storage` | All | S3 storage traits, upload/download orchestration, caching |
+| `rusty-attachments-storage-crt` | All | AWS SDK S3 backend (`StorageClient` implementation) |
+| `ja-deadline-utils` | All | High-level utilities for Deadline Cloud job attachment workflows |
+| `rusty-attachments-vfs` | 🐧🍎 | FUSE-based virtual filesystem (Linux/macOS, requires `fuse` feature) |
+| `rusty-attachments-vfs-fskit` | 🍎 | FSKit-based virtual filesystem (macOS 15.4+ only) |
+| `rusty-attachments-vfs-projfs` | 🪟 | ProjFS-based virtual filesystem (Windows only) |
+| `tauri-example` | All | Tauri v2 desktop application for managing job attachments |
+| `rusty-attachments-python` | All | Python bindings via PyO3 |
+| `rusty-attachments-wasm` | All | WebAssembly bindings |
+
+Legend: 🐧 Linux | 🍎 macOS | 🪟 Windows | All = cross-platform
 
 ## Prerequisites
 
@@ -139,6 +145,12 @@ cargo build -p rusty-attachments-vfs
 
 # Build VFS with FUSE support (requires platform setup - see VFS section)
 cargo build -p rusty-attachments-vfs --features fuse
+
+# Build FSKit VFS (macOS 15.4+ only)
+cargo build -p rusty-attachments-vfs-fskit
+
+# Build ProjFS VFS (Windows only)
+cargo build -p rusty-attachments-vfs-projfs
 ```
 
 ### Troubleshooting Build Issues
@@ -220,11 +232,17 @@ println!("Added: {}, Modified: {}, Deleted: {}",
 
 ## VFS (Virtual Filesystem)
 
-The VFS crate provides a FUSE-based virtual filesystem for mounting job attachment manifests. Files appear as local files but content is fetched on-demand from S3.
+The VFS crates provide virtual filesystems for mounting job attachment manifests. Files appear as local files but content is fetched on-demand from S3.
+
+| Crate | Platform | Technology |
+|-------|----------|------------|
+| `rusty-attachments-vfs` | 🐧🍎 | FUSE (Linux/macOS) |
+| `rusty-attachments-vfs-fskit` | 🍎 | FSKit (macOS 15.4+) |
+| `rusty-attachments-vfs-projfs` | 🪟 | ProjFS (Windows 10 1809+) |
 
 ### Platform Setup
 
-#### macOS
+#### macOS (FUSE)
 ```bash
 # Install macFUSE
 brew install --cask macfuse
@@ -236,6 +254,19 @@ export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 # Build with FUSE
 cargo build -p rusty-attachments-vfs --features fuse
+```
+
+#### macOS (FSKit - macOS 15.4+)
+```bash
+# Install FSKitBridge from https://github.com/debox-network/fskit-rs/releases
+cp -r FSKitBridge.app /Applications/
+xattr -dr com.apple.quarantine /Applications/FSKitBridge.app
+open -a /Applications/FSKitBridge.app --args -s
+
+# Enable in System Settings → Privacy & Security → File System Extensions
+
+# Build
+cargo build -p rusty-attachments-vfs-fskit
 ```
 
 #### Linux
@@ -253,7 +284,46 @@ sudo pacman -S fuse2 pkg-config
 cargo build -p rusty-attachments-vfs --features fuse
 ```
 
-See `crates/vfs/README.md` for detailed VFS documentation.
+#### Windows
+```powershell
+# Enable ProjFS (run as Administrator)
+Enable-WindowsOptionalFeature -Online -FeatureName Client-ProjFS -NoRestart
+
+# Build
+cargo build -p rusty-attachments-vfs-projfs
+```
+
+### Running VFS Examples
+
+#### FUSE (Linux/macOS)
+```bash
+# Mount a manifest
+cargo run -p rusty-attachments-vfs --features fuse --example mount_vfs -- \
+    manifest.json ./vfs --writable --stats
+```
+
+#### FSKit (macOS 15.4+)
+```bash
+# Mount a manifest
+cargo run -p rusty-attachments-vfs-fskit --example mount_fskit -- \
+    --manifest manifest.json \
+    --mount-point /tmp/deadline-assets \
+    --bucket my-bucket \
+    --root-prefix DeadlineCloud \
+    --stats
+```
+
+#### ProjFS (Windows)
+```powershell
+# Mount a manifest
+cargo run -p rusty-attachments-vfs-projfs --example mount_projfs -- `
+    manifest.json vfs --cache-dir vfs-cache --stats --cleanup
+```
+
+See individual crate READMEs for detailed documentation:
+- `crates/vfs/README.md` - FUSE VFS
+- `crates/vfs-fskit/README.md` - FSKit VFS
+- `crates/vfs-projfs/README.md` and `crates/vfs-projfs/examples/README.md` - ProjFS VFS
 
 ## Example Application
 
