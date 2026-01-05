@@ -29,17 +29,12 @@ impl std::fmt::Display for ManifestVersion {
 }
 
 /// Type of manifest (snapshot vs diff).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ManifestType {
+    #[default]
     Snapshot,
     Diff,
-}
-
-impl Default for ManifestType {
-    fn default() -> Self {
-        ManifestType::Snapshot
-    }
 }
 
 /// Content-Type values for S3 storage.

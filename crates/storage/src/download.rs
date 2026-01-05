@@ -213,32 +213,21 @@ impl<'a, C: StorageClient> DownloadOrchestrator<'a, C> {
             .partition(|e| e.size < self.options.small_file_threshold);
 
         // Download small files in parallel
+        let ctx = DownloadContext {
+            hash_alg,
+            conflict_resolution,
+            total_files,
+            total_bytes,
+        };
+
         let small_stats: TransferStatistics = self
-            .download_files_parallel(
-                small_files,
-                destination_root,
-                hash_alg,
-                conflict_resolution,
-                total_files,
-                total_bytes,
-                &stats,
-                progress,
-            )
+            .download_files_parallel(small_files, destination_root, ctx, &stats, progress)
             .await?;
         stats.merge(small_stats);
 
         // Download large files (CRT handles internal parallelism for each)
         let large_stats: TransferStatistics = self
-            .download_files_parallel(
-                large_files,
-                destination_root,
-                hash_alg,
-                conflict_resolution,
-                total_files,
-                total_bytes,
-                &stats,
-                progress,
-            )
+            .download_files_parallel(large_files, destination_root, ctx, &stats, progress)
             .await?;
         stats.merge(large_stats);
 
@@ -246,14 +235,18 @@ impl<'a, C: StorageClient> DownloadOrchestrator<'a, C> {
     }
 
     /// Download files in parallel using buffer_unordered.
+    ///
+    /// # Arguments
+    /// * `entries` - Files to download
+    /// * `destination_root` - Local root path for downloaded files
+    /// * `ctx` - Download context with hash algorithm, conflict resolution, and totals
+    /// * `current_stats` - Current transfer statistics for progress tracking
+    /// * `progress` - Optional progress callback
     async fn download_files_parallel(
         &self,
         entries: Vec<DownloadEntry>,
         destination_root: &str,
-        hash_alg: HashAlgorithm,
-        conflict_resolution: ConflictResolution,
-        total_files: u64,
-        total_bytes: u64,
+        ctx: DownloadContext,
         current_stats: &TransferStatistics,
         progress: Option<&dyn ProgressCallback>,
     ) -> Result<TransferStatistics, StorageError> {
@@ -294,9 +287,9 @@ impl<'a, C: StorageClient> DownloadOrchestrator<'a, C> {
                             current_bytes: 0,
                             current_total: entry.size,
                             overall_completed: completed_count.load(Ordering::Relaxed),
-                            overall_total: total_files,
+                            overall_total: ctx.total_files,
                             overall_bytes: completed_bytes.load(Ordering::Relaxed),
-                            overall_total_bytes: total_bytes,
+                            overall_total_bytes: ctx.total_bytes,
                         };
                         if !cb.on_progress(&progress_update) {
                             cancelled.store(true, Ordering::Relaxed);
@@ -306,7 +299,7 @@ impl<'a, C: StorageClient> DownloadOrchestrator<'a, C> {
 
                     // Download the file
                     let result: TransferStatistics = self
-                        .download_entry(&entry, &local_path, hash_alg, conflict_resolution, progress)
+                        .download_entry(&entry, &local_path, ctx.hash_alg, ctx.conflict_resolution, progress)
                         .await?;
 
                     // Update progress counters
@@ -580,6 +573,21 @@ struct DownloadEntry {
     mtime: Option<i64>,
     /// Whether the file should be executable.
     runnable: bool,
+}
+
+/// Context for parallel download operations.
+///
+/// Groups related parameters to reduce function argument count.
+#[derive(Debug, Clone, Copy)]
+struct DownloadContext {
+    /// Hash algorithm used in the manifest.
+    hash_alg: HashAlgorithm,
+    /// How to handle existing files.
+    conflict_resolution: ConflictResolution,
+    /// Total number of files to download.
+    total_files: u64,
+    /// Total bytes to download.
+    total_bytes: u64,
 }
 
 // ============================================================================

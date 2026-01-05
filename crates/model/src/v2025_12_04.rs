@@ -247,8 +247,7 @@ impl ManifestFilePath {
             });
         }
 
-        let expected_chunks: usize =
-            ((size + FILE_CHUNK_SIZE_BYTES - 1) / FILE_CHUNK_SIZE_BYTES) as usize;
+        let expected_chunks: usize = size.div_ceil(FILE_CHUNK_SIZE_BYTES) as usize;
         if chunks.len() != expected_chunks {
             return Err(ValidationError::ChunkCountMismatch {
                 path: self.name.clone(),
@@ -366,10 +365,10 @@ impl AssetManifest {
     /// Validate all entries in the manifest.
     pub fn validate(&self) -> Result<(), ValidationError> {
         // Check for deletions in snapshot manifests
-        if self.manifest_type == ManifestType::Snapshot {
-            if self.dirs.iter().any(|d| d.delete) || self.files.iter().any(|f| f.delete) {
-                return Err(ValidationError::SnapshotWithDeletion);
-            }
+        if self.manifest_type == ManifestType::Snapshot
+            && (self.dirs.iter().any(|d| d.delete) || self.files.iter().any(|f| f.delete))
+        {
+            return Err(ValidationError::SnapshotWithDeletion);
         }
 
         // Validate each file entry

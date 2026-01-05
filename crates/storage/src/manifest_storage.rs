@@ -701,6 +701,19 @@ pub async fn upload_step_output_manifest<C: StorageClient>(
 }
 
 /// Internal implementation for output manifest upload.
+///
+/// # Arguments
+/// * `client` - Storage client for S3 operations
+/// * `location` - Manifest location configuration
+/// * `job_id` - Job ID
+/// * `step_id` - Step ID
+/// * `task_id` - Optional task ID (None for step-level manifests)
+/// * `session_action_id` - Session action ID
+/// * `timestamp` - Timestamp as seconds since epoch
+/// * `manifest` - The manifest to upload
+/// * `asset_root` - The root path the manifest was created from
+/// * `file_system_location_name` - Optional file system location name
+#[allow(clippy::too_many_arguments)]
 async fn upload_output_manifest_impl<C: StorageClient>(
     client: &C,
     location: &ManifestLocation,

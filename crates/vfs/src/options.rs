@@ -21,7 +21,7 @@ use crate::memory_pool_v2::MemoryPoolConfig;
 ///
 /// let vfs = DeadlineVfs::new(manifest, store, options)?;
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct VfsOptions {
     /// Memory pool configuration.
     pub pool: MemoryPoolConfig,
@@ -37,20 +37,6 @@ pub struct VfsOptions {
     pub read_cache: ReadCacheConfig,
     /// Async executor configuration.
     pub executor: ExecutorConfig,
-}
-
-impl Default for VfsOptions {
-    fn default() -> Self {
-        Self {
-            pool: MemoryPoolConfig::default(),
-            prefetch: PrefetchStrategy::default(),
-            kernel_cache: KernelCacheOptions::default(),
-            read_ahead: ReadAheadOptions::default(),
-            timeouts: TimeoutOptions::default(),
-            read_cache: ReadCacheConfig::default(),
-            executor: ExecutorConfig::default(),
-        }
-    }
 }
 
 impl VfsOptions {

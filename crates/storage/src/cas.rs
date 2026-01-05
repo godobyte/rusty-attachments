@@ -62,11 +62,18 @@ pub fn generate_chunks(size: u64, chunk_size: u64) -> Vec<ChunkInfo> {
 }
 
 /// Calculate the expected number of chunks for a file.
+///
+/// # Arguments
+/// * `size` - Total file size in bytes
+/// * `chunk_size` - Size of each chunk in bytes (0 disables chunking)
+///
+/// # Returns
+/// Number of chunks needed, minimum 1.
 pub fn expected_chunk_count(size: u64, chunk_size: u64) -> usize {
     if chunk_size == 0 || size == 0 {
         return 1;
     }
-    ((size + chunk_size - 1) / chunk_size) as usize
+    size.div_ceil(chunk_size) as usize
 }
 
 /// Upload strategy based on file size.
