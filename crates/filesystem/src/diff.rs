@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rusty_attachments_common::{hash_bytes, hash_file, normalize_for_manifest, ProgressCallback};
-use rusty_attachments_model::{Manifest, ManifestVersion};
+use rusty_attachments_model::Manifest;
 
 use crate::error::FileSystemError;
 use crate::glob::GlobFilter;
