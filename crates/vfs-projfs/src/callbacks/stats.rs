@@ -64,10 +64,7 @@ impl ProjFsStats {
             "║   Current size:  {:>37} MB ║",
             self.pool_stats.current_size / (1024 * 1024)
         ));
-        lines.push(format!(
-            "║   Cache hits:    {:>40} ║",
-            self.cache_hits
-        ));
+        lines.push(format!("║   Cache hits:    {:>40} ║", self.cache_hits));
         lines.push(format!(
             "║   Cache misses:  {:>40} ║",
             self.cache_allocations
@@ -82,20 +79,14 @@ impl ProjFsStats {
         lines.push("║ Disk Cache                                               ║".to_string());
         match self.disk_cache_size {
             Some(size) => {
-                lines.push(format!(
-                    "║   Status:        {:>40} ║",
-                    "Enabled"
-                ));
+                lines.push(format!("║   Status:        {:>40} ║", "Enabled"));
                 lines.push(format!(
                     "║   Size:          {:>37} MB ║",
                     size / (1024 * 1024)
                 ));
             }
             None => {
-                lines.push(format!(
-                    "║   Status:        {:>40} ║",
-                    "Disabled"
-                ));
+                lines.push(format!("║   Status:        {:>40} ║", "Disabled"));
             }
         }
         lines.push("╠══════════════════════════════════════════════════════════╣".to_string());
@@ -212,12 +203,7 @@ mod tests {
         let modified_paths = Arc::new(ModifiedPathsDatabase::new());
         let start_time = Instant::now();
 
-        let collector = ProjFsStatsCollector::new(
-            pool,
-            modified_paths,
-            None,
-            start_time,
-        );
+        let collector = ProjFsStatsCollector::new(pool, modified_paths, None, start_time);
 
         let stats: ProjFsStats = collector.collect();
         assert!(stats.uptime_secs < 1); // Just created

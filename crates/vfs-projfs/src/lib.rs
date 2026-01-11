@@ -58,15 +58,15 @@ pub use callbacks::{
 };
 
 // Re-export shared VFS primitives for convenience
-pub use rusty_attachments_vfs::{
-    DirtyFileManager, DirtySummary, FileStore, INodeManager, MemoryPool,
-    MemoryPoolConfig, PrefetchStrategy, ReadAheadOptions, StorageClientAdapter,
-    TimeoutOptions, VfsError, WritableVfsStats, WritableVfsStatsCollector,
-};
-#[cfg(target_os = "windows")]
-pub use rusty_attachments_vfs::write::DirtyDirManager;
 #[cfg(target_os = "windows")]
 pub use rusty_attachments_vfs::diskcache::ReadCache;
+#[cfg(target_os = "windows")]
+pub use rusty_attachments_vfs::write::DirtyDirManager;
+pub use rusty_attachments_vfs::{
+    DirtyFileManager, DirtySummary, FileStore, INodeManager, MemoryPool, MemoryPoolConfig,
+    PrefetchStrategy, ReadAheadOptions, StorageClientAdapter, TimeoutOptions, VfsError,
+    WritableVfsStats, WritableVfsStatsCollector,
+};
 
 // Re-export storage types
 pub use rusty_attachments_storage::{S3Location, StorageSettings};

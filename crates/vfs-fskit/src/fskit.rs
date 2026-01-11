@@ -20,8 +20,8 @@ use rusty_attachments_vfs::write::{
     DirtyDirManager, DirtyDirState, DirtyEntry, DirtyFileManager, DirtyState, WriteCache,
 };
 use rusty_attachments_vfs::{
-    DirtySummary, FileContent, FileStore, INode, INodeManager, MemoryPool,
-    WritableVfsStatsCollector, build_from_manifest,
+    build_from_manifest, DirtySummary, FileContent, FileStore, INode, INodeManager, MemoryPool,
+    WritableVfsStatsCollector,
 };
 
 use crate::convert::{
@@ -130,7 +130,7 @@ impl WritableFsKit {
 
         // Collect original directories for diff tracking
         let original_dirs: HashSet<String> = match manifest {
-            Manifest::V2025_12_04_beta(m) => m.dirs.iter().map(|d| d.name.clone()).collect(),
+            Manifest::V2025_12(m) => m.dirs.iter().map(|d| d.path.clone()).collect(),
             Manifest::V2023_03_03(_) => HashSet::new(),
         };
 
@@ -269,23 +269,27 @@ impl WritableFsKit {
     async fn read_chunked(&self, hashes: &[String], offset: u64, length: u64) -> Result<Vec<u8>> {
         use rusty_attachments_common::CHUNK_SIZE_V2;
 
-        let chunk_size: u64 = CHUNK_SIZE_V2 as u64;
+        let chunk_size: u64 = CHUNK_SIZE_V2;
         let start_chunk: usize = (offset / chunk_size) as usize;
         let end_offset: u64 = offset + length;
-        let end_chunk: usize = ((end_offset + chunk_size - 1) / chunk_size) as usize;
+        let end_chunk: usize = end_offset.div_ceil(chunk_size) as usize;
 
         let mut result: Vec<u8> = Vec::with_capacity(length as usize);
         let mut current_offset: u64 = offset;
 
-        for chunk_idx in start_chunk..end_chunk.min(hashes.len()) {
-            let chunk_start: u64 = (chunk_idx as u64) * chunk_size;
+        for (i, hash) in hashes
+            .iter()
+            .enumerate()
+            .take(end_chunk.min(hashes.len()))
+            .skip(start_chunk)
+        {
+            let chunk_start: u64 = (i as u64) * chunk_size;
             let chunk_end: u64 = chunk_start + chunk_size;
 
             let read_start: u64 = current_offset.max(chunk_start) - chunk_start;
             let read_end: u64 = end_offset.min(chunk_end) - chunk_start;
             let read_len: u64 = read_end - read_start;
 
-            let hash: &str = &hashes[chunk_idx];
             let data: Vec<u8> = self.read_single_hash(hash, read_start, read_len).await?;
             result.extend_from_slice(&data);
 
@@ -301,13 +305,15 @@ impl WritableFsKit {
         let entries: Vec<DirtyEntry> = self.inner.dirty_manager.get_dirty_entries();
         for entry in entries {
             if entry.state != DirtyState::Deleted {
-                self.inner.dirty_manager.flush_to_disk(entry.inode_id).await?;
+                self.inner
+                    .dirty_manager
+                    .flush_to_disk(entry.inode_id)
+                    .await?;
             }
         }
         Ok(())
     }
 }
-
 
 #[async_trait]
 impl Filesystem for WritableFsKit {
@@ -480,7 +486,11 @@ impl Filesystem for WritableFsKit {
         }
 
         // Check new files
-        if let Some(new_ino) = self.inner.dirty_manager.lookup_new_file(directory_id, name_str) {
+        if let Some(new_ino) = self
+            .inner
+            .dirty_manager
+            .lookup_new_file(directory_id, name_str)
+        {
             return Ok(self.new_file_to_item(new_ino, name_str, directory_id));
         }
 
@@ -726,7 +736,11 @@ impl Filesystem for WritableFsKit {
         // Add manifest children (excluding deleted)
         if is_manifest_dir {
             if let Some(children) = self.inner.inodes.get_dir_children(directory_id) {
-                let start_idx: usize = if cookie <= 2 { 0 } else { (cookie - 2) as usize };
+                let start_idx: usize = if cookie <= 2 {
+                    0
+                } else {
+                    (cookie - 2) as usize
+                };
 
                 for (i, (name, child_id)) in children.into_iter().enumerate().skip(start_idx) {
                     // Skip deleted files
@@ -846,7 +860,11 @@ impl Filesystem for WritableFsKit {
             let size: u32 = length as u32;
 
             // Try sync read first (fast path for already-loaded chunks)
-            if let Some(data) = self.inner.dirty_manager.read_sync(item_id, offset_u64, size) {
+            if let Some(data) = self
+                .inner
+                .dirty_manager
+                .read_sync(item_id, offset_u64, size)
+            {
                 return Ok(data);
             }
 
@@ -996,7 +1014,6 @@ impl WritableFsKit {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1090,7 +1107,8 @@ mod tests {
         }
 
         // Add new directories (skip if already seen)
-        let new_dirs: Vec<(u64, String)> = vfs.inner.dirty_dir_manager.get_new_dirs_in_parent(dir1_id);
+        let new_dirs: Vec<(u64, String)> =
+            vfs.inner.dirty_dir_manager.get_new_dirs_in_parent(dir1_id);
         for (ino, name) in new_dirs {
             let is_newsubdir: bool = name == "newsubdir";
             if !seen_names.contains(&name) {
@@ -1155,7 +1173,10 @@ mod tests {
         }
 
         // Add new directories
-        let new_dirs: Vec<(u64, String)> = vfs.inner.dirty_dir_manager.get_new_dirs_in_parent(ROOT_INODE);
+        let new_dirs: Vec<(u64, String)> = vfs
+            .inner
+            .dirty_dir_manager
+            .get_new_dirs_in_parent(ROOT_INODE);
         for (_ino, name) in new_dirs {
             if !seen_names.contains(&name) {
                 entries.push(name.clone());
@@ -1178,18 +1199,18 @@ mod tests {
         );
     }
 
-    /// Create a test manifest in v2025-12-04-beta format with directories and chunked files.
+    /// Create a test manifest in v2025-12 format with directories and chunked files.
     fn create_test_manifest_v2025() -> rusty_attachments_model::Manifest {
         let json: &str = r#"{
             "hashAlg": "xxh128",
-            "manifestVersion": "2025-12-04-beta",
+            "specificationVersion": "relative-manifest-snapshot-beta-2025-12",
             "dirs": [
-                {"name": "subdir"}
+                {"path": "subdir"}
             ],
             "files": [
-                {"name": "file1.txt", "hash": "abc123", "size": 100, "mtime": 1234567890},
-                {"name": "subdir/file2.txt", "hash": "def456", "size": 200, "mtime": 1234567891},
-                {"name": "link.txt", "symlink_target": "file1.txt"}
+                {"path": "file1.txt", "hash": "abc123", "size": 100, "mtime": 1234567890},
+                {"path": "subdir/file2.txt", "hash": "def456", "size": 200, "mtime": 1234567891},
+                {"path": "link.txt", "symlink": {"target": "file1.txt"}}
             ],
             "totalSize": 300
         }"#;
@@ -1231,7 +1252,7 @@ mod tests {
 
     #[test]
     fn test_v2025_manifest_support() {
-        // Test that v2025-12-04-beta manifests work correctly.
+        // Test that v2025-12 manifests work correctly.
         let manifest = create_test_manifest_v2025();
         let store: Arc<dyn FileStore> = Arc::new(MockFileStore);
         let options = FsKitVfsOptions::default();
@@ -1279,15 +1300,18 @@ mod tests {
         // Test that v2025 manifests with chunked files work correctly.
         // Chunk size is 256MB, so 3 chunks = 512MB < size <= 768MB
         let file_size: u64 = 600 * 1024 * 1024; // 600MB = 3 chunks
-        let json: String = format!(r#"{{
+        let json: String = format!(
+            r#"{{
             "hashAlg": "xxh128",
-            "manifestVersion": "2025-12-04-beta",
+            "specificationVersion": "relative-manifest-snapshot-beta-2025-12",
             "dirs": [],
             "files": [
-                {{"name": "large.bin", "chunkhashes": ["chunk1", "chunk2", "chunk3"], "size": {}, "mtime": 1234567890}}
+                {{"path": "large.bin", "chunkhashes": ["chunk1", "chunk2", "chunk3"], "size": {}, "mtime": 1234567890}}
             ],
             "totalSize": {}
-        }}"#, file_size, file_size);
+        }}"#,
+            file_size, file_size
+        );
         let manifest = rusty_attachments_model::Manifest::decode(&json).unwrap();
         let store: Arc<dyn FileStore> = Arc::new(MockFileStore);
         let options = FsKitVfsOptions::default();

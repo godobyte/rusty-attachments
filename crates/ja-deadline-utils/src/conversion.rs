@@ -81,7 +81,10 @@ mod tests {
         );
 
         assert_eq!(props.root_path, "/projects/job1");
-        assert_eq!(props.input_manifest_path, Some("farm-123/queue-456/input".into()));
+        assert_eq!(
+            props.input_manifest_path,
+            Some("farm-123/queue-456/input".into())
+        );
         assert_eq!(props.input_manifest_hash, Some("abc123def456".into()));
         assert!(props.output_relative_directories.is_none());
         assert_eq!(props.file_system_location_name, Some("ProjectFiles".into()));

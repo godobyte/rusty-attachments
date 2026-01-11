@@ -308,11 +308,8 @@ mod tests {
 
         // Put an already-expired entry (31 days ago)
         let old_timestamp = current_epoch_seconds() - (31 * 86400);
-        let entry = S3CheckCacheEntry::new(
-            "my-bucket",
-            "Data/abc123.xxh128",
-            old_timestamp.to_string(),
-        );
+        let entry =
+            S3CheckCacheEntry::new("my-bucket", "Data/abc123.xxh128", old_timestamp.to_string());
         cache.put(&entry).await;
 
         // Should not be returned (expired)
@@ -388,11 +385,7 @@ mod tests {
         let now = current_epoch_seconds().to_string();
         let entries: Vec<S3CheckCacheEntry> = (0..10)
             .map(|i| {
-                S3CheckCacheEntry::new(
-                    "my-bucket",
-                    &format!("Data/hash{}.xxh128", i),
-                    now.clone(),
-                )
+                S3CheckCacheEntry::new("my-bucket", &format!("Data/hash{}.xxh128", i), now.clone())
             })
             .collect();
 
@@ -451,11 +444,8 @@ mod tests {
 
         let now = current_epoch_seconds().to_string();
         for i in 0..10 {
-            let entry = S3CheckCacheEntry::new(
-                "my-bucket",
-                &format!("Data/hash{}.xxh128", i),
-                now.clone(),
-            );
+            let entry =
+                S3CheckCacheEntry::new("my-bucket", &format!("Data/hash{}.xxh128", i), now.clone());
             cache.put(&entry).await;
         }
 

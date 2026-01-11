@@ -194,9 +194,10 @@ pub fn group_asset_paths(
 
     let mut groups: Vec<AssetRootGroup> = groupings.into_values().collect();
     groups.sort_by(|a, b| {
-        a.root_path
-            .cmp(&b.root_path)
-            .then_with(|| a.file_system_location_name.cmp(&b.file_system_location_name))
+        a.root_path.cmp(&b.root_path).then_with(|| {
+            a.file_system_location_name
+                .cmp(&b.file_system_location_name)
+        })
     });
     groups
 }
@@ -265,8 +266,9 @@ pub fn group_asset_paths_validated(
     if validation.require_paths_exist && (!missing_paths.is_empty() || !directory_paths.is_empty())
     {
         return Err(PathGroupingError::MisconfiguredInputs {
-            message: "Job submission contains missing input files or directories specified as files."
-                .into(),
+            message:
+                "Job submission contains missing input files or directories specified as files."
+                    .into(),
             missing: missing_paths
                 .iter()
                 .map(|p| p.display().to_string())
@@ -656,10 +658,7 @@ mod tests {
     #[test]
     fn test_common_path_utf8_partial_match() {
         // Test where common prefix ends mid-character boundary
-        let paths: Vec<&Path> = vec![
-            Path::new("/日本語/テスト"),
-            Path::new("/日本/別のパス"),
-        ];
+        let paths: Vec<&Path> = vec![Path::new("/日本語/テスト"), Path::new("/日本/別のパス")];
         let result: Option<PathBuf> = common_path(&paths);
         // Should find common prefix up to last separator before divergence
         assert_eq!(result, Some(PathBuf::from("/")));

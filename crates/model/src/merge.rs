@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use crate::error::ManifestError;
 use crate::v2023_03_03::{AssetManifest as V2023Manifest, ManifestPath as V2023Path};
-use crate::v2025_12_04::{
+use crate::v2025_12::{
     AssetManifest as V2025Manifest, ManifestDirectoryPath, ManifestFilePath as V2025Path,
 };
 use crate::Manifest;
@@ -51,7 +51,7 @@ pub fn merge_manifests(manifests: &[Manifest]) -> Result<Option<Manifest>, Manif
     }
 
     // Check all manifests have the same version and hash algorithm
-    let first = &manifests[0];
+    let first: &Manifest = &manifests[0];
     let hash_alg = first.hash_alg();
     let version = first.version();
 
@@ -73,7 +73,7 @@ pub fn merge_manifests(manifests: &[Manifest]) -> Result<Option<Manifest>, Manif
     // Merge based on version
     match first {
         Manifest::V2023_03_03(_) => merge_v2023_manifests(manifests),
-        Manifest::V2025_12_04_beta(_) => merge_v2025_manifests(manifests),
+        Manifest::V2025_12(_) => merge_v2025_manifests(manifests),
     }
 }
 
@@ -123,18 +123,21 @@ fn merge_v2023_manifests(manifests: &[Manifest]) -> Result<Option<Manifest>, Man
     Ok(Some(Manifest::V2023_03_03(V2023Manifest::new(paths))))
 }
 
-/// Merge v2025-12-04-beta manifests.
+/// Merge v2025-12 manifests.
 fn merge_v2025_manifests(manifests: &[Manifest]) -> Result<Option<Manifest>, ManifestError> {
     let mut merged_dirs: HashMap<String, ManifestDirectoryPath> = HashMap::new();
     let mut merged_files: HashMap<String, V2025Path> = HashMap::new();
 
+    // Get spec version from first manifest
+    let spec_version = manifests[0].spec_version().unwrap_or_default();
+
     for manifest in manifests {
-        if let Manifest::V2025_12_04_beta(m) = manifest {
+        if let Manifest::V2025_12(m) = manifest {
             for dir in &m.dirs {
-                merged_dirs.insert(dir.name.clone(), dir.clone());
+                merged_dirs.insert(dir.path.clone(), dir.clone());
             }
             for file in &m.files {
-                merged_files.insert(file.name.clone(), file.clone());
+                merged_files.insert(file.path.clone(), file.clone());
             }
         }
     }
@@ -142,8 +145,11 @@ fn merge_v2025_manifests(manifests: &[Manifest]) -> Result<Option<Manifest>, Man
     let dirs: Vec<ManifestDirectoryPath> = merged_dirs.into_values().collect();
     let files: Vec<V2025Path> = merged_files.into_values().collect();
 
-    Ok(Some(Manifest::V2025_12_04_beta(V2025Manifest::snapshot(
-        dirs, files,
+    Ok(Some(Manifest::V2025_12(V2025Manifest::with_spec(
+        dirs,
+        files,
+        spec_version,
+        None,
     ))))
 }
 
@@ -151,6 +157,7 @@ fn merge_v2025_manifests(manifests: &[Manifest]) -> Result<Option<Manifest>, Man
 mod tests {
     use super::*;
     use crate::v2023_03_03::ManifestPath;
+    use crate::v2025_12::{AssetManifest as V2025Manifest, ManifestFilePath};
     use crate::version::ManifestVersion;
 
     #[test]
@@ -161,44 +168,44 @@ mod tests {
 
     #[test]
     fn test_merge_single_manifest() {
-        let paths = vec![ManifestPath::new("a.txt", "hash1", 100, 1000)];
-        let manifest = Manifest::V2023_03_03(V2023Manifest::new(paths));
+        let paths: Vec<ManifestPath> = vec![ManifestPath::new("a.txt", "hash1", 100, 1000)];
+        let manifest: Manifest = Manifest::V2023_03_03(V2023Manifest::new(paths));
 
         let result = merge_manifests(&[manifest.clone()]).unwrap();
         assert!(result.is_some());
 
-        let merged = result.unwrap();
+        let merged: Manifest = result.unwrap();
         assert_eq!(merged.file_count(), 1);
     }
 
     #[test]
     fn test_merge_two_manifests_no_overlap() {
-        let m1 = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
+        let m1: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
             "a.txt", "hash1", 100, 1000,
         )]));
-        let m2 = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
+        let m2: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
             "b.txt", "hash2", 200, 2000,
         )]));
 
-        let result = merge_manifests(&[m1, m2]).unwrap().unwrap();
+        let result: Manifest = merge_manifests(&[m1, m2]).unwrap().unwrap();
         assert_eq!(result.file_count(), 2);
         assert_eq!(result.total_size(), 300);
     }
 
     #[test]
     fn test_merge_two_manifests_with_overlap() {
-        let m1 = Manifest::V2023_03_03(V2023Manifest::new(vec![
+        let m1: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![
             ManifestPath::new("a.txt", "hash1_old", 100, 1000),
             ManifestPath::new("b.txt", "hash2", 200, 2000),
         ]));
-        let m2 = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
+        let m2: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
             "a.txt",
             "hash1_new",
             150,
             3000,
         )]));
 
-        let result = merge_manifests(&[m1, m2]).unwrap().unwrap();
+        let result: Manifest = merge_manifests(&[m1, m2]).unwrap().unwrap();
         assert_eq!(result.file_count(), 2);
         // a.txt should have the new size (150) + b.txt (200) = 350
         assert_eq!(result.total_size(), 350);
@@ -206,14 +213,14 @@ mod tests {
 
     #[test]
     fn test_merge_later_manifest_wins() {
-        let m1 = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
+        let m1: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
             "file.txt", "old_hash", 100, 1000,
         )]));
-        let m2 = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
+        let m2: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
             "file.txt", "new_hash", 200, 2000,
         )]));
 
-        let result = merge_manifests(&[m1, m2]).unwrap().unwrap();
+        let result: Manifest = merge_manifests(&[m1, m2]).unwrap().unwrap();
 
         if let Manifest::V2023_03_03(m) = result {
             assert_eq!(m.paths.len(), 1);
@@ -227,17 +234,17 @@ mod tests {
     #[test]
     fn test_merge_chronologically() {
         // Create manifests with timestamps (out of order)
-        let m_old = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
+        let m_old: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
             "file.txt", "old_hash", 100, 1000,
         )]));
-        let m_new = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
+        let m_new: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
             "file.txt", "new_hash", 200, 2000,
         )]));
 
         // Pass in wrong order (new first), but with correct timestamps
-        let manifests_with_ts = vec![(m_new, 2000i64), (m_old, 1000i64)];
+        let manifests_with_ts: Vec<(Manifest, i64)> = vec![(m_new, 2000i64), (m_old, 1000i64)];
 
-        let result = merge_manifests_chronologically(&manifests_with_ts)
+        let result: Manifest = merge_manifests_chronologically(&manifests_with_ts)
             .unwrap()
             .unwrap();
 
@@ -251,13 +258,13 @@ mod tests {
 
     #[test]
     fn test_merge_hash_algorithm_mismatch() {
-        let m1 = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
+        let m1: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
             "a.txt", "hash1", 100, 1000,
         )]));
 
         // Create a manifest with different hash algorithm (would need to modify the struct)
         // For now, we test that same algorithm works
-        let m2 = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
+        let m2: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
             "b.txt", "hash2", 200, 2000,
         )]));
 
@@ -268,12 +275,10 @@ mod tests {
 
     #[test]
     fn test_merge_version_mismatch() {
-        use crate::v2025_12_04::{AssetManifest as V2025Manifest, ManifestFilePath};
-
-        let m1 = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
+        let m1: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
             "a.txt", "hash1", 100, 1000,
         )]));
-        let m2 = Manifest::V2025_12_04_beta(V2025Manifest::snapshot(
+        let m2: Manifest = Manifest::V2025_12(V2025Manifest::snapshot(
             vec![],
             vec![ManifestFilePath::file("b.txt", "hash2", 200, 2000)],
         ));
@@ -287,37 +292,35 @@ mod tests {
 
     #[test]
     fn test_merge_v2025_manifests() {
-        use crate::v2025_12_04::{AssetManifest as V2025Manifest, ManifestFilePath};
-
-        let m1 = Manifest::V2025_12_04_beta(V2025Manifest::snapshot(
+        let m1: Manifest = Manifest::V2025_12(V2025Manifest::snapshot(
             vec![],
             vec![ManifestFilePath::file("a.txt", "hash1", 100, 1000)],
         ));
-        let m2 = Manifest::V2025_12_04_beta(V2025Manifest::snapshot(
+        let m2: Manifest = Manifest::V2025_12(V2025Manifest::snapshot(
             vec![],
             vec![ManifestFilePath::file("b.txt", "hash2", 200, 2000)],
         ));
 
-        let result = merge_manifests(&[m1, m2]).unwrap().unwrap();
+        let result: Manifest = merge_manifests(&[m1, m2]).unwrap().unwrap();
         assert_eq!(result.file_count(), 2);
-        assert_eq!(result.version(), ManifestVersion::V2025_12_04_beta);
+        assert_eq!(result.version(), ManifestVersion::V2025_12);
     }
 
     #[test]
     fn test_merge_three_manifests() {
-        let m1 = Manifest::V2023_03_03(V2023Manifest::new(vec![
+        let m1: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![
             ManifestPath::new("a.txt", "hash_a1", 100, 1000),
             ManifestPath::new("b.txt", "hash_b1", 200, 1000),
         ]));
-        let m2 = Manifest::V2023_03_03(V2023Manifest::new(vec![
+        let m2: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![
             ManifestPath::new("b.txt", "hash_b2", 250, 2000),
             ManifestPath::new("c.txt", "hash_c1", 300, 2000),
         ]));
-        let m3 = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
+        let m3: Manifest = Manifest::V2023_03_03(V2023Manifest::new(vec![ManifestPath::new(
             "a.txt", "hash_a3", 150, 3000,
         )]));
 
-        let result = merge_manifests(&[m1, m2, m3]).unwrap().unwrap();
+        let result: Manifest = merge_manifests(&[m1, m2, m3]).unwrap().unwrap();
         assert_eq!(result.file_count(), 3);
         // a.txt=150 (from m3) + b.txt=250 (from m2) + c.txt=300 (from m2) = 700
         assert_eq!(result.total_size(), 700);

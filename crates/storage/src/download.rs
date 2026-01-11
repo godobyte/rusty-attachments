@@ -179,10 +179,10 @@ impl<'a, C: StorageClient> DownloadOrchestrator<'a, C> {
         let total_bytes: u64 = entries.iter().map(|e| e.size).sum();
 
         // Create directories first (v2 manifests)
-        if let Manifest::V2025_12_04_beta(m) = manifest {
+        if let Manifest::V2025_12(m) = manifest {
             for dir in &m.dirs {
-                if !dir.delete {
-                    let dir_path: String = format!("{}/{}", destination_root, dir.name);
+                if !dir.deleted {
+                    let dir_path: String = format!("{}/{}", destination_root, dir.path);
                     std::fs::create_dir_all(&dir_path).map_err(|e| StorageError::IoError {
                         path: dir_path,
                         message: e.to_string(),
@@ -299,7 +299,13 @@ impl<'a, C: StorageClient> DownloadOrchestrator<'a, C> {
 
                     // Download the file
                     let result: TransferStatistics = self
-                        .download_entry(&entry, &local_path, ctx.hash_alg, ctx.conflict_resolution, progress)
+                        .download_entry(
+                            &entry,
+                            &local_path,
+                            ctx.hash_alg,
+                            ctx.conflict_resolution,
+                            progress,
+                        )
                         .await?;
 
                     // Update progress counters
@@ -347,15 +353,15 @@ impl<'a, C: StorageClient> DownloadOrchestrator<'a, C> {
                     });
                 }
             }
-            Manifest::V2025_12_04_beta(m) => {
+            Manifest::V2025_12(m) => {
                 for file in &m.files {
                     // Skip deleted entries
-                    if file.delete {
+                    if file.deleted {
                         continue;
                     }
 
                     entries.push(DownloadEntry {
-                        relative_path: file.name.clone(),
+                        relative_path: file.path.clone(),
                         hash: file.hash.clone(),
                         chunkhashes: file.chunkhashes.clone(),
                         symlink_target: file.symlink_target.clone(),
@@ -685,10 +691,7 @@ pub fn set_file_executable(_path: &Path) -> Result<(), StorageError> {
 /// # Returns
 /// A unique path that doesn't exist.
 pub fn generate_unique_copy_path(original: &Path) -> Result<PathBuf, StorageError> {
-    let stem: &str = original
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let stem: &str = original.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let extension: String = original
         .extension()
         .and_then(|e| e.to_str())

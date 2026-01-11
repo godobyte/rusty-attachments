@@ -71,32 +71,30 @@ impl VfsCallbacks {
         let paths_clone: Arc<ModifiedPathsDatabase> = modified_paths.clone();
 
         // Wire background task handler to update modified paths
-        let background_tasks = BackgroundTaskRunner::new(move |task: BackgroundTask| {
-            match task {
-                BackgroundTask::FileCreated(path) => {
-                    tracing::debug!("Background: file created {}", path);
-                    paths_clone.file_created(&path);
-                }
-                BackgroundTask::FileModified(path) => {
-                    tracing::debug!("Background: file modified {}", path);
-                    paths_clone.file_modified(&path);
-                }
-                BackgroundTask::FileDeleted(path) => {
-                    tracing::debug!("Background: file deleted {}", path);
-                    paths_clone.file_deleted(&path);
-                }
-                BackgroundTask::FileRenamed { old_path, new_path } => {
-                    tracing::debug!("Background: file renamed {} -> {}", old_path, new_path);
-                    paths_clone.file_renamed(&old_path, &new_path);
-                }
-                BackgroundTask::FolderCreated(path) => {
-                    tracing::debug!("Background: folder created {}", path);
-                    paths_clone.dir_created(&path);
-                }
-                BackgroundTask::FolderDeleted(path) => {
-                    tracing::debug!("Background: folder deleted {}", path);
-                    paths_clone.dir_deleted(&path);
-                }
+        let background_tasks = BackgroundTaskRunner::new(move |task: BackgroundTask| match task {
+            BackgroundTask::FileCreated(path) => {
+                tracing::debug!("Background: file created {}", path);
+                paths_clone.file_created(&path);
+            }
+            BackgroundTask::FileModified(path) => {
+                tracing::debug!("Background: file modified {}", path);
+                paths_clone.file_modified(&path);
+            }
+            BackgroundTask::FileDeleted(path) => {
+                tracing::debug!("Background: file deleted {}", path);
+                paths_clone.file_deleted(&path);
+            }
+            BackgroundTask::FileRenamed { old_path, new_path } => {
+                tracing::debug!("Background: file renamed {} -> {}", old_path, new_path);
+                paths_clone.file_renamed(&old_path, &new_path);
+            }
+            BackgroundTask::FolderCreated(path) => {
+                tracing::debug!("Background: folder created {}", path);
+                paths_clone.dir_created(&path);
+            }
+            BackgroundTask::FolderDeleted(path) => {
+                tracing::debug!("Background: folder deleted {}", path);
+                paths_clone.dir_deleted(&path);
             }
         });
 
@@ -143,7 +141,8 @@ impl VfsCallbacks {
     /// Arc-wrapped slice of items to enumerate (shared, no cloning).
     pub fn get_projected_items(&self, relative_path: &str) -> Option<Arc<[ProjectedFileInfo]>> {
         // Get base items from projection
-        let base_items: Arc<[ProjectedFileInfo]> = self.projection.get_projected_items(relative_path)?;
+        let base_items: Arc<[ProjectedFileInfo]> =
+            self.projection.get_projected_items(relative_path)?;
 
         // Fast path: no dirty state for this directory
         if !self.has_dirty_state_in_dir(relative_path) {
@@ -201,7 +200,10 @@ impl VfsCallbacks {
                     result.push(ProjectedFileInfo::file(
                         item.name.to_string(),
                         size,
-                        item.content_hash.as_ref().map(|s| s.to_string()).unwrap_or_default(),
+                        item.content_hash
+                            .as_ref()
+                            .map(|s| s.to_string())
+                            .unwrap_or_default(),
                         mtime,
                         item.executable,
                     ));
@@ -299,7 +301,10 @@ impl VfsCallbacks {
                     return false;
                 }
                 let path_normalized: String = e.path.to_lowercase().replace('\\', "/");
-                let file_parent: &str = path_normalized.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+                let file_parent: &str = path_normalized
+                    .rsplit_once('/')
+                    .map(|(p, _)| p)
+                    .unwrap_or("");
                 file_parent == parent_normalized
             })
             .map(|e| {
@@ -327,7 +332,10 @@ impl VfsCallbacks {
                     return false;
                 }
                 let path_normalized: String = e.path.to_lowercase().replace('\\', "/");
-                let dir_parent: &str = path_normalized.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+                let dir_parent: &str = path_normalized
+                    .rsplit_once('/')
+                    .map(|(p, _)| p)
+                    .unwrap_or("");
                 dir_parent == parent_normalized
             })
             .map(|e| e.path.rsplit('/').next().unwrap_or(&e.path).to_string())
@@ -428,7 +436,10 @@ impl VfsCallbacks {
         // Check dirty files first for updated info
         if let Some(inode) = self.path_registry.get(relative_path) {
             if let Some(size) = self.dirty_files.get_size(inode) {
-                let mtime: SystemTime = self.dirty_files.get_mtime(inode).unwrap_or(SystemTime::now());
+                let mtime: SystemTime = self
+                    .dirty_files
+                    .get_mtime(inode)
+                    .unwrap_or(SystemTime::now());
                 let name: String = relative_path
                     .rsplit('/')
                     .next()
@@ -436,7 +447,13 @@ impl VfsCallbacks {
                     .to_string();
 
                 // For dirty files, we may not have a content hash
-                return Some(ProjectedFileInfo::file(name, size, String::new(), mtime, false));
+                return Some(ProjectedFileInfo::file(
+                    name,
+                    size,
+                    String::new(),
+                    mtime,
+                    false,
+                ));
             }
         }
 
@@ -465,7 +482,9 @@ impl VfsCallbacks {
         file_size: u64,
     ) -> Result<Vec<u8>, VfsError> {
         // Get content hash info (may be single or chunked)
-        let content_hash = self.projection.get_content_hash(relative_path)
+        let content_hash = self
+            .projection
+            .get_content_hash(relative_path)
             .ok_or_else(|| VfsError::NotFound(relative_path.to_string()))?;
 
         match content_hash {
@@ -539,14 +558,21 @@ impl VfsCallbacks {
         let storage: Arc<dyn FileStore> = self.storage.clone();
         let hash_clone: String = hash.to_string();
 
-        let handle = self.memory_pool.acquire(&key, move || {
-            let storage = storage.clone();
-            let hash = hash_clone.clone();
-            async move {
-                storage.retrieve(&hash, hash_alg).await
-                    .map_err(|e| rusty_attachments_vfs::memory_pool_v2::MemoryPoolError::RetrievalFailed(e.to_string()))
-            }
-        }).await.map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
+        let handle = self
+            .memory_pool
+            .acquire(&key, move || {
+                let storage = storage.clone();
+                let hash = hash_clone.clone();
+                async move {
+                    storage.retrieve(&hash, hash_alg).await.map_err(|e| {
+                        rusty_attachments_vfs::memory_pool_v2::MemoryPoolError::RetrievalFailed(
+                            e.to_string(),
+                        )
+                    })
+                }
+            })
+            .await
+            .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
 
         // 4. Write through to disk cache (best-effort, ignore errors)
         if let Some(ref cache) = read_cache {
@@ -599,7 +625,12 @@ impl VfsCallbacks {
         let mut result: Vec<u8> = Vec::with_capacity(length as usize);
         let last_chunk: usize = end_chunk.min(chunk_hashes.len() - 1);
 
-        for (chunk_idx, chunk_hash) in chunk_hashes.iter().enumerate().skip(start_chunk).take(last_chunk - start_chunk + 1) {
+        for (chunk_idx, chunk_hash) in chunk_hashes
+            .iter()
+            .enumerate()
+            .skip(start_chunk)
+            .take(last_chunk - start_chunk + 1)
+        {
             let chunk_start: u64 = chunk_idx as u64 * CHUNK_SIZE;
             let chunk_end: u64 = ((chunk_idx + 1) as u64 * CHUNK_SIZE).min(file_size);
 
@@ -615,11 +646,9 @@ impl VfsCallbacks {
                 chunk_end - chunk_start
             };
 
-            let chunk_data: Vec<u8> = self.fetch_single_hash(
-                chunk_hash,
-                read_start,
-                (read_end - read_start) as u32,
-            ).await?;
+            let chunk_data: Vec<u8> = self
+                .fetch_single_hash(chunk_hash, read_start, (read_end - read_start) as u32)
+                .await?;
 
             result.extend_from_slice(&chunk_data);
         }

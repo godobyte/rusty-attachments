@@ -40,8 +40,12 @@ impl INodeManager {
         };
 
         // Create root directory
-        let root: Arc<INodeDir> =
-            Arc::new(INodeDir::new(ROOT_INODE, ROOT_INODE, String::new(), String::new()));
+        let root: Arc<INodeDir> = Arc::new(INodeDir::new(
+            ROOT_INODE,
+            ROOT_INODE,
+            String::new(),
+            String::new(),
+        ));
 
         {
             let mut inodes: std::sync::RwLockWriteGuard<'_, HashMap<INodeId, Arc<dyn INode>>> =
@@ -376,9 +380,7 @@ impl INodeManager {
     pub fn remove_inode(&self, id: INodeId) -> Result<(), crate::VfsError> {
         // Get path before removing
         let path: String = {
-            let inode: Arc<dyn INode> = self
-                .get(id)
-                .ok_or(crate::VfsError::InodeNotFound(id))?;
+            let inode: Arc<dyn INode> = self.get(id).ok_or(crate::VfsError::InodeNotFound(id))?;
             inode.path().to_string()
         };
 

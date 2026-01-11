@@ -111,12 +111,7 @@ fn create_test_env_with_cache() -> (
     let read_cache_options = ReadCacheOptions::with_cache_dir(cache_dir);
     let read_cache = Arc::new(ReadCache::new(read_cache_options).unwrap());
 
-    let mut manager = DirtyFileManager::new(
-        write_cache,
-        store.clone(),
-        inodes.clone(),
-        pool,
-    );
+    let mut manager = DirtyFileManager::new(write_cache, store.clone(), inodes.clone(), pool);
     manager.set_read_cache(read_cache.clone());
 
     (Arc::new(manager), inodes, store, read_cache, temp_dir)
@@ -126,22 +121,13 @@ fn create_test_env_with_cache() -> (
 ///
 /// # Returns
 /// Tuple of (DirtyFileManager, INodeManager, MockFileStore)
-fn create_test_env_no_cache() -> (
-    Arc<DirtyFileManager>,
-    Arc<INodeManager>,
-    Arc<MockFileStore>,
-) {
+fn create_test_env_no_cache() -> (Arc<DirtyFileManager>, Arc<INodeManager>, Arc<MockFileStore>) {
     let write_cache = Arc::new(MemoryWriteCache::new());
     let store = Arc::new(MockFileStore::new());
     let inodes = Arc::new(INodeManager::new());
     let pool = Arc::new(MemoryPool::new(MemoryPoolConfig::default()));
 
-    let manager = DirtyFileManager::new(
-        write_cache,
-        store.clone(),
-        inodes.clone(),
-        pool,
-    );
+    let manager = DirtyFileManager::new(write_cache, store.clone(), inodes.clone(), pool);
 
     (Arc::new(manager), inodes, store)
 }
@@ -256,12 +242,7 @@ mod disk_cache_hit {
         // Store has the content (but we shouldn't need it)
         store.insert(hash, content.clone());
 
-        let mut manager = DirtyFileManager::new(
-            write_cache,
-            store.clone(),
-            inodes.clone(),
-            pool,
-        );
+        let mut manager = DirtyFileManager::new(write_cache, store.clone(), inodes.clone(), pool);
         manager.set_read_cache(read_cache.clone());
         let manager = Arc::new(manager);
 
@@ -337,7 +318,10 @@ mod write_through_skip {
 
         // Assert: mtime unchanged (file not rewritten)
         let mtime_after = std::fs::metadata(&cache_path).unwrap().modified().unwrap();
-        assert_eq!(mtime_before, mtime_after, "Cache file should not be rewritten");
+        assert_eq!(
+            mtime_before, mtime_after,
+            "Cache file should not be rewritten"
+        );
     }
 }
 
@@ -572,7 +556,11 @@ mod missing_cache_dir {
     #[tokio::test]
     async fn test_missing_cache_dir_created() {
         let temp_dir = TempDir::new().unwrap();
-        let cache_dir = temp_dir.path().join("nonexistent").join("nested").join("cas");
+        let cache_dir = temp_dir
+            .path()
+            .join("nonexistent")
+            .join("nested")
+            .join("cas");
 
         // Directory doesn't exist yet
         assert!(!cache_dir.exists());

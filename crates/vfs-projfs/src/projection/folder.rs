@@ -63,14 +63,16 @@ impl SortedFolderEntries {
             .iter()
             .map(|entry| match entry {
                 FolderEntry::File(f) => ProjectedFileInfo::file(
-                    f.name.clone(),
+                    f.path.clone(),
                     f.size,
                     f.content_hash.primary_hash().to_string(),
                     f.mtime,
                     f.executable,
                 ),
-                FolderEntry::Folder(f) => ProjectedFileInfo::folder(f.name().to_string()),
-                FolderEntry::Symlink(s) => ProjectedFileInfo::symlink(s.name.clone(), s.target.clone()),
+                FolderEntry::Folder(f) => ProjectedFileInfo::folder(f.path().to_string()),
+                FolderEntry::Symlink(s) => {
+                    ProjectedFileInfo::symlink(s.name.clone(), s.target.clone())
+                }
             })
             .collect();
 
@@ -116,7 +118,7 @@ impl FolderData {
 
     /// Get folder name.
     pub fn name(&self) -> &str {
-        &self.name
+        &self.path
     }
 
     /// Get children.
@@ -171,11 +173,9 @@ impl FolderData {
     /// Mutable reference to the subfolder.
     pub fn get_or_create_subfolder(&mut self, name: &str) -> &mut FolderData {
         // Check if folder already exists
-        let existing_idx: Option<usize> = self
-            .children
-            .entries
-            .iter()
-            .position(|e| matches!(e, FolderEntry::Folder(f) if f.name().eq_ignore_ascii_case(name)));
+        let existing_idx: Option<usize> = self.children.entries.iter().position(
+            |e| matches!(e, FolderEntry::Folder(f) if f.path().eq_ignore_ascii_case(name)),
+        );
 
         let idx: usize = match existing_idx {
             Some(idx) => idx,
@@ -426,6 +426,9 @@ mod tests {
         assert_eq!(info.name.as_ref(), "link");
         assert!(!info.is_folder);
         assert!(info.content_hash.is_none());
-        assert_eq!(info.symlink_target.as_ref().unwrap().as_ref(), "/target/path");
+        assert_eq!(
+            info.symlink_target.as_ref().unwrap().as_ref(),
+            "/target/path"
+        );
     }
 }

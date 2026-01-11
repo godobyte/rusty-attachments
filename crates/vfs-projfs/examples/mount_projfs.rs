@@ -52,8 +52,10 @@ fn parse_args() -> Args {
     let mut cache_dir = PathBuf::from("vfs-cache");
     let mut show_stats: bool = false;
     let mut cleanup: bool = false;
-    let mut bucket: String = std::env::var("S3_BUCKET").unwrap_or_else(|_| "adeadlineja".to_string());
-    let mut root_prefix: String = std::env::var("S3_ROOT_PREFIX").unwrap_or_else(|_| "DeadlineCloud".to_string());
+    let mut bucket: String =
+        std::env::var("S3_BUCKET").unwrap_or_else(|_| "adeadlineja".to_string());
+    let mut root_prefix: String =
+        std::env::var("S3_ROOT_PREFIX").unwrap_or_else(|_| "DeadlineCloud".to_string());
 
     // Parse optional arguments
     let mut i: usize = 3;
@@ -144,7 +146,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create S3 location configuration
     let cas_prefix: String = std::env::var("S3_CAS_PREFIX").unwrap_or_else(|_| "Data".to_string());
-    let manifest_prefix: String = std::env::var("S3_MANIFEST_PREFIX").unwrap_or_else(|_| "Manifests".to_string());
+    let manifest_prefix: String =
+        std::env::var("S3_MANIFEST_PREFIX").unwrap_or_else(|_| "Manifests".to_string());
 
     let s3_location = S3Location::new(
         args.bucket.clone(),
@@ -156,7 +159,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create storage client
     let storage_settings = StorageSettings::default();
 
-    println!("Connecting to S3: {}/{}", s3_location.bucket, args.root_prefix);
+    println!(
+        "Connecting to S3: {}/{}",
+        s3_location.bucket, args.root_prefix
+    );
     let crt_client: CrtStorageClient = CrtStorageClient::new(storage_settings).await?;
     let storage = Arc::new(StorageClientAdapter::new(crt_client, s3_location));
 

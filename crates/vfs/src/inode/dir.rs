@@ -74,10 +74,7 @@ impl INodeDir {
     pub fn children(&self) -> Vec<(String, INodeId)> {
         let children: std::sync::RwLockReadGuard<'_, HashMap<String, INodeId>> =
             self.children.read().unwrap();
-        children
-            .iter()
-            .map(|(k, v)| (k.clone(), *v))
-            .collect()
+        children.iter().map(|(k, v)| (k.clone(), *v)).collect()
     }
 
     /// Get the number of children.

@@ -199,9 +199,7 @@ impl DiffEngine {
             if let Some(manifest_entry) = manifest_files.get(path) {
                 // File exists in both - check if modified
                 let is_modified: bool = match options.mode {
-                    DiffMode::Fast => {
-                        self.is_modified_fast(current, manifest_entry)
-                    }
+                    DiffMode::Fast => self.is_modified_fast(current, manifest_entry),
                     DiffMode::Hash => {
                         let (modified, hashed_bytes): (bool, u64) =
                             self.is_modified_hash(current, manifest_entry, &options.root)?;
@@ -311,13 +309,13 @@ impl DiffEngine {
         diff_result: &DiffResult,
         options: &DiffOptions,
     ) -> Result<Manifest, FileSystemError> {
-        use rusty_attachments_model::v2025_12_04;
+        use rusty_attachments_model::v2025_12;
 
         // 1. Compute parent manifest hash
         let parent_hash: String = hash_bytes(parent_manifest_bytes);
 
         // 2. Build file entries from added + modified (need to hash them)
-        let mut file_paths: Vec<v2025_12_04::ManifestFilePath> = Vec::new();
+        let mut file_paths: Vec<v2025_12::ManifestFilePath> = Vec::new();
 
         for entry in &diff_result.added {
             let file_path: PathBuf = options.root.join(&entry.path);
@@ -327,13 +325,8 @@ impl DiffEngine {
             })?;
 
             file_paths.push(
-                v2025_12_04::ManifestFilePath::file(
-                    entry.path.clone(),
-                    hash,
-                    entry.size,
-                    entry.mtime,
-                )
-                .with_runnable(entry.runnable),
+                v2025_12::ManifestFilePath::file(entry.path.clone(), hash, entry.size, entry.mtime)
+                    .with_runnable(entry.runnable),
             );
         }
 
@@ -345,36 +338,33 @@ impl DiffEngine {
             })?;
 
             file_paths.push(
-                v2025_12_04::ManifestFilePath::file(
-                    entry.path.clone(),
-                    hash,
-                    entry.size,
-                    entry.mtime,
-                )
-                .with_runnable(entry.runnable),
+                v2025_12::ManifestFilePath::file(entry.path.clone(), hash, entry.size, entry.mtime)
+                    .with_runnable(entry.runnable),
             );
         }
 
         // 3. Add deletion markers
         for path in &diff_result.deleted {
-            file_paths.push(v2025_12_04::ManifestFilePath::deleted(path.clone()));
+            file_paths.push(v2025_12::ManifestFilePath::deleted(path.clone()));
         }
 
         // 4. Build directory entries with deletion markers
-        let mut dir_paths: Vec<v2025_12_04::ManifestDirectoryPath> = Vec::new();
+        let mut dir_paths: Vec<v2025_12::ManifestDirectoryPath> = Vec::new();
 
         for dir in &diff_result.added_dirs {
-            dir_paths.push(v2025_12_04::ManifestDirectoryPath::new(dir.clone()));
+            dir_paths.push(v2025_12::ManifestDirectoryPath::new(dir.clone()));
         }
 
         for dir in &diff_result.deleted_dirs {
-            dir_paths.push(v2025_12_04::ManifestDirectoryPath::deleted(dir.clone()));
+            dir_paths.push(v2025_12::ManifestDirectoryPath::deleted(dir.clone()));
         }
 
         // 5. Create diff manifest
-        Ok(Manifest::V2025_12_04_beta(
-            v2025_12_04::AssetManifest::diff(dir_paths, file_paths, parent_hash),
-        ))
+        Ok(Manifest::V2025_12(v2025_12::AssetManifest::diff(
+            dir_paths,
+            file_paths,
+            parent_hash,
+        )))
     }
 
     /// Walk the current directory and collect file information.
@@ -459,10 +449,10 @@ impl DiffEngine {
                     }
                 }
             }
-            Manifest::V2025_12_04_beta(m) => {
+            Manifest::V2025_12(m) => {
                 for file in &m.files {
                     // Skip deleted entries and symlinks
-                    if file.delete || file.symlink_target.is_some() {
+                    if file.deleted || file.symlink_target.is_some() {
                         continue;
                     }
                     // Skip entries without size/mtime (deleted markers)
@@ -474,9 +464,9 @@ impl DiffEngine {
                         Some(m) => m,
                         None => continue,
                     };
-                    if filter.is_empty() || filter.matches(&file.name) {
+                    if filter.is_empty() || filter.matches(&file.path) {
                         lookup.insert(
-                            file.name.clone(),
+                            file.path.clone(),
                             ManifestFileInfo {
                                 size,
                                 mtime,
@@ -495,12 +485,12 @@ impl DiffEngine {
     fn get_manifest_dirs(&self, manifest: &Manifest, filter: &GlobFilter) -> Vec<String> {
         match manifest {
             Manifest::V2023_03_03(_) => Vec::new(), // v2023 doesn't track directories
-            Manifest::V2025_12_04_beta(m) => m
+            Manifest::V2025_12(m) => m
                 .dirs
                 .iter()
-                .filter(|d| !d.delete)
-                .filter(|d| filter.is_empty() || filter.matches(&d.name))
-                .map(|d| d.name.clone())
+                .filter(|d| !d.deleted)
+                .filter(|d| filter.is_empty() || filter.matches(&d.path))
+                .map(|d| d.path.clone())
                 .collect(),
         }
     }
@@ -579,11 +569,10 @@ fn is_executable(_mode: u32) -> bool {
     false
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusty_attachments_model::v2023_03_03;
+    use rusty_attachments_model::{v2023_03_03, ManifestVersion};
     use std::io::Write;
     use std::thread;
     use std::time::Duration as StdDuration;
@@ -844,7 +833,7 @@ mod tests {
         let scanner: FileSystemScanner = FileSystemScanner::new();
         let options: SnapshotOptions = SnapshotOptions {
             root: root.clone(),
-            version: ManifestVersion::V2025_12_04_beta,
+            version: ManifestVersion::V2025_12,
             ..Default::default()
         };
         let manifest: Manifest = scanner.snapshot(&options, None).unwrap();
@@ -898,22 +887,14 @@ mod tests {
             .unwrap();
 
         // Then: diff manifest has parent hash and changes
-        assert_eq!(diff_manifest.version(), ManifestVersion::V2025_12_04_beta);
+        assert_eq!(diff_manifest.version(), ManifestVersion::V2025_12);
 
-        if let Manifest::V2025_12_04_beta(m) = diff_manifest {
+        if let Manifest::V2025_12(m) = diff_manifest {
             assert!(m.parent_manifest_hash.is_some());
 
             // Should have 1 added file and 1 deleted marker
-            let added: Vec<_> = m
-                .paths
-                .iter()
-                .filter(|p| !p.deleted)
-                .collect();
-            let deleted: Vec<_> = m
-                .paths
-                .iter()
-                .filter(|p| p.deleted)
-                .collect();
+            let added: Vec<_> = m.files.iter().filter(|p| !p.deleted).collect();
+            let deleted: Vec<_> = m.files.iter().filter(|p| p.deleted).collect();
 
             assert_eq!(added.len(), 1);
             assert_eq!(added[0].path, "new.txt");

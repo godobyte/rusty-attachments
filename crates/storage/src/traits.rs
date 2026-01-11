@@ -1,8 +1,10 @@
 //! Storage traits/interfaces for S3 operations.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use async_trait::async_trait;
+use rusty_attachments_model::HashAlgorithm;
 
 use crate::error::StorageError;
 use crate::types::TransferProgress;
@@ -131,4 +133,106 @@ pub trait StorageClient: Send + Sync {
         bucket: &str,
         prefix: &str,
     ) -> Result<Vec<ObjectInfo>, StorageError>;
+}
+
+/// Content-addressable data cache abstraction.
+///
+/// Provides a unified interface for storing and retrieving content
+/// by hash, regardless of the underlying storage backend (S3 or filesystem).
+#[async_trait]
+pub trait ContentAddressedDataCache: Send + Sync {
+    /// Get the storage key for a given hash.
+    ///
+    /// # Arguments
+    /// * `hash` - Content hash value
+    /// * `algorithm` - Hash algorithm used
+    ///
+    /// # Returns
+    /// Storage key string (e.g., "Data/abc123.xxh128" for S3, "abc123.xxh128" for filesystem).
+    fn get_object_key(&self, hash: &str, algorithm: HashAlgorithm) -> String;
+
+    /// Check if an object exists in the cache.
+    ///
+    /// # Arguments
+    /// * `hash` - Content hash value
+    /// * `algorithm` - Hash algorithm used
+    ///
+    /// # Returns
+    /// True if the object exists.
+    async fn object_exists(
+        &self,
+        hash: &str,
+        algorithm: HashAlgorithm,
+    ) -> Result<bool, StorageError>;
+
+    /// Get object size if it exists.
+    ///
+    /// # Arguments
+    /// * `hash` - Content hash value
+    /// * `algorithm` - Hash algorithm used
+    ///
+    /// # Returns
+    /// Object size in bytes, or None if not found.
+    async fn object_size(
+        &self,
+        hash: &str,
+        algorithm: HashAlgorithm,
+    ) -> Result<Option<u64>, StorageError>;
+
+    /// Upload content to the cache.
+    ///
+    /// # Arguments
+    /// * `hash` - Content hash value
+    /// * `algorithm` - Hash algorithm used
+    /// * `data` - Content bytes to upload
+    async fn put_object(
+        &self,
+        hash: &str,
+        algorithm: HashAlgorithm,
+        data: &[u8],
+    ) -> Result<(), StorageError>;
+
+    /// Upload content from a file.
+    ///
+    /// # Arguments
+    /// * `hash` - Content hash value
+    /// * `algorithm` - Hash algorithm used
+    /// * `file_path` - Path to file to upload
+    /// * `progress` - Optional progress callback
+    async fn put_object_from_file(
+        &self,
+        hash: &str,
+        algorithm: HashAlgorithm,
+        file_path: &Path,
+        progress: Option<&dyn ProgressCallback>,
+    ) -> Result<(), StorageError>;
+
+    /// Download content from the cache.
+    ///
+    /// # Arguments
+    /// * `hash` - Content hash value
+    /// * `algorithm` - Hash algorithm used
+    ///
+    /// # Returns
+    /// Content bytes.
+    async fn get_object(
+        &self,
+        hash: &str,
+        algorithm: HashAlgorithm,
+    ) -> Result<Vec<u8>, StorageError>;
+
+    /// Download content to a file.
+    ///
+    /// # Arguments
+    /// * `hash` - Content hash value
+    /// * `algorithm` - Hash algorithm used
+    /// * `file_path` - Destination file path
+    /// * `progress` - Optional progress callback
+    async fn get_object_to_file(
+        &self,
+        hash: &str,
+        algorithm: HashAlgorithm,
+        file_path: &Path,
+        progress: Option<&dyn ProgressCallback>,
+    ) -> Result<(), StorageError>;
 }

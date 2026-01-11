@@ -134,7 +134,8 @@ impl ReadCache {
         std::fs::rename(&temp_path, &path)?;
 
         // Update size tracking
-        self.current_size.fetch_add(data.len() as u64, Ordering::Relaxed);
+        self.current_size
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
 
         Ok(())
     }

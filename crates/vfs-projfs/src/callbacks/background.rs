@@ -51,25 +51,23 @@ impl BackgroundTaskRunner {
 
         let thread: JoinHandle<()> = thread::Builder::new()
             .name("projfs-background".to_string())
-            .spawn(move || {
-                loop {
-                    let task: Option<BackgroundTask> = {
-                        let (lock, cvar) = &*queue_clone;
-                        let mut queue = lock.lock().unwrap();
+            .spawn(move || loop {
+                let task: Option<BackgroundTask> = {
+                    let (lock, cvar) = &*queue_clone;
+                    let mut queue = lock.lock().unwrap();
 
-                        while queue.is_empty() {
-                            if shutdown_clone.load(Ordering::SeqCst) {
-                                return;
-                            }
-                            queue = cvar.wait(queue).unwrap();
+                    while queue.is_empty() {
+                        if shutdown_clone.load(Ordering::SeqCst) {
+                            return;
                         }
-
-                        queue.pop_front()
-                    };
-
-                    if let Some(task) = task {
-                        handler(task);
+                        queue = cvar.wait(queue).unwrap();
                     }
+
+                    queue.pop_front()
+                };
+
+                if let Some(task) = task {
+                    handler(task);
                 }
             })
             .expect("Failed to spawn background thread");

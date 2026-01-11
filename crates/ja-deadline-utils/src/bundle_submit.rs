@@ -43,7 +43,7 @@ impl Default for BundleSubmitOptions {
             file_system_mode: "COPIED".into(),
             cache_dir: default_cache_dir(),
             glob_filter: None,
-            manifest_version: ManifestVersion::V2025_12_04_beta,
+            manifest_version: ManifestVersion::V2025_12,
         }
     }
 }
@@ -137,6 +137,7 @@ impl From<TransferStatistics> for SummaryStatistics {
 ///
 /// # Errors
 /// Returns `BundleSubmitError` if validation fails or operations error.
+#[allow(clippy::too_many_arguments)]
 pub async fn submit_bundle_attachments<C: StorageClient>(
     client: &C,
     s3_location: &S3Location,
@@ -243,7 +244,10 @@ pub async fn submit_bundle_attachments<C: StorageClient>(
 
         let props: ManifestProperties = build_manifest_properties(
             &asset_root_manifest,
-            Some(&extract_partial_key(&manifest_result.s3_key, manifest_location)),
+            Some(&extract_partial_key(
+                &manifest_result.s3_key,
+                manifest_location,
+            )),
             Some(&manifest_result.manifest_hash),
         );
         manifest_properties.push(props);
@@ -291,7 +295,7 @@ mod tests {
         assert!(!options.require_paths_exist);
         assert_eq!(options.file_system_mode, "COPIED");
         assert!(options.glob_filter.is_none());
-        assert_eq!(options.manifest_version, ManifestVersion::V2025_12_04_beta);
+        assert_eq!(options.manifest_version, ManifestVersion::V2025_12);
     }
 
     #[test]

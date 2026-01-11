@@ -116,7 +116,10 @@ mod tests {
         let mut store: MemoryFileStore = MemoryFileStore::new();
         store.insert("hash123", vec![1, 2, 3, 4, 5]);
 
-        let data: Vec<u8> = store.retrieve("hash123", HashAlgorithm::Xxh128).await.unwrap();
+        let data: Vec<u8> = store
+            .retrieve("hash123", HashAlgorithm::Xxh128)
+            .await
+            .unwrap();
         assert_eq!(data, vec![1, 2, 3, 4, 5]);
     }
 

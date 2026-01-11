@@ -30,8 +30,8 @@ use rusty_attachments_model::Manifest;
 use rusty_attachments_storage::{S3Location, StorageSettings};
 use rusty_attachments_storage_crt::CrtStorageClient;
 use rusty_attachments_vfs::{
-    DeadlineVfs, FileStore, StorageClientAdapter, VfsError, VfsOptions, VfsStats, VfsStatsCollector,
-    WritableVfs, WritableVfsStats, WritableVfsStatsCollector, WriteOptions,
+    DeadlineVfs, FileStore, StorageClientAdapter, VfsError, VfsOptions, VfsStats,
+    VfsStatsCollector, WritableVfs, WritableVfsStats, WritableVfsStatsCollector, WriteOptions,
 };
 
 use async_trait::async_trait;
@@ -166,10 +166,7 @@ impl CliArgs {
         eprintln!("  --region <region>    AWS region (default: us-west-2)");
         eprintln!();
         eprintln!("Examples:");
-        eprintln!(
-            "  {} /tmp/manifest.json ~/vfs --stats",
-            program
-        );
+        eprintln!("  {} /tmp/manifest.json ~/vfs --stats", program);
         eprintln!(
             "  {} /tmp/manifest.json ~/vfs --stats --writable --cache-dir /tmp/cow",
             program
@@ -216,7 +213,6 @@ fn truncate_path(path: &str, max_len: usize) -> String {
     }
 }
 
-
 /// Print read-only VFS statistics dashboard.
 ///
 /// # Arguments
@@ -229,37 +225,64 @@ fn print_readonly_stats(stats: &VfsStats) {
     println!("║                    VFS Statistics Dashboard                       ║");
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ Mode: READ-ONLY                                                   ║");
-    println!("║ Uptime: {:>5}s                                                   ║", stats.uptime_secs);
+    println!(
+        "║ Uptime: {:>5}s                                                   ║",
+        stats.uptime_secs
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ FILESYSTEM                                                        ║");
-    println!("║   Inodes: {:>10}                                              ║", stats.inode_count);
-    println!("║   Open files: {:>6}                                              ║", stats.open_files);
+    println!(
+        "║   Inodes: {:>10}                                              ║",
+        stats.inode_count
+    );
+    println!(
+        "║   Open files: {:>6}                                              ║",
+        stats.open_files
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ MEMORY POOL                                                       ║");
-    println!("║   Blocks: {:>6} total, {:>6} in use                            ║",
-             stats.pool_stats.total_blocks, stats.pool_stats.in_use_blocks);
-    println!("║   Memory: {:>12} / {:>12} ({:.1}%)                   ║",
-             format_bytes(stats.pool_stats.current_size),
-             format_bytes(stats.pool_stats.max_size),
-             stats.pool_stats.utilization());
-    println!("║   Pending fetches: {:>4}                                          ║", stats.pool_stats.pending_fetches);
+    println!(
+        "║   Blocks: {:>6} total, {:>6} in use                            ║",
+        stats.pool_stats.total_blocks, stats.pool_stats.in_use_blocks
+    );
+    println!(
+        "║   Memory: {:>12} / {:>12} ({:.1}%)                   ║",
+        format_bytes(stats.pool_stats.current_size),
+        format_bytes(stats.pool_stats.max_size),
+        stats.pool_stats.utilization()
+    );
+    println!(
+        "║   Pending fetches: {:>4}                                          ║",
+        stats.pool_stats.pending_fetches
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ CACHE                                                             ║");
-    println!("║   Hits: {:>10}  Allocations: {:>10}                       ║",
-             stats.cache_hits, stats.cache_allocations);
-    println!("║   Hit rate: {:>6.2}%                                              ║", stats.cache_hit_rate);
+    println!(
+        "║   Hits: {:>10}  Allocations: {:>10}                       ║",
+        stats.cache_hits, stats.cache_allocations
+    );
+    println!(
+        "║   Hit rate: {:>6.2}%                                              ║",
+        stats.cache_hit_rate
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
 
     if stats.open_files > 0 {
         println!("║ OPEN FILES                                                        ║");
         for (i, file) in stats.open_file_list.iter().take(10).enumerate() {
             let path_display: String = truncate_path(&file.path, 50);
-            println!("║   {:>2}. {:50} {:>8} ║",
-                     i + 1, path_display, format_bytes(file.size));
+            println!(
+                "║   {:>2}. {:50} {:>8} ║",
+                i + 1,
+                path_display,
+                format_bytes(file.size)
+            );
         }
         if stats.open_files > 10 {
-            println!("║   ... and {} more                                               ║",
-                     stats.open_files - 10);
+            println!(
+                "║   ... and {} more                                               ║",
+                stats.open_files - 10
+            );
         }
     } else {
         println!("║ OPEN FILES: (none)                                                ║");
@@ -281,31 +304,51 @@ fn print_writable_stats(stats: &WritableVfsStats) {
     println!("║                    VFS Statistics Dashboard                       ║");
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ Mode: READ-WRITE (COW)                                            ║");
-    println!("║ Uptime: {:>5}s                                                   ║", stats.uptime_secs);
+    println!(
+        "║ Uptime: {:>5}s                                                   ║",
+        stats.uptime_secs
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ FILESYSTEM                                                        ║");
-    println!("║   Inodes: {:>10}                                              ║", stats.inode_count);
+    println!(
+        "║   Inodes: {:>10}                                              ║",
+        stats.inode_count
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ MEMORY POOL                                                       ║");
-    println!("║   Blocks: {:>6} total, {:>6} in use                            ║",
-             stats.pool_stats.total_blocks, stats.pool_stats.in_use_blocks);
-    println!("║   Memory: {:>12} / {:>12} ({:.1}%)                   ║",
-             format_bytes(stats.pool_stats.current_size),
-             format_bytes(stats.pool_stats.max_size),
-             stats.pool_stats.utilization());
-    println!("║   Pending fetches: {:>4}                                          ║", stats.pool_stats.pending_fetches);
+    println!(
+        "║   Blocks: {:>6} total, {:>6} in use                            ║",
+        stats.pool_stats.total_blocks, stats.pool_stats.in_use_blocks
+    );
+    println!(
+        "║   Memory: {:>12} / {:>12} ({:.1}%)                   ║",
+        format_bytes(stats.pool_stats.current_size),
+        format_bytes(stats.pool_stats.max_size),
+        stats.pool_stats.utilization()
+    );
+    println!(
+        "║   Pending fetches: {:>4}                                          ║",
+        stats.pool_stats.pending_fetches
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ CACHE                                                             ║");
-    println!("║   Hits: {:>10}  Allocations: {:>10}                       ║",
-             stats.cache_hits, stats.cache_allocations);
-    println!("║   Hit rate: {:>6.2}%                                              ║", stats.cache_hit_rate);
+    println!(
+        "║   Hits: {:>10}  Allocations: {:>10}                       ║",
+        stats.cache_hits, stats.cache_allocations
+    );
+    println!(
+        "║   Hit rate: {:>6.2}%                                              ║",
+        stats.cache_hit_rate
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
 
     // Dirty files section
     let summary = &stats.dirty_summary;
     println!("║ COW DIRTY FILES                                                   ║");
-    println!("║   Modified: {:>3}    New: {:>3}    Deleted: {:>3}                    ║",
-             summary.modified_count, summary.new_count, summary.deleted_count);
+    println!(
+        "║   Modified: {:>3}    New: {:>3}    Deleted: {:>3}                    ║",
+        summary.modified_count, summary.new_count, summary.deleted_count
+    );
 
     if !stats.modified_files.is_empty() || !stats.new_files.is_empty() {
         println!("║                                                                   ║");
@@ -315,21 +358,31 @@ fn print_writable_stats(stats: &WritableVfsStats) {
         let mut display_count: usize = 0;
         for file in stats.modified_files.iter().take(5) {
             let path_display: String = truncate_path(&file.path, 42);
-            println!("║   {:>2}. {:42} {:>8}      ║",
-                     display_count + 1, path_display, format_bytes(file.size));
+            println!(
+                "║   {:>2}. {:42} {:>8}      ║",
+                display_count + 1,
+                path_display,
+                format_bytes(file.size)
+            );
             display_count += 1;
         }
         for file in stats.new_files.iter().take(5 - display_count.min(5)) {
             let path_display: String = truncate_path(&file.path, 42);
-            println!("║   {:>2}. {:42} {:>8} [NEW]║",
-                     display_count + 1, path_display, format_bytes(file.size));
+            println!(
+                "║   {:>2}. {:42} {:>8} [NEW]║",
+                display_count + 1,
+                path_display,
+                format_bytes(file.size)
+            );
             display_count += 1;
         }
 
         let total_dirty: usize = stats.modified_files.len() + stats.new_files.len();
         if total_dirty > 5 {
-            println!("║   ... and {} more                                               ║",
-                     total_dirty - 5);
+            println!(
+                "║   ... and {} more                                               ║",
+                total_dirty - 5
+            );
         }
     }
 
@@ -341,8 +394,10 @@ fn print_writable_stats(stats: &WritableVfsStats) {
             println!("║   {:>2}. {:50}        ║", i + 1, path_display);
         }
         if stats.deleted_files.len() > 3 {
-            println!("║   ... and {} more                                               ║",
-                     stats.deleted_files.len() - 3);
+            println!(
+                "║   ... and {} more                                               ║",
+                stats.deleted_files.len() - 3
+            );
         }
     }
 
@@ -500,7 +555,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let session = rusty_attachments_vfs::spawn_mount_writable(vfs, &mountpoint)?;
 
         let stats_handle: Option<thread::JoinHandle<()>> = if args.show_stats {
-            Some(spawn_writable_stats_thread(stats_collector, running.clone(), 2))
+            Some(spawn_writable_stats_thread(
+                stats_collector,
+                running.clone(),
+                2,
+            ))
         } else {
             println!("Press Ctrl+C to unmount and exit.");
             None
@@ -524,7 +583,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let session = rusty_attachments_vfs::spawn_mount(vfs, &mountpoint)?;
 
         let stats_handle: Option<thread::JoinHandle<()>> = if args.show_stats {
-            Some(spawn_readonly_stats_thread(stats_collector, running.clone(), 2))
+            Some(spawn_readonly_stats_thread(
+                stats_collector,
+                running.clone(),
+                2,
+            ))
         } else {
             println!("Press Ctrl+C to unmount and exit.");
             None

@@ -3,7 +3,7 @@
 use thiserror::Error;
 
 use crate::hash::HashAlgorithm;
-use crate::version::ManifestVersion;
+use crate::version::{ManifestVersion, PathStyle, SpecVersion};
 
 /// Errors that can occur during manifest operations.
 #[derive(Debug, Error)]
@@ -13,6 +13,9 @@ pub enum ManifestError {
 
     #[error("Unknown manifest version: {0}")]
     UnknownVersion(String),
+
+    #[error("Unknown specification version: {0}")]
+    UnknownSpecVersion(String),
 
     #[error("Unsupported hash algorithm: {0}")]
     UnsupportedHashAlgorithm(String),
@@ -26,10 +29,43 @@ pub enum ManifestError {
         actual: HashAlgorithm,
     },
 
-    #[error("Cannot merge manifests with different versions: expected {expected:?}, got {actual:?}")]
+    #[error(
+        "Cannot merge manifests with different versions: expected {expected:?}, got {actual:?}"
+    )]
     MergeVersionMismatch {
         expected: ManifestVersion,
         actual: ManifestVersion,
+    },
+
+    #[error("Manifest type error: {0}")]
+    ManifestType(#[from] ManifestTypeError),
+}
+
+/// Error when manifest doesn't match expected type.
+#[derive(Debug, Clone, Error)]
+pub enum ManifestTypeError {
+    #[error("Expected {expected:?} paths, got {actual:?}")]
+    PathStyleMismatch {
+        expected: PathStyle,
+        actual: PathStyle,
+    },
+
+    #[error("Expected {expected:?} manifest, got {actual:?}")]
+    TypeMismatch {
+        expected: crate::version::ManifestType,
+        actual: crate::version::ManifestType,
+    },
+
+    #[error("V2023_03_03 manifests cannot be converted to typed wrappers")]
+    LegacyVersionNotSupported,
+
+    #[error("Diff manifest missing parent_manifest_hash")]
+    MissingParentHash,
+
+    #[error("Expected spec version {expected:?}, got {actual:?}")]
+    SpecVersionMismatch {
+        expected: SpecVersion,
+        actual: SpecVersion,
     },
 }
 
@@ -48,7 +84,9 @@ pub enum ValidationError {
     #[error("File '{path}' must have 'mtime' field")]
     MissingMtime { path: String },
 
-    #[error("File '{path}' with chunkhashes must have size > {chunk_size} (256MB), got {actual_size}")]
+    #[error(
+        "File '{path}' with chunkhashes must have size > {chunk_size} (256MB), got {actual_size}"
+    )]
     ChunkedFileTooSmall {
         path: String,
         chunk_size: u64,
@@ -74,4 +112,7 @@ pub enum ValidationError {
 
     #[error("Snapshot manifests cannot have deletion markers")]
     SnapshotWithDeletion,
+
+    #[error("Diff manifests must have parent_manifest_hash")]
+    DiffMissingParentHash,
 }

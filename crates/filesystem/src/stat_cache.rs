@@ -36,7 +36,8 @@ impl StatCache {
     /// # Arguments
     /// * `capacity` - Maximum number of entries to cache
     pub fn new(capacity: usize) -> Self {
-        let cap: NonZeroUsize = NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(1).unwrap());
+        let cap: NonZeroUsize =
+            NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(1).unwrap());
         Self {
             cache: Mutex::new(LruCache::new(cap)),
         }
@@ -80,7 +81,9 @@ impl StatCache {
     /// # Arguments
     /// * `path` - Path to check
     pub fn is_dir(&self, path: &Path) -> bool {
-        self.stat(path).map(|s: StatResult| s.is_dir).unwrap_or(false)
+        self.stat(path)
+            .map(|s: StatResult| s.is_dir)
+            .unwrap_or(false)
     }
 
     /// Check if path is a symlink using cached stat.
@@ -112,9 +115,7 @@ impl StatCache {
     /// # Returns
     /// Modification time in microseconds since epoch, or 0 if path doesn't exist.
     pub fn mtime_us(&self, path: &Path) -> i64 {
-        self.stat(path)
-            .map(|s: StatResult| s.mtime_us)
-            .unwrap_or(0)
+        self.stat(path).map(|s: StatResult| s.mtime_us).unwrap_or(0)
     }
 
     /// Clear the cache.

@@ -193,12 +193,15 @@ impl GlobFilter {
                     })?;
                 builder.add(glob);
             }
-            self.include_set = Some(builder.build().map_err(|e| {
-                FileSystemError::InvalidGlobPattern {
-                    pattern: self.include.join(", "),
-                    reason: e.to_string(),
-                }
-            })?);
+            self.include_set =
+                Some(
+                    builder
+                        .build()
+                        .map_err(|e| FileSystemError::InvalidGlobPattern {
+                            pattern: self.include.join(", "),
+                            reason: e.to_string(),
+                        })?,
+                );
         }
 
         if !self.exclude.is_empty() {
@@ -211,12 +214,15 @@ impl GlobFilter {
                     })?;
                 builder.add(glob);
             }
-            self.exclude_set = Some(builder.build().map_err(|e| {
-                FileSystemError::InvalidGlobPattern {
-                    pattern: self.exclude.join(", "),
-                    reason: e.to_string(),
-                }
-            })?);
+            self.exclude_set =
+                Some(
+                    builder
+                        .build()
+                        .map_err(|e| FileSystemError::InvalidGlobPattern {
+                            pattern: self.exclude.join(", "),
+                            reason: e.to_string(),
+                        })?,
+                );
         }
 
         Ok(())
@@ -331,9 +337,11 @@ mod tests {
 
     #[test]
     fn test_include_specific_filename_pattern() {
-        let filter: GlobFilter =
-            GlobFilter::include(vec!["*include.txt".to_string(), "*/*include.txt".to_string()])
-                .unwrap();
+        let filter: GlobFilter = GlobFilter::include(vec![
+            "*include.txt".to_string(),
+            "*/*include.txt".to_string(),
+        ])
+        .unwrap();
         assert!(filter.matches("include.txt"));
         assert!(filter.matches("nested/nested_include.txt"));
         assert!(!filter.matches("exclude.txt"));
@@ -342,9 +350,11 @@ mod tests {
 
     #[test]
     fn test_exclude_specific_filename_pattern() {
-        let filter: GlobFilter =
-            GlobFilter::exclude(vec!["*exclude.txt".to_string(), "*/*exclude.txt".to_string()])
-                .unwrap();
+        let filter: GlobFilter = GlobFilter::exclude(vec![
+            "*exclude.txt".to_string(),
+            "*/*exclude.txt".to_string(),
+        ])
+        .unwrap();
         assert!(filter.matches("include.txt"));
         assert!(filter.matches("nested/nested_include.txt"));
         assert!(!filter.matches("exclude.txt"));
@@ -372,22 +382,17 @@ mod tests {
         let empty_filter: GlobFilter = GlobFilter::new();
         assert!(empty_filter.is_empty());
 
-        let include_filter: GlobFilter =
-            GlobFilter::include(vec!["*.txt".to_string()]).unwrap();
+        let include_filter: GlobFilter = GlobFilter::include(vec!["*.txt".to_string()]).unwrap();
         assert!(!include_filter.is_empty());
 
-        let exclude_filter: GlobFilter =
-            GlobFilter::exclude(vec!["*.tmp".to_string()]).unwrap();
+        let exclude_filter: GlobFilter = GlobFilter::exclude(vec!["*.tmp".to_string()]).unwrap();
         assert!(!exclude_filter.is_empty());
     }
 
     #[test]
     fn test_pattern_accessors() {
-        let filter: GlobFilter = GlobFilter::with_patterns(
-            vec!["*.py".to_string()],
-            vec!["*.tmp".to_string()],
-        )
-        .unwrap();
+        let filter: GlobFilter =
+            GlobFilter::with_patterns(vec!["*.py".to_string()], vec!["*.tmp".to_string()]).unwrap();
         assert_eq!(filter.include_patterns(), &["*.py".to_string()]);
         assert_eq!(filter.exclude_patterns(), &["*.tmp".to_string()]);
     }
@@ -441,10 +446,7 @@ mod tests {
 
     #[test]
     fn test_escape_glob_multiple_special_chars() {
-        assert_eq!(
-            escape_glob("test[*?{!}].txt"),
-            r"test\[\*\?\{\!\}\].txt"
-        );
+        assert_eq!(escape_glob("test[*?{!}].txt"), r"test\[\*\?\{\!\}\].txt");
     }
 
     #[test]

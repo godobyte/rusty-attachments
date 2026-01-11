@@ -236,8 +236,9 @@ impl ManifestS3Metadata {
             .and_then(|v| serde_json::from_str(v).ok())
             .or_else(|| metadata.get(METADATA_KEY_ASSET_ROOT).cloned())?;
 
-        let file_system_location_name: Option<String> =
-            metadata.get(METADATA_KEY_FILE_SYSTEM_LOCATION_NAME).cloned();
+        let file_system_location_name: Option<String> = metadata
+            .get(METADATA_KEY_FILE_SYSTEM_LOCATION_NAME)
+            .cloned();
 
         Some(Self {
             asset_root,
@@ -327,10 +328,7 @@ pub fn compute_manifest_name_hash(source_root: &str) -> String {
 ///
 /// # Returns
 /// The xxh128 hash as a hex string.
-pub fn compute_root_path_hash(
-    file_system_location_name: Option<&str>,
-    root_path: &str,
-) -> String {
+pub fn compute_root_path_hash(file_system_location_name: Option<&str>, root_path: &str) -> String {
     let data: String = format!("{}{}", file_system_location_name.unwrap_or(""), root_path);
     hash_bytes(data.as_bytes())
 }
@@ -345,7 +343,7 @@ pub fn compute_root_path_hash(
 pub fn get_manifest_content_type(manifest: &Manifest) -> &'static str {
     match manifest {
         Manifest::V2023_03_03(_) => CONTENT_TYPE_V2023_03_03,
-        Manifest::V2025_12_04_beta(m) => {
+        Manifest::V2025_12(m) => {
             if m.parent_manifest_hash.is_some() {
                 CONTENT_TYPE_V2025_12_04_BETA_DIFF
             } else {
@@ -827,8 +825,7 @@ pub async fn download_manifest<C: StorageClient>(
     })?;
 
     // Get object metadata via HEAD request
-    let metadata: ManifestDownloadMetadata =
-        get_manifest_metadata(client, bucket, s3_key).await?;
+    let metadata: ManifestDownloadMetadata = get_manifest_metadata(client, bucket, s3_key).await?;
 
     Ok((manifest, metadata))
 }
@@ -862,8 +859,7 @@ async fn get_manifest_metadata<C: StorageClient>(
                     .as_ref()
                     .map(|m| m.asset_root.clone())
                     .unwrap_or_default(),
-                file_system_location_name: s3_metadata
-                    .and_then(|m| m.file_system_location_name),
+                file_system_location_name: s3_metadata.and_then(|m| m.file_system_location_name),
                 content_type: metadata.content_type,
                 last_modified: metadata.last_modified,
             })
@@ -1006,9 +1002,7 @@ pub fn build_output_manifest_prefix(
 pub fn filter_output_manifest_objects(objects: &[ObjectInfo]) -> Vec<&ObjectInfo> {
     objects
         .iter()
-        .filter(|obj| {
-            obj.key.ends_with("_output") || obj.key.ends_with("_output.json")
-        })
+        .filter(|obj| obj.key.ends_with("_output") || obj.key.ends_with("_output.json"))
         .collect()
 }
 
@@ -1046,12 +1040,10 @@ pub fn parse_manifest_keys(objects: &[&ObjectInfo]) -> Vec<ParsedManifestKey> {
 
     // Regex to match step-level paths: .../step-xxx/timestamp_sessionaction-xxx/hash_output
     let step_pattern: Regex =
-        Regex::new(r"step-[^/]+/([^/]+_sessionaction-[^/]+)/[^/]+_output")
-            .expect("valid regex");
+        Regex::new(r"step-[^/]+/([^/]+_sessionaction-[^/]+)/[^/]+_output").expect("valid regex");
 
     // Regex to extract session action ID from folder name
-    let session_action_re: Regex =
-        Regex::new(r"(sessionaction-[^/]+)").expect("valid regex");
+    let session_action_re: Regex = Regex::new(r"(sessionaction-[^/]+)").expect("valid regex");
 
     objects
         .iter()
@@ -1117,10 +1109,7 @@ pub fn group_manifests_by_task(
     let mut grouped: HashMap<Option<String>, Vec<&ParsedManifestKey>> = HashMap::new();
 
     for key in parsed_keys {
-        grouped
-            .entry(key.task_id.clone())
-            .or_default()
-            .push(key);
+        grouped.entry(key.task_id.clone()).or_default().push(key);
     }
 
     grouped
@@ -1513,8 +1502,8 @@ pub async fn find_manifests_by_session_action_id<C: StorageClient>(
     // Build regex pattern to match session action ID in path
     let pattern: Regex = Regex::new(&format!(r".*{}.*_output", regex::escape(session_action_id)))
         .map_err(|e| StorageError::Other {
-            message: format!("Invalid session action ID pattern: {}", e),
-        })?;
+        message: format!("Invalid session action ID pattern: {}", e),
+    })?;
 
     // Try task-specific prefix first for efficiency
     let task_scope = OutputManifestScope::Task {
@@ -1631,7 +1620,10 @@ mod tests {
         let metadata: ManifestS3Metadata = ManifestS3Metadata::new("/ascii/path");
         let s3_meta: HashMap<String, String> = metadata.to_s3_metadata();
 
-        assert_eq!(s3_meta.get(METADATA_KEY_ASSET_ROOT), Some(&"/ascii/path".to_string()));
+        assert_eq!(
+            s3_meta.get(METADATA_KEY_ASSET_ROOT),
+            Some(&"/ascii/path".to_string())
+        );
         assert!(!s3_meta.contains_key(METADATA_KEY_ASSET_ROOT_JSON));
     }
 
@@ -1651,8 +1643,7 @@ mod tests {
 
     #[test]
     fn test_manifest_s3_metadata_with_location() {
-        let metadata: ManifestS3Metadata =
-            ManifestS3Metadata::with_location("/path", "MyLocation");
+        let metadata: ManifestS3Metadata = ManifestS3Metadata::with_location("/path", "MyLocation");
         let s3_meta: HashMap<String, String> = metadata.to_s3_metadata();
 
         assert_eq!(
@@ -1689,7 +1680,8 @@ mod tests {
 
     #[test]
     fn test_manifest_location_empty_prefix() {
-        let location: ManifestLocation = ManifestLocation::new("my-bucket", "", "farm-123", "queue-456");
+        let location: ManifestLocation =
+            ManifestLocation::new("my-bucket", "", "farm-123", "queue-456");
 
         assert_eq!(location.manifest_prefix(), "Manifests");
         assert_eq!(
@@ -1724,7 +1716,10 @@ mod tests {
             "hash_input",
         );
 
-        assert_eq!(key, "Manifests/farm-123/queue-456/Inputs/guid1234/hash_input");
+        assert_eq!(
+            key,
+            "Manifests/farm-123/queue-456/Inputs/guid1234/hash_input"
+        );
     }
 
     #[test]
@@ -2055,8 +2050,7 @@ mod tests {
             match_manifests_to_roots(&manifest_keys, &roots).unwrap();
 
         assert_eq!(matched.len(), 1);
-        let session_manifests: &Vec<Option<String>> =
-            matched.get("sessionaction-xyz-123").unwrap();
+        let session_manifests: &Vec<Option<String>> = matched.get("sessionaction-xyz-123").unwrap();
         assert_eq!(session_manifests.len(), 2);
         assert!(session_manifests[0].is_some());
         assert!(session_manifests[1].is_some());

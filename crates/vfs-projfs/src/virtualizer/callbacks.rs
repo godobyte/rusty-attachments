@@ -11,19 +11,17 @@ use std::time::{Duration, UNIX_EPOCH};
 use parking_lot::RwLock;
 use windows::core::{GUID, HRESULT, PCWSTR};
 use windows::Win32::Foundation::{
-    ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER,
-    ERROR_OPERATION_ABORTED, ERROR_TIMEOUT, E_FAIL, S_OK,
+    ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_OPERATION_ABORTED, ERROR_TIMEOUT,
+    E_FAIL, S_OK,
 };
 use windows::Win32::Storage::ProjectedFileSystem::{
-    PRJ_CALLBACK_DATA, PRJ_CALLBACKS, PRJ_CB_DATA_FLAG_ENUM_RESTART_SCAN,
-    PRJ_DIR_ENTRY_BUFFER_HANDLE, PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT,
-    PRJ_NOTIFICATION, PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_DELETED,
+    PrjAllocateAlignedBuffer, PrjFillDirEntryBuffer, PrjFreeAlignedBuffer, PrjWriteFileData,
+    PrjWritePlaceholderInfo, PRJ_CALLBACKS, PRJ_CALLBACK_DATA, PRJ_CB_DATA_FLAG_ENUM_RESTART_SCAN,
+    PRJ_DIR_ENTRY_BUFFER_HANDLE, PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT, PRJ_NOTIFICATION,
+    PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_DELETED,
     PRJ_NOTIFICATION_FILE_HANDLE_CLOSED_FILE_MODIFIED, PRJ_NOTIFICATION_FILE_RENAMED,
-    PRJ_NOTIFICATION_NEW_FILE_CREATED, PRJ_NOTIFICATION_PARAMETERS,
-    PRJ_NOTIFICATION_PRE_DELETE, PRJ_NOTIFICATION_PRE_RENAME,
-    PRJ_PLACEHOLDER_INFO,
-    PrjAllocateAlignedBuffer, PrjFillDirEntryBuffer,
-    PrjFreeAlignedBuffer, PrjWriteFileData, PrjWritePlaceholderInfo,
+    PRJ_NOTIFICATION_NEW_FILE_CREATED, PRJ_NOTIFICATION_PARAMETERS, PRJ_NOTIFICATION_PRE_DELETE,
+    PRJ_NOTIFICATION_PRE_RENAME, PRJ_PLACEHOLDER_INFO,
 };
 
 use rusty_attachments_vfs::{AsyncExecutor, ExecutorError};
@@ -51,9 +49,7 @@ fn systemtime_to_filetime_i64(time: std::time::SystemTime) -> i64 {
     const FILETIME_UNIX_DIFF_SECS: u64 = 11644473600;
     const INTERVALS_PER_SEC: u64 = 10_000_000;
 
-    let duration: Duration = time
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO);
+    let duration: Duration = time.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO);
 
     let intervals: u64 = duration.as_secs() * INTERVALS_PER_SEC
         + duration.subsec_nanos() as u64 / 100
@@ -102,9 +98,8 @@ pub unsafe extern "system" fn start_dir_enum_cb(
     enumeration_id: *const GUID,
 ) -> HRESULT {
     // Catch panics to prevent UB
-    let result = std::panic::catch_unwind(|| {
-        start_dir_enum_cb_inner(callback_data, enumeration_id)
-    });
+    let result =
+        std::panic::catch_unwind(|| start_dir_enum_cb_inner(callback_data, enumeration_id));
     match result {
         Ok(hr) => hr,
         Err(_) => {
@@ -122,13 +117,13 @@ unsafe fn start_dir_enum_cb_inner(
         eprintln!("start_dir_enum_cb: callback_data is null");
         return E_FAIL;
     }
-    
+
     let instance_ctx = (*callback_data).InstanceContext;
     if instance_ctx.is_null() {
         eprintln!("start_dir_enum_cb: InstanceContext is null");
         return E_FAIL;
     }
-    
+
     let ctx: &CallbackContext = &*(instance_ctx as *const CallbackContext);
 
     let relative_path: String = match pcwstr_to_string((*callback_data).FilePathName) {
@@ -350,7 +345,9 @@ pub unsafe extern "system" fn get_file_data_cb(
 /// Query file name callback.
 ///
 /// Checks if a path exists in the projection.
-pub unsafe extern "system" fn query_file_name_cb(callback_data: *const PRJ_CALLBACK_DATA) -> HRESULT {
+pub unsafe extern "system" fn query_file_name_cb(
+    callback_data: *const PRJ_CALLBACK_DATA,
+) -> HRESULT {
     let ctx: &CallbackContext = &*((*callback_data).InstanceContext as *const CallbackContext);
 
     let relative_path: String = match pcwstr_to_string((*callback_data).FilePathName) {
@@ -448,9 +445,7 @@ fn fill_dir_entry_buffer(
     buffer_handle: PRJ_DIR_ENTRY_BUFFER_HANDLE,
     item: &ProjectedFileInfo,
 ) -> HRESULT {
-    use windows::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
-    };
+    use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
     use windows::Win32::Storage::ProjectedFileSystem::PRJ_FILE_BASIC_INFO;
 
     let name_wide: Vec<u16> = string_to_wide(&item.name);
@@ -621,15 +616,30 @@ fn write_file_data_aligned(
 /// PRJ_CALLBACKS structure with all callbacks set.
 pub fn build_callbacks() -> PRJ_CALLBACKS {
     println!("build_callbacks: Creating callback structure");
-    println!("  start_dir_enum_cb addr: {:p}", start_dir_enum_cb as *const ());
+    println!(
+        "  start_dir_enum_cb addr: {:p}",
+        start_dir_enum_cb as *const ()
+    );
     println!("  end_dir_enum_cb addr: {:p}", end_dir_enum_cb as *const ());
     println!("  get_dir_enum_cb addr: {:p}", get_dir_enum_cb as *const ());
-    println!("  get_placeholder_info_cb addr: {:p}", get_placeholder_info_cb as *const ());
-    println!("  get_file_data_cb addr: {:p}", get_file_data_cb as *const ());
-    println!("  query_file_name_cb addr: {:p}", query_file_name_cb as *const ());
+    println!(
+        "  get_placeholder_info_cb addr: {:p}",
+        get_placeholder_info_cb as *const ()
+    );
+    println!(
+        "  get_file_data_cb addr: {:p}",
+        get_file_data_cb as *const ()
+    );
+    println!(
+        "  query_file_name_cb addr: {:p}",
+        query_file_name_cb as *const ()
+    );
     println!("  notification_cb addr: {:p}", notification_cb as *const ());
-    println!("  cancel_command_cb addr: {:p}", cancel_command_cb as *const ());
-    
+    println!(
+        "  cancel_command_cb addr: {:p}",
+        cancel_command_cb as *const ()
+    );
+
     PRJ_CALLBACKS {
         StartDirectoryEnumerationCallback: Some(start_dir_enum_cb),
         EndDirectoryEnumerationCallback: Some(end_dir_enum_cb),

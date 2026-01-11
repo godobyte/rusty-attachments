@@ -52,7 +52,12 @@ impl HashCacheEntry {
     /// * `hash_alg` - Hash algorithm used
     /// * `created_at` - Creation time (epoch seconds)
     /// * `expires_at` - Expiration time (epoch seconds)
-    pub fn new(hash: impl Into<String>, hash_alg: HashAlgorithm, created_at: i64, expires_at: i64) -> Self {
+    pub fn new(
+        hash: impl Into<String>,
+        hash_alg: HashAlgorithm,
+        created_at: i64,
+        expires_at: i64,
+    ) -> Self {
         Self {
             hash: hash.into(),
             hash_alg,
@@ -94,7 +99,8 @@ mod tests {
 
     #[test]
     fn test_hash_cache_entry_new() {
-        let entry: HashCacheEntry = HashCacheEntry::new("abc123", HashAlgorithm::Xxh128, 1000, 2000);
+        let entry: HashCacheEntry =
+            HashCacheEntry::new("abc123", HashAlgorithm::Xxh128, 1000, 2000);
         assert_eq!(entry.hash, "abc123");
         assert_eq!(entry.hash_alg, HashAlgorithm::Xxh128);
         assert_eq!(entry.created_at, 1000);
@@ -103,10 +109,11 @@ mod tests {
 
     #[test]
     fn test_hash_cache_entry_is_expired() {
-        let entry: HashCacheEntry = HashCacheEntry::new("abc123", HashAlgorithm::Xxh128, 1000, 2000);
+        let entry: HashCacheEntry =
+            HashCacheEntry::new("abc123", HashAlgorithm::Xxh128, 1000, 2000);
 
         assert!(!entry.is_expired(1500)); // Before expiry
-        assert!(entry.is_expired(2000));  // At expiry
-        assert!(entry.is_expired(2500));  // After expiry
+        assert!(entry.is_expired(2000)); // At expiry
+        assert!(entry.is_expired(2500)); // After expiry
     }
 }

@@ -288,11 +288,11 @@ impl AsyncExecutor {
 
         // Wrap the future to send result through typed channel
         let work: BoxFuture<'static, ()> = async move {
-            let result: Result<T, ExecutorError> =
-                match tokio::time::timeout(timeout, future).await {
-                    Ok(value) => Ok(value),
-                    Err(_) => Err(ExecutorError::Timeout { duration: timeout }),
-                };
+            let result: Result<T, ExecutorError> = match tokio::time::timeout(timeout, future).await
+            {
+                Ok(value) => Ok(value),
+                Err(_) => Err(ExecutorError::Timeout { duration: timeout }),
+            };
             // Ignore send errors - caller may have dropped
             let _ = result_tx.send(result);
         }
@@ -559,7 +559,8 @@ mod tests {
 
     #[test]
     fn test_executor_default_timeout() {
-        let config = ExecutorConfig::default().with_default_timeout(Some(Duration::from_millis(50)));
+        let config =
+            ExecutorConfig::default().with_default_timeout(Some(Duration::from_millis(50)));
         let executor = AsyncExecutor::new(config);
 
         let result: Result<i32, ExecutorError> = executor.block_on(async {
@@ -590,7 +591,10 @@ mod tests {
         // Wait for the thread to finish
         let result = handle.join().unwrap();
         assert!(
-            matches!(result, Err(ExecutorError::Cancelled) | Err(ExecutorError::Shutdown)),
+            matches!(
+                result,
+                Err(ExecutorError::Cancelled) | Err(ExecutorError::Shutdown)
+            ),
             "Expected cancellation or shutdown error, got {:?}",
             result
         );
@@ -689,9 +693,8 @@ mod tests {
         let executor = AsyncExecutor::with_defaults();
 
         // Complex nested type that works with typed channels
-        let result: Result<Vec<Result<String, i32>>, ExecutorError> = executor.block_on(async {
-            vec![Ok("hello".to_string()), Err(42), Ok("world".to_string())]
-        });
+        let result: Result<Vec<Result<String, i32>>, ExecutorError> = executor
+            .block_on(async { vec![Ok("hello".to_string()), Err(42), Ok("world".to_string())] });
 
         let inner = result.unwrap();
         assert_eq!(inner.len(), 3);
@@ -766,9 +769,8 @@ mod tests {
         let executor = Arc::new(AsyncExecutor::with_defaults());
 
         let exec1 = executor.clone();
-        let panic_handle = std::thread::spawn(move || {
-            exec1.block_on(async { panic!("intentional panic") })
-        });
+        let panic_handle =
+            std::thread::spawn(move || exec1.block_on(async { panic!("intentional panic") }));
 
         std::thread::sleep(Duration::from_millis(50));
 
@@ -779,8 +781,7 @@ mod tests {
         let panic_result = panic_handle.join();
         // Thread panicked or executor returned shutdown error
         assert!(
-            panic_result.is_err()
-                || matches!(panic_result.unwrap(), Err(ExecutorError::Shutdown))
+            panic_result.is_err() || matches!(panic_result.unwrap(), Err(ExecutorError::Shutdown))
         );
     }
 
@@ -877,8 +878,10 @@ mod tests {
         // - Ok(42) if task somehow completed (unlikely with 10s sleep)
         let inner_result = result.unwrap();
         assert!(
-            matches!(inner_result, Err(ExecutorError::Shutdown) | Err(ExecutorError::Cancelled))
-                || matches!(inner_result, Ok(42)),
+            matches!(
+                inner_result,
+                Err(ExecutorError::Shutdown) | Err(ExecutorError::Cancelled)
+            ) || matches!(inner_result, Ok(42)),
             "Expected Shutdown, Cancelled, or successful completion, got {:?}",
             inner_result
         );

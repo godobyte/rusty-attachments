@@ -102,11 +102,7 @@ impl MaterializedCache {
     ///
     /// # Returns
     /// Chunk data if found, None otherwise.
-    pub fn read_chunk(
-        &self,
-        rel_path: &str,
-        chunk_index: u32,
-    ) -> std::io::Result<Option<Vec<u8>>> {
+    pub fn read_chunk(&self, rel_path: &str, chunk_index: u32) -> std::io::Result<Option<Vec<u8>>> {
         let chunk_path: PathBuf = self.chunk_path(rel_path, chunk_index);
 
         if chunk_path.exists() {
@@ -214,6 +210,7 @@ impl MaterializedCache {
     /// * `dir` - Directory to walk
     /// * `prefix` - Path prefix for relative paths
     /// * `files` - Output vector to collect paths
+    #[allow(clippy::only_used_in_recursion)]
     fn walk_dir(&self, dir: &Path, prefix: &str, files: &mut Vec<String>) -> std::io::Result<()> {
         if !dir.exists() {
             return Ok(());

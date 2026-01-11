@@ -338,7 +338,10 @@ mod tests {
 
         // Delete existing file
         db.file_deleted("file.txt");
-        assert!(db.get_summary().deleted_files.contains(&"file.txt".to_string()));
+        assert!(db
+            .get_summary()
+            .deleted_files
+            .contains(&"file.txt".to_string()));
 
         // Recreate it
         db.file_created("file.txt");

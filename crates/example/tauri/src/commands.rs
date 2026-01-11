@@ -21,7 +21,7 @@ use crate::types::{
 fn parse_manifest_version(version: &str) -> Result<ManifestVersion, CommandError> {
     match version {
         "v2023-03-03" => Ok(ManifestVersion::V2023_03_03),
-        "v2025-12-04-beta" => Ok(ManifestVersion::V2025_12_04_beta),
+        "v2025-12" => Ok(ManifestVersion::V2025_12),
         _ => Err(CommandError::invalid_version(format!(
             "Invalid manifest version: {}. Use 'v2023-03-03' or 'v2025-12-04-beta'",
             version
@@ -235,7 +235,7 @@ fn convert_manifest_to_parsed(manifest: &Manifest, asset_root: Option<String>) -
                 });
             }
         }
-        Manifest::V2025_12_04_beta(m) => {
+        Manifest::V2025_12(m) => {
             dir_count = m.dirs.len();
 
             for file in &m.files {
@@ -250,7 +250,7 @@ fn convert_manifest_to_parsed(manifest: &Manifest, asset_root: Option<String>) -
                 let chunk_count: Option<usize> = file.chunkhashes.as_ref().map(|c| c.len());
 
                 files.push(ManifestFileEntry {
-                    path: file.name.clone(),
+                    path: file.path.clone(),
                     size: file.size,
                     mtime: file.mtime,
                     hash: file.hash.clone(),

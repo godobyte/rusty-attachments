@@ -5,40 +5,45 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 
 use crate::error::ManifestError;
-use crate::v2025_12_04::{AssetManifest, ManifestDirectoryPath, ManifestFilePath};
-use crate::version::ManifestType;
+use crate::v2025_12::{AssetManifest, ManifestDirectoryPath, ManifestFilePath};
 
-/// Encode a v2025-12-04-beta manifest to canonical JSON with directory compression.
-pub fn encode_v2025_12_04(manifest: &AssetManifest) -> Result<String, ManifestError> {
+/// Encode a v2025-12 manifest to canonical JSON with directory compression.
+///
+/// # Arguments
+/// * `manifest` - The manifest to encode.
+///
+/// # Returns
+/// Canonical JSON string with sorted keys and directory index compression.
+pub fn encode_v2025_12(manifest: &AssetManifest) -> Result<String, ManifestError> {
     // Sort and deduplicate directories by full path
     let mut unique_dirs: Vec<&ManifestDirectoryPath> = Vec::new();
-    let mut seen_names: HashMap<&str, usize> = HashMap::new();
+    let mut seen_paths: HashMap<&str, usize> = HashMap::new();
 
     let mut sorted_dirs: Vec<_> = manifest.dirs.iter().collect();
-    sorted_dirs.sort_by(|a, b| a.name.cmp(&b.name));
+    sorted_dirs.sort_by(|a, b| a.path.cmp(&b.path));
 
     for dir in sorted_dirs {
-        if !seen_names.contains_key(dir.name.as_str()) {
-            seen_names.insert(&dir.name, unique_dirs.len());
+        if !seen_paths.contains_key(dir.path.as_str()) {
+            seen_paths.insert(&dir.path, unique_dirs.len());
             unique_dirs.push(dir);
         }
     }
 
-    // Build directory index: name -> index
+    // Build directory index: path -> index
     let dir_index: HashMap<&str, usize> = unique_dirs
         .iter()
         .enumerate()
-        .map(|(i, d)| (d.name.as_str(), i))
+        .map(|(i, d)| (d.path.as_str(), i))
         .collect();
 
     // Encode directories with $N/ compression
     let dirs_json: Vec<Value> = unique_dirs
         .iter()
         .map(|d| {
-            let encoded_name: String = encode_path_with_dir_index(&d.name, &dir_index);
-            let mut entry: Value = json!({"name": encoded_name});
-            if d.delete {
-                entry["delete"] = json!(true);
+            let encoded_path: String = encode_path_with_dir_index(&d.path, &dir_index);
+            let mut entry: Value = json!({"path": encoded_path});
+            if d.deleted {
+                entry["deleted"] = json!(true);
             }
             entry
         })
@@ -47,8 +52,8 @@ pub fn encode_v2025_12_04(manifest: &AssetManifest) -> Result<String, ManifestEr
     // Sort files by UTF-16 BE encoding
     let mut sorted_files: Vec<_> = manifest.files.iter().collect();
     sorted_files.sort_by(|a, b| {
-        let a_bytes: Vec<u16> = a.name.encode_utf16().collect();
-        let b_bytes: Vec<u16> = b.name.encode_utf16().collect();
+        let a_bytes: Vec<u16> = a.path.encode_utf16().collect();
+        let b_bytes: Vec<u16> = b.path.encode_utf16().collect();
         a_bytes.cmp(&b_bytes)
     });
 
@@ -58,16 +63,16 @@ pub fn encode_v2025_12_04(manifest: &AssetManifest) -> Result<String, ManifestEr
         .map(|f| encode_file_entry(f, &dir_index))
         .collect();
 
-    // Build manifest dict
+    // Build manifest dict with sorted keys
     let mut manifest_dict: Value = json!({
         "dirs": dirs_json,
         "files": files_json,
         "hashAlg": manifest.hash_alg,
-        "manifestVersion": manifest.manifest_version,
+        "specificationVersion": manifest.spec_version.spec_string(),
         "totalSize": manifest.total_size,
     });
 
-    if manifest.manifest_type == ManifestType::Diff {
+    if manifest.is_diff() {
         if let Some(ref parent_hash) = manifest.parent_manifest_hash {
             manifest_dict["parentManifestHash"] = json!(parent_hash);
         }
@@ -91,8 +96,8 @@ fn encode_path_with_dir_index(path: &str, dir_index: &HashMap<&str, usize>) -> S
 
 /// Encode a file entry to JSON with directory compression.
 fn encode_file_entry(file: &ManifestFilePath, dir_index: &HashMap<&str, usize>) -> Value {
-    let encoded_name: String = encode_path_with_dir_index(&file.name, dir_index);
-    let mut entry: Value = json!({"name": encoded_name});
+    let encoded_path: String = encode_path_with_dir_index(&file.path, dir_index);
+    let mut entry: Value = json!({"path": encoded_path});
 
     // Add content field (exactly one of: hash, chunkhashes, symlink)
     if let Some(ref hash) = file.hash {
@@ -101,11 +106,11 @@ fn encode_file_entry(file: &ManifestFilePath, dir_index: &HashMap<&str, usize>) 
         entry["chunkhashes"] = json!(chunks);
     } else if let Some(ref target) = file.symlink_target {
         let encoded_target: String = encode_path_with_dir_index(target, dir_index);
-        entry["symlink"] = json!({"name": encoded_target});
+        entry["symlink"] = json!({"target": encoded_target});
     }
 
     // Add metadata (only for non-deleted, non-symlink entries)
-    if !file.delete && file.symlink_target.is_none() {
+    if !file.deleted && file.symlink_target.is_none() {
         if let Some(size) = file.size {
             entry["size"] = json!(size);
         }
@@ -117,8 +122,8 @@ fn encode_file_entry(file: &ManifestFilePath, dir_index: &HashMap<&str, usize>) 
         }
     }
 
-    if file.delete {
-        entry["delete"] = json!(true);
+    if file.deleted {
+        entry["deleted"] = json!(true);
     }
 
     entry
@@ -127,7 +132,8 @@ fn encode_file_entry(file: &ManifestFilePath, dir_index: &HashMap<&str, usize>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v2025_12_04::{ManifestDirectoryPath, ManifestFilePath};
+    use crate::v2025_12::{ManifestDirectoryPath, ManifestFilePath};
+    use crate::version::SpecVersion;
 
     #[test]
     fn test_encode_path_with_dir_index() {
@@ -160,7 +166,66 @@ mod tests {
         )];
         let manifest: AssetManifest = AssetManifest::snapshot(dirs, files);
 
-        let encoded: String = encode_v2025_12_04(&manifest).unwrap();
+        let encoded: String = encode_v2025_12(&manifest).unwrap();
         assert!(encoded.contains("$0/test.txt"));
+        assert!(encoded.contains("relative-manifest-snapshot-beta-2025-12"));
+    }
+
+    #[test]
+    fn test_encode_abs_snapshot() {
+        let files: Vec<ManifestFilePath> = vec![ManifestFilePath::file(
+            "/home/user/test.txt",
+            "abc123",
+            100,
+            1234567890,
+        )];
+        let manifest: AssetManifest = AssetManifest::abs_snapshot(vec![], files);
+
+        let encoded: String = encode_v2025_12(&manifest).unwrap();
+        assert!(encoded.contains("absolute-manifest-snapshot-beta-2025-12"));
+    }
+
+    #[test]
+    fn test_encode_diff_manifest() {
+        let files: Vec<ManifestFilePath> = vec![ManifestFilePath::deleted("old.txt")];
+        let manifest: AssetManifest = AssetManifest::diff(vec![], files, "parent_hash");
+
+        let encoded: String = encode_v2025_12(&manifest).unwrap();
+        assert!(encoded.contains("relative-manifest-diff-beta-2025-12"));
+        assert!(encoded.contains("parentManifestHash"));
+        assert!(encoded.contains("parent_hash"));
+    }
+
+    #[test]
+    fn test_encode_all_spec_versions() {
+        let specs: [(SpecVersion, &str); 4] = [
+            (
+                SpecVersion::REL_SNAPSHOT,
+                "relative-manifest-snapshot-beta-2025-12",
+            ),
+            (SpecVersion::REL_DIFF, "relative-manifest-diff-beta-2025-12"),
+            (
+                SpecVersion::ABS_SNAPSHOT,
+                "absolute-manifest-snapshot-beta-2025-12",
+            ),
+            (SpecVersion::ABS_DIFF, "absolute-manifest-diff-beta-2025-12"),
+        ];
+
+        for (spec, expected_str) in specs {
+            let parent_hash: Option<String> = if spec.is_diff() {
+                Some("parent".to_string())
+            } else {
+                None
+            };
+            let manifest: AssetManifest =
+                AssetManifest::with_spec(vec![], vec![], spec, parent_hash);
+            let encoded: String = encode_v2025_12(&manifest).unwrap();
+            assert!(
+                encoded.contains(expected_str),
+                "Expected {} in encoded manifest for {:?}",
+                expected_str,
+                spec
+            );
+        }
     }
 }

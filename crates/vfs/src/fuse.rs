@@ -98,8 +98,7 @@ mod impl_fuse {
             let cache_allocations: u64 = self.pool.allocation_count();
             let cache_hit_rate: f64 = self.pool.hit_rate();
             let uptime_secs: u64 = self.start_time.elapsed().as_secs();
-            let disk_cache_size: Option<u64> =
-                self.read_cache.as_ref().map(|c| c.current_size());
+            let disk_cache_size: Option<u64> = self.read_cache.as_ref().map(|c| c.current_size());
 
             VfsStats {
                 inode_count: self.inode_count,
@@ -161,10 +160,9 @@ mod impl_fuse {
                     cache_dir: options.read_cache.cache_dir.clone(),
                     write_through: options.read_cache.write_through,
                 };
-                Some(Arc::new(
-                    ReadCache::new(cache_options)
-                        .map_err(|e| VfsError::MountFailed(format!("Failed to init read cache: {}", e)))?,
-                ))
+                Some(Arc::new(ReadCache::new(cache_options).map_err(|e| {
+                    VfsError::MountFailed(format!("Failed to init read cache: {}", e))
+                })?))
             } else {
                 None
             };
@@ -267,7 +265,12 @@ mod impl_fuse {
         /// * `hash` - Content hash
         /// * `offset` - Byte offset to start reading
         /// * `size` - Number of bytes to read
-        fn read_single_hash(&self, hash: &str, offset: u64, size: u64) -> Result<Vec<u8>, VfsError> {
+        fn read_single_hash(
+            &self,
+            hash: &str,
+            offset: u64,
+            size: u64,
+        ) -> Result<Vec<u8>, VfsError> {
             let key = BlockKey::from_hash_hex(hash, 0);
             let hash_owned: String = hash.to_string();
             let store: Arc<dyn FileStore> = self.store.clone();
@@ -309,7 +312,12 @@ mod impl_fuse {
         /// * `hashes` - Chunk hashes
         /// * `offset` - Byte offset to start reading
         /// * `size` - Number of bytes to read
-        fn read_chunked(&self, hashes: &[String], offset: u64, size: u64) -> Result<Vec<u8>, VfsError> {
+        fn read_chunked(
+            &self,
+            hashes: &[String],
+            offset: u64,
+            size: u64,
+        ) -> Result<Vec<u8>, VfsError> {
             let chunk_size: u64 = CHUNK_SIZE_V2;
             let start_chunk: usize = (offset / chunk_size) as usize;
             let end_off: u64 = offset + size;

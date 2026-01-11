@@ -1,10 +1,93 @@
-//! Symlink security validation.
+//! Symlink security validation and policy handling.
 
 use std::path::{Component, Path, PathBuf};
 
 use rusty_attachments_common::{is_within_root, to_posix_path};
 
 use crate::error::FileSystemError;
+
+/// Policy for handling symlinks during manifest collection.
+///
+/// Matches the Python Snapshots `SymlinkPolicy` enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SymlinkPolicy {
+    /// Preserve internal symlinks, collapse escaping ones to their targets.
+    /// This is the default and safest option for job attachments.
+    #[default]
+    CollapseEscaping,
+
+    /// Follow all symlinks as if they were regular files/directories.
+    CollapseAll,
+
+    /// Preserve all symlinks with relative targets.
+    /// Warning: May create non-portable manifests if symlinks point outside root.
+    Preserve,
+
+    /// Keep symlinks and transitively include their targets.
+    /// Useful for ensuring all referenced content is captured.
+    TransitiveIncludeTargets,
+
+    /// Skip all symlinks entirely.
+    ExcludeAll,
+
+    /// Preserve internal symlinks, exclude escaping ones.
+    ExcludeEscaping,
+}
+
+impl SymlinkPolicy {
+    /// Check if a symlink should be followed (collapsed to target).
+    ///
+    /// # Arguments
+    /// * `is_escaping` - Whether the symlink target escapes the root
+    ///
+    /// # Returns
+    /// True if the symlink should be followed as a regular file/directory.
+    pub fn should_follow(&self, is_escaping: bool) -> bool {
+        match self {
+            Self::CollapseAll => true,
+            Self::CollapseEscaping => is_escaping,
+            _ => false,
+        }
+    }
+
+    /// Check if a symlink should be excluded.
+    ///
+    /// # Arguments
+    /// * `is_escaping` - Whether the symlink target escapes the root
+    ///
+    /// # Returns
+    /// True if the symlink should be skipped entirely.
+    pub fn should_exclude(&self, is_escaping: bool) -> bool {
+        match self {
+            Self::ExcludeAll => true,
+            Self::ExcludeEscaping => is_escaping,
+            _ => false,
+        }
+    }
+
+    /// Check if a symlink should be preserved as-is.
+    ///
+    /// # Arguments
+    /// * `is_escaping` - Whether the symlink target escapes the root
+    ///
+    /// # Returns
+    /// True if the symlink should be recorded in the manifest.
+    pub fn should_preserve(&self, is_escaping: bool) -> bool {
+        match self {
+            Self::Preserve | Self::TransitiveIncludeTargets => true,
+            Self::CollapseEscaping | Self::ExcludeEscaping => !is_escaping,
+            _ => false,
+        }
+    }
+
+    /// Check if symlink targets should be transitively included.
+    ///
+    /// # Returns
+    /// True if the symlink's target should also be added to the manifest.
+    pub fn should_include_targets(&self) -> bool {
+        matches!(self, Self::TransitiveIncludeTargets)
+    }
+}
 
 /// Information about a validated symlink.
 #[derive(Debug, Clone)]
@@ -68,12 +151,11 @@ pub fn validate_symlink(symlink_path: &Path, root: &Path) -> Result<SymlinkInfo,
     }
 
     // Check 2: Resolve target relative to symlink's parent directory
-    let symlink_dir: &Path =
-        symlink_path
-            .parent()
-            .ok_or_else(|| FileSystemError::InvalidPath {
-                path: symlink_path.display().to_string(),
-            })?;
+    let symlink_dir: &Path = symlink_path
+        .parent()
+        .ok_or_else(|| FileSystemError::InvalidPath {
+            path: symlink_path.display().to_string(),
+        })?;
 
     // Lexically resolve the target (don't touch filesystem)
     let resolved: PathBuf = lexical_resolve(symlink_dir, &target);
@@ -180,7 +262,10 @@ mod tests {
         create_symlink(Path::new("../../outside.txt"), &link_path);
 
         let result = validate_symlink(&link_path, dir.path());
-        assert!(matches!(result, Err(FileSystemError::SymlinkEscapesRoot { .. })));
+        assert!(matches!(
+            result,
+            Err(FileSystemError::SymlinkEscapesRoot { .. })
+        ));
     }
 
     #[cfg(unix)]
@@ -222,4 +307,81 @@ mod tests {
         let resolved: PathBuf = lexical_resolve(&base, &relative);
         assert_eq!(resolved, PathBuf::from("/project/assets/textures/wood.png"));
     }
+}
+
+#[test]
+fn test_symlink_policy_collapse_escaping() {
+    let policy: SymlinkPolicy = SymlinkPolicy::CollapseEscaping;
+
+    // Internal symlinks: preserve
+    assert!(!policy.should_follow(false));
+    assert!(!policy.should_exclude(false));
+    assert!(policy.should_preserve(false));
+
+    // Escaping symlinks: collapse (follow)
+    assert!(policy.should_follow(true));
+    assert!(!policy.should_exclude(true));
+    assert!(!policy.should_preserve(true));
+}
+
+#[test]
+fn test_symlink_policy_collapse_all() {
+    let policy: SymlinkPolicy = SymlinkPolicy::CollapseAll;
+
+    // All symlinks: follow
+    assert!(policy.should_follow(false));
+    assert!(policy.should_follow(true));
+    assert!(!policy.should_preserve(false));
+    assert!(!policy.should_preserve(true));
+}
+
+#[test]
+fn test_symlink_policy_preserve() {
+    let policy: SymlinkPolicy = SymlinkPolicy::Preserve;
+
+    // All symlinks: preserve
+    assert!(!policy.should_follow(false));
+    assert!(!policy.should_follow(true));
+    assert!(policy.should_preserve(false));
+    assert!(policy.should_preserve(true));
+}
+
+#[test]
+fn test_symlink_policy_exclude_all() {
+    let policy: SymlinkPolicy = SymlinkPolicy::ExcludeAll;
+
+    // All symlinks: exclude
+    assert!(policy.should_exclude(false));
+    assert!(policy.should_exclude(true));
+    assert!(!policy.should_preserve(false));
+    assert!(!policy.should_preserve(true));
+}
+
+#[test]
+fn test_symlink_policy_exclude_escaping() {
+    let policy: SymlinkPolicy = SymlinkPolicy::ExcludeEscaping;
+
+    // Internal symlinks: preserve
+    assert!(!policy.should_exclude(false));
+    assert!(policy.should_preserve(false));
+
+    // Escaping symlinks: exclude
+    assert!(policy.should_exclude(true));
+    assert!(!policy.should_preserve(true));
+}
+
+#[test]
+fn test_symlink_policy_transitive_include_targets() {
+    let policy: SymlinkPolicy = SymlinkPolicy::TransitiveIncludeTargets;
+
+    // All symlinks: preserve and include targets
+    assert!(policy.should_preserve(false));
+    assert!(policy.should_preserve(true));
+    assert!(policy.should_include_targets());
+}
+
+#[test]
+fn test_symlink_policy_default() {
+    let policy: SymlinkPolicy = SymlinkPolicy::default();
+    assert_eq!(policy, SymlinkPolicy::CollapseEscaping);
 }

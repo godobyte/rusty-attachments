@@ -13,9 +13,7 @@ use ja_deadline_utils::{
 use rusty_attachments_common::ProgressCallback;
 use rusty_attachments_filesystem::{GlobFilter, ScanProgress};
 use rusty_attachments_model::{self as model, ManifestVersion};
-use rusty_attachments_profiles::{
-    FileSystemLocation, FileSystemLocationType, StorageProfile,
-};
+use rusty_attachments_profiles::{FileSystemLocation, FileSystemLocationType, StorageProfile};
 use rusty_attachments_storage::{ManifestLocation, S3Location, StorageSettings};
 use rusty_attachments_storage_crt::CrtStorageClient;
 
@@ -23,7 +21,11 @@ use rusty_attachments_storage_crt::CrtStorageClient;
 // Exceptions
 // ============================================================================
 
-pyo3::create_exception!(rusty_attachments, AttachmentError, pyo3::exceptions::PyException);
+pyo3::create_exception!(
+    rusty_attachments,
+    AttachmentError,
+    pyo3::exceptions::PyException
+);
 pyo3::create_exception!(rusty_attachments, StorageError, AttachmentError);
 pyo3::create_exception!(rusty_attachments, ValidationError, AttachmentError);
 
@@ -48,7 +50,12 @@ impl PyS3Location {
     ///     cas_prefix: CAS data prefix (e.g., "Data")
     ///     manifest_prefix: Manifest prefix (e.g., "Manifests")
     #[new]
-    fn new(bucket: String, root_prefix: String, cas_prefix: String, manifest_prefix: String) -> Self {
+    fn new(
+        bucket: String,
+        root_prefix: String,
+        cas_prefix: String,
+        manifest_prefix: String,
+    ) -> Self {
         Self {
             inner: S3Location::new(bucket, root_prefix, cas_prefix, manifest_prefix),
         }
@@ -77,7 +84,10 @@ impl PyS3Location {
     fn __repr__(&self) -> String {
         format!(
             "S3Location(bucket='{}', root_prefix='{}', cas_prefix='{}', manifest_prefix='{}')",
-            self.inner.bucket, self.inner.root_prefix, self.inner.cas_prefix, self.inner.manifest_prefix
+            self.inner.bucket,
+            self.inner.root_prefix,
+            self.inner.cas_prefix,
+            self.inner.manifest_prefix
         )
     }
 }
@@ -231,10 +241,10 @@ impl PyBundleSubmitOptions {
     /// Args:
     ///     require_paths_exist: If True, error on missing input files. If False, treat as references.
     ///     file_system_mode: "COPIED" or "VIRTUAL"
-    ///     manifest_version: "v2023-03-03" or "v2025-12-04-beta"
+    ///     manifest_version: "v2023-03-03" or "v2025-12"
     ///     exclude_patterns: Glob patterns to exclude (e.g., ["**/*.tmp", "**/__pycache__/**"])
     #[new]
-    #[pyo3(signature = (require_paths_exist=false, file_system_mode="COPIED", manifest_version="v2025-12-04-beta", exclude_patterns=None))]
+    #[pyo3(signature = (require_paths_exist=false, file_system_mode="COPIED", manifest_version="v2025-12", exclude_patterns=None))]
     fn new(
         require_paths_exist: bool,
         file_system_mode: &str,
@@ -243,7 +253,7 @@ impl PyBundleSubmitOptions {
     ) -> PyResult<Self> {
         let version: ManifestVersion = match manifest_version {
             "v2023-03-03" => ManifestVersion::V2023_03_03,
-            "v2025-12-04-beta" => ManifestVersion::V2025_12_04_beta,
+            "v2025-12" => ManifestVersion::V2025_12,
             _ => {
                 return Err(PyValueError::new_err(format!(
                     "Invalid manifest version: {}. Use 'v2023-03-03' or 'v2025-12-04-beta'",
@@ -252,17 +262,18 @@ impl PyBundleSubmitOptions {
             }
         };
 
-        let glob_filter: Option<GlobFilter> = if let Some(patterns) = exclude_patterns {
-            if patterns.is_empty() {
-                None
+        let glob_filter: Option<GlobFilter> =
+            if let Some(patterns) = exclude_patterns {
+                if patterns.is_empty() {
+                    None
+                } else {
+                    Some(GlobFilter::exclude(patterns).map_err(|e| {
+                        PyValueError::new_err(format!("Invalid glob pattern: {}", e))
+                    })?)
+                }
             } else {
-                Some(GlobFilter::exclude(patterns).map_err(|e| {
-                    PyValueError::new_err(format!("Invalid glob pattern: {}", e))
-                })?)
-            }
-        } else {
-            None
-        };
+                None
+            };
 
         Ok(Self {
             inner: BundleSubmitOptions {
@@ -457,7 +468,9 @@ impl PyFileSystemLocation {
     fn __repr__(&self) -> String {
         format!(
             "FileSystemLocation(name='{}', path='{}', location_type='{}')",
-            self.inner.name, self.inner.path, self.location_type()
+            self.inner.name,
+            self.inner.path,
+            self.location_type()
         )
     }
 }
@@ -488,7 +501,10 @@ impl PyStorageProfile {
     }
 
     fn __repr__(&self) -> String {
-        format!("StorageProfile(locations={})", self.inner.local_locations().len() + self.inner.shared_locations().len())
+        format!(
+            "StorageProfile(locations={})",
+            self.inner.local_locations().len() + self.inner.shared_locations().len()
+        )
     }
 }
 
@@ -527,8 +543,8 @@ impl ProgressCallback<ScanProgress> for PyProgressCallback {
 /// Decode a manifest from JSON string.
 #[pyfunction]
 fn decode_manifest(json: &str) -> PyResult<PyManifest> {
-    let manifest = model::Manifest::decode(json)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let manifest =
+        model::Manifest::decode(json).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(PyManifest { inner: manifest })
 }
 
@@ -572,7 +588,7 @@ impl PyManifest {
     }
 
     fn is_v2025(&self) -> bool {
-        self.inner.version() == ManifestVersion::V2025_12_04_beta
+        self.inner.version() == ManifestVersion::V2025_12
     }
 }
 
@@ -633,12 +649,13 @@ fn submit_bundle_attachments_py<'py>(
             ..Default::default()
         };
 
-        let client: CrtStorageClient = CrtStorageClient::new(settings)
-            .await
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create storage client: {}", e)))?;
+        let client: CrtStorageClient = CrtStorageClient::new(settings).await.map_err(|e| {
+            PyRuntimeError::new_err(format!("Failed to create storage client: {}", e))
+        })?;
 
         // Create progress callback wrapper
-        let progress: Option<PyProgressCallback> = callback.map(|cb| PyProgressCallback { callback: cb });
+        let progress: Option<PyProgressCallback> =
+            callback.map(|cb| PyProgressCallback { callback: cb });
 
         // Call the Rust function
         let result = submit_bundle_attachments(
@@ -648,17 +665,18 @@ fn submit_bundle_attachments_py<'py>(
             &asset_refs,
             profile.as_ref(),
             &opts,
-            progress.as_ref().map(|p| p as &dyn ProgressCallback<ScanProgress>),
+            progress
+                .as_ref()
+                .map(|p| p as &dyn ProgressCallback<ScanProgress>),
             None, // upload progress (TODO: add separate callback)
         )
         .await
         .map_err(|e| StorageError::new_err(e.to_string()))?;
 
         // Convert to Python result
-        let attachments_json: String = result
-            .attachments
-            .to_json()
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to serialize attachments: {}", e)))?;
+        let attachments_json: String = result.attachments.to_json().map_err(|e| {
+            PyRuntimeError::new_err(format!("Failed to serialize attachments: {}", e))
+        })?;
 
         Ok(PyBundleSubmitResult {
             attachments_json,
@@ -676,9 +694,15 @@ fn submit_bundle_attachments_py<'py>(
 #[pymodule]
 fn rusty_attachments(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Exceptions
-    m.add("AttachmentError", m.py().get_type_bound::<AttachmentError>())?;
+    m.add(
+        "AttachmentError",
+        m.py().get_type_bound::<AttachmentError>(),
+    )?;
     m.add("StorageError", m.py().get_type_bound::<StorageError>())?;
-    m.add("ValidationError", m.py().get_type_bound::<ValidationError>())?;
+    m.add(
+        "ValidationError",
+        m.py().get_type_bound::<ValidationError>(),
+    )?;
 
     // Classes
     m.add_class::<PyS3Location>()?;

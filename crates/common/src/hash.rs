@@ -115,14 +115,13 @@ impl Default for Xxh3Hasher {
 /// Panics if hash_hex is not exactly 32 hex characters
 pub fn fold_hash_to_u64(hash_hex: &str) -> u64 {
     assert_eq!(hash_hex.len(), 32, "Hash must be 32 hex characters");
-    
+
     // Parse as u128, then fold upper and lower 64 bits
-    let full_hash: u128 = u128::from_str_radix(hash_hex, 16)
-        .expect("Invalid hex hash");
-    
+    let full_hash: u128 = u128::from_str_radix(hash_hex, 16).expect("Invalid hex hash");
+
     let upper: u64 = (full_hash >> 64) as u64;
     let lower: u64 = full_hash as u64;
-    
+
     // XOR fold preserves distribution
     upper ^ lower
 }

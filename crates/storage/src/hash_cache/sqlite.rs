@@ -422,7 +422,12 @@ mod tests {
             .map(|i| {
                 (
                     HashCacheKey::new(format!("file{}.txt", i), 100 + i as u64, 1000 + i as i64),
-                    HashCacheEntry::new(format!("hash{}", i), HashAlgorithm::Xxh128, now, now + 86400),
+                    HashCacheEntry::new(
+                        format!("hash{}", i),
+                        HashAlgorithm::Xxh128,
+                        now,
+                        now + 86400,
+                    ),
                 )
             })
             .collect();
@@ -483,7 +488,12 @@ mod tests {
         let now = current_epoch_seconds();
         for i in 0..10 {
             let key = HashCacheKey::new(format!("file{}.txt", i), 100, 1000);
-            let entry = HashCacheEntry::new(format!("hash{}", i), HashAlgorithm::Xxh128, now, now + 86400);
+            let entry = HashCacheEntry::new(
+                format!("hash{}", i),
+                HashAlgorithm::Xxh128,
+                now,
+                now + 86400,
+            );
             cache.put(&key, &entry).await;
         }
 

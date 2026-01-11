@@ -26,7 +26,7 @@ mod impl_fuse {
     use crate::options::VfsOptions;
     use crate::write::{
         DiffManifestExporter, DirtyDirManager, DirtyDirState, DirtyFileManager, DirtyState,
-        DirtySummary, MaterializedCache, WriteCache, WritableVfsStatsCollector,
+        DirtySummary, MaterializedCache, WritableVfsStatsCollector, WriteCache,
     };
     use crate::VfsError;
 
@@ -108,14 +108,16 @@ mod impl_fuse {
             let pool = Arc::new(MemoryPool::new(options.pool.clone()));
 
             // Initialize read cache if enabled
-            let read_cache: Option<Arc<crate::diskcache::ReadCache>> = if options.read_cache.enabled {
+            let read_cache: Option<Arc<crate::diskcache::ReadCache>> = if options.read_cache.enabled
+            {
                 let cache_options = crate::diskcache::ReadCacheOptions {
                     cache_dir: options.read_cache.cache_dir.clone(),
                     write_through: options.read_cache.write_through,
                 };
                 Some(Arc::new(
-                    crate::diskcache::ReadCache::new(cache_options)
-                        .map_err(|e| VfsError::MountFailed(format!("Failed to init read cache: {}", e)))?,
+                    crate::diskcache::ReadCache::new(cache_options).map_err(|e| {
+                        VfsError::MountFailed(format!("Failed to init read cache: {}", e))
+                    })?,
                 ))
             } else {
                 None
@@ -127,12 +129,8 @@ mod impl_fuse {
             );
 
             // Create DirtyFileManager with unified memory pool
-            let mut dirty_manager = DirtyFileManager::new(
-                cache,
-                store.clone(),
-                inodes.clone(),
-                pool.clone(),
-            );
+            let mut dirty_manager =
+                DirtyFileManager::new(cache, store.clone(), inodes.clone(), pool.clone());
 
             // Set read cache if enabled
             if let Some(ref rc) = read_cache {
@@ -143,17 +141,13 @@ mod impl_fuse {
 
             // Collect original directories for diff tracking
             let original_dirs: HashSet<String> = match manifest {
-                Manifest::V2025_12_04_beta(m) => {
-                    m.dirs.iter().map(|d| d.name.clone()).collect()
-                }
+                Manifest::V2025_12(m) => m.dirs.iter().map(|d| d.path.clone()).collect(),
                 Manifest::V2023_03_03(_) => HashSet::new(),
             };
 
             // Create dirty directory manager with original dirs
-            let dirty_dir_manager = Arc::new(DirtyDirManager::new(
-                inodes.clone(),
-                original_dirs.clone(),
-            ));
+            let dirty_dir_manager =
+                Arc::new(DirtyDirManager::new(inodes.clone(), original_dirs.clone()));
 
             // Create dedicated executor instead of capturing Handle::current()
             let executor = Arc::new(AsyncExecutor::new(options.executor.clone()));
@@ -236,7 +230,6 @@ mod impl_fuse {
         }
     }
 
-
     impl Filesystem for WritableVfs {
         fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
             let name_str: &str = match name.to_str() {
@@ -297,7 +290,10 @@ mod impl_fuse {
             // Check if it's a new file created in this session
             if let Some(new_ino) = self.dirty_manager.lookup_new_file(parent, name_str) {
                 let size: u64 = self.dirty_manager.get_size(new_ino).unwrap_or(0);
-                let mtime: SystemTime = self.dirty_manager.get_mtime(new_ino).unwrap_or(SystemTime::now());
+                let mtime: SystemTime = self
+                    .dirty_manager
+                    .get_mtime(new_ino)
+                    .unwrap_or(SystemTime::now());
 
                 let attr = FileAttr {
                     ino: new_ino,
@@ -379,7 +375,10 @@ mod impl_fuse {
             // Check if it's a new file created in this session
             if self.dirty_manager.is_new_file(ino) {
                 let size: u64 = self.dirty_manager.get_size(ino).unwrap_or(0);
-                let mtime: SystemTime = self.dirty_manager.get_mtime(ino).unwrap_or(SystemTime::now());
+                let mtime: SystemTime = self
+                    .dirty_manager
+                    .get_mtime(ino)
+                    .unwrap_or(SystemTime::now());
 
                 let attr = FileAttr {
                     ino,
@@ -559,7 +558,9 @@ mod impl_fuse {
                 // Slow path: need async (chunk loading from S3/cache)
                 let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
 
-                let exec_result = self.executor.block_on(async move { dm.read(ino, offset_u64, size).await });
+                let exec_result = self
+                    .executor
+                    .block_on(async move { dm.read(ino, offset_u64, size).await });
                 match exec_result {
                     Ok(Ok(data)) => {
                         reply.data(&data);
@@ -596,7 +597,9 @@ mod impl_fuse {
             };
 
             let file_size: u64 = inode.size();
-            let hash_alg = inode.hash_algorithm().unwrap_or(rusty_attachments_model::HashAlgorithm::Xxh128);
+            let hash_alg = inode
+                .hash_algorithm()
+                .unwrap_or(rusty_attachments_model::HashAlgorithm::Xxh128);
 
             // Read from store
             let store: Arc<dyn FileStore> = self.store.clone();
@@ -613,7 +616,8 @@ mod impl_fuse {
                         let chunk_size: u64 = rusty_attachments_common::CHUNK_SIZE_V2;
                         let start_chunk: usize = (offset_i64 as u64 / chunk_size) as usize;
                         let end_offset: u64 = (offset_i64 as u64 + size_u32 as u64).min(file_size);
-                        let end_chunk: usize = ((end_offset.saturating_sub(1)) / chunk_size) as usize;
+                        let end_chunk: usize =
+                            ((end_offset.saturating_sub(1)) / chunk_size) as usize;
 
                         let mut data: Vec<u8> = Vec::new();
                         for idx in start_chunk..=end_chunk {
@@ -682,7 +686,9 @@ mod impl_fuse {
             let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
             let data_vec: Vec<u8> = data.to_vec(); // Only clone when async needed
 
-            let exec_result = self.executor.block_on(async move { dm.write(ino, offset_u64, &data_vec).await });
+            let exec_result = self
+                .executor
+                .block_on(async move { dm.write(ino, offset_u64, &data_vec).await });
             match exec_result {
                 Ok(Ok(written)) => reply.written(written as u32),
                 Ok(Err(e)) => {
@@ -718,7 +724,9 @@ mod impl_fuse {
             if let Some(new_size) = size {
                 let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
 
-                let exec_result = self.executor.block_on(async move { dm.truncate(ino, new_size).await });
+                let exec_result = self
+                    .executor
+                    .block_on(async move { dm.truncate(ino, new_size).await });
                 match exec_result {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
@@ -754,7 +762,10 @@ mod impl_fuse {
             // Check if it's a new file
             if self.dirty_manager.is_new_file(ino) {
                 let file_size: u64 = self.dirty_manager.get_size(ino).unwrap_or(0);
-                let mtime: SystemTime = self.dirty_manager.get_mtime(ino).unwrap_or(SystemTime::now());
+                let mtime: SystemTime = self
+                    .dirty_manager
+                    .get_mtime(ino)
+                    .unwrap_or(SystemTime::now());
 
                 let attr = FileAttr {
                     ino,
@@ -826,7 +837,10 @@ mod impl_fuse {
             let new_ino: u64 = 0x8000_0000 + self.next_handle.fetch_add(1, Ordering::SeqCst);
 
             // Create dirty file entry
-            if let Err(e) = self.dirty_manager.create_file(new_ino, new_path.clone(), parent) {
+            if let Err(e) = self
+                .dirty_manager
+                .create_file(new_ino, new_path.clone(), parent)
+            {
                 tracing::error!("Failed to create file: {}", e);
                 reply.error(libc::EIO);
                 return;
@@ -896,7 +910,9 @@ mod impl_fuse {
             // Mark as deleted (or remove if new file)
             let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
 
-            let exec_result = self.executor.block_on(async move { dm.delete_file(ino).await });
+            let exec_result = self
+                .executor
+                .block_on(async move { dm.delete_file(ino).await });
             match exec_result {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
@@ -925,7 +941,9 @@ mod impl_fuse {
             // Flush dirty file to disk
             let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
 
-            let exec_result = self.executor.block_on(async move { dm.flush_to_disk(ino).await });
+            let exec_result = self
+                .executor
+                .block_on(async move { dm.flush_to_disk(ino).await });
             match exec_result {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
@@ -957,9 +975,9 @@ mod impl_fuse {
             if self.dirty_manager.is_dirty(ino) {
                 let dm: Arc<DirtyFileManager> = self.dirty_manager.clone();
 
-                let exec_result =
-                    self.executor
-                        .block_on(async move { dm.flush_to_disk(ino).await });
+                let exec_result = self
+                    .executor
+                    .block_on(async move { dm.flush_to_disk(ino).await });
                 match exec_result {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
@@ -1106,7 +1124,6 @@ mod impl_fuse {
         }
     }
 
-
     #[async_trait]
     impl DiffManifestExporter for WritableVfs {
         async fn export_diff_manifest(
@@ -1157,10 +1174,7 @@ mod impl_fuse {
     /// # Arguments
     /// * `vfs` - The writable VFS to mount
     /// * `mountpoint` - Path to mount at
-    pub fn mount_writable(
-        vfs: WritableVfs,
-        mountpoint: &std::path::Path,
-    ) -> Result<(), VfsError> {
+    pub fn mount_writable(vfs: WritableVfs, mountpoint: &std::path::Path) -> Result<(), VfsError> {
         use fuser::MountOption;
         fuser::mount2(
             vfs,

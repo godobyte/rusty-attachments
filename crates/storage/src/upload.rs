@@ -348,15 +348,15 @@ impl<'a, C: StorageClient> UploadOrchestrator<'a, C> {
                     });
                 }
             }
-            Manifest::V2025_12_04_beta(m) => {
+            Manifest::V2025_12(m) => {
                 for file in &m.files {
                     // Skip deleted entries and symlinks
-                    if file.delete || file.symlink_target.is_some() {
+                    if file.deleted || file.symlink_target.is_some() {
                         continue;
                     }
 
                     entries.push(UploadEntry {
-                        local_path: format!("{}/{}", source_root, file.name),
+                        local_path: format!("{}/{}", source_root, file.path),
                         hash: file.hash.clone(),
                         chunkhashes: file.chunkhashes.clone(),
                         size: file.size.unwrap_or(0),
@@ -381,8 +381,14 @@ impl<'a, C: StorageClient> UploadOrchestrator<'a, C> {
                 .await
         } else if let Some(ref chunkhashes) = entry.chunkhashes {
             // Chunked file upload
-            self.upload_chunked_file(&entry.local_path, chunkhashes, entry.size, hash_alg, progress)
-                .await
+            self.upload_chunked_file(
+                &entry.local_path,
+                chunkhashes,
+                entry.size,
+                hash_alg,
+                progress,
+            )
+            .await
         } else {
             Err(StorageError::Other {
                 message: format!("Entry {} has no hash or chunkhashes", entry.local_path),

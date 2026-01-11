@@ -140,9 +140,30 @@ mod tests {
         let chunks = generate_chunks(300, chunk_size);
         assert_eq!(chunks.len(), 3);
 
-        assert_eq!(chunks[0], ChunkInfo { index: 0, offset: 0, length: 100 });
-        assert_eq!(chunks[1], ChunkInfo { index: 1, offset: 100, length: 100 });
-        assert_eq!(chunks[2], ChunkInfo { index: 2, offset: 200, length: 100 });
+        assert_eq!(
+            chunks[0],
+            ChunkInfo {
+                index: 0,
+                offset: 0,
+                length: 100
+            }
+        );
+        assert_eq!(
+            chunks[1],
+            ChunkInfo {
+                index: 1,
+                offset: 100,
+                length: 100
+            }
+        );
+        assert_eq!(
+            chunks[2],
+            ChunkInfo {
+                index: 2,
+                offset: 200,
+                length: 100
+            }
+        );
     }
 
     #[test]
@@ -151,9 +172,30 @@ mod tests {
         let chunks = generate_chunks(250, chunk_size);
         assert_eq!(chunks.len(), 3);
 
-        assert_eq!(chunks[0], ChunkInfo { index: 0, offset: 0, length: 100 });
-        assert_eq!(chunks[1], ChunkInfo { index: 1, offset: 100, length: 100 });
-        assert_eq!(chunks[2], ChunkInfo { index: 2, offset: 200, length: 50 });
+        assert_eq!(
+            chunks[0],
+            ChunkInfo {
+                index: 0,
+                offset: 0,
+                length: 100
+            }
+        );
+        assert_eq!(
+            chunks[1],
+            ChunkInfo {
+                index: 1,
+                offset: 100,
+                length: 100
+            }
+        );
+        assert_eq!(
+            chunks[2],
+            ChunkInfo {
+                index: 2,
+                offset: 200,
+                length: 50
+            }
+        );
     }
 
     #[test]
@@ -176,13 +218,25 @@ mod tests {
         assert_eq!(expected_chunk_count(CHUNK_SIZE_V2, CHUNK_SIZE_V2), 1);
         assert_eq!(expected_chunk_count(CHUNK_SIZE_V2 + 1, CHUNK_SIZE_V2), 2);
         assert_eq!(expected_chunk_count(CHUNK_SIZE_V2 * 2, CHUNK_SIZE_V2), 2);
-        assert_eq!(expected_chunk_count(CHUNK_SIZE_V2 * 2 + 1, CHUNK_SIZE_V2), 3);
+        assert_eq!(
+            expected_chunk_count(CHUNK_SIZE_V2 * 2 + 1, CHUNK_SIZE_V2),
+            3
+        );
     }
 
     #[test]
     fn test_upload_strategy() {
-        assert_eq!(upload_strategy(100, CHUNK_SIZE_V2), UploadStrategy::SingleObject);
-        assert_eq!(upload_strategy(CHUNK_SIZE_V2, CHUNK_SIZE_V2), UploadStrategy::SingleObject);
-        assert_eq!(upload_strategy(CHUNK_SIZE_V2 + 1, CHUNK_SIZE_V2), UploadStrategy::ChunkedCas);
+        assert_eq!(
+            upload_strategy(100, CHUNK_SIZE_V2),
+            UploadStrategy::SingleObject
+        );
+        assert_eq!(
+            upload_strategy(CHUNK_SIZE_V2, CHUNK_SIZE_V2),
+            UploadStrategy::SingleObject
+        );
+        assert_eq!(
+            upload_strategy(CHUNK_SIZE_V2 + 1, CHUNK_SIZE_V2),
+            UploadStrategy::ChunkedCas
+        );
     }
 }

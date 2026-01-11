@@ -47,9 +47,9 @@ pub use options::{FsKitMountOptions, FsKitVfsOptions, FsKitWriteOptions};
 
 // Re-export shared VFS primitives for convenience
 pub use rusty_attachments_vfs::{
-    DirtyFileManager, DirtySummary, FileStore, INodeManager, MemoryPool,
-    MemoryPoolConfig, PrefetchStrategy, ReadAheadOptions, ReadCacheConfig, StorageClientAdapter,
-    TimeoutOptions, VfsError, WritableVfsStats, WritableVfsStatsCollector,
+    DirtyFileManager, DirtySummary, FileStore, INodeManager, MemoryPool, MemoryPoolConfig,
+    PrefetchStrategy, ReadAheadOptions, ReadCacheConfig, StorageClientAdapter, TimeoutOptions,
+    VfsError, WritableVfsStats, WritableVfsStatsCollector,
 };
 
 // Re-export storage types

@@ -41,18 +41,18 @@
 //!
 //! ```ignore
 //! let pool = MemoryPool::new(MemoryPoolConfig::default());
-//! 
+//!
 //! // Acquire a read-only block (fetches from S3 if not cached)
 //! let key = BlockKey::from_hash_hex("abcdef1234567890abcdef1234567890", 0);
 //! let handle = pool.acquire(&key, || async { fetch_from_s3(&key).await }).await?;
-//! 
+//!
 //! // Insert a dirty block
 //! let dirty_key = BlockKey::from_inode(42, 0);
 //! let handle = pool.insert_dirty(42, 0, modified_data)?;
-//! 
+//!
 //! // Read data directly - no lock needed
 //! let data: &[u8] = handle.data();
-//! 
+//!
 //! // Handle automatically releases on drop
 //! ```
 
@@ -75,7 +75,6 @@ pub const DEFAULT_MAX_POOL_SIZE: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Default block size (256MB, matching V2 chunk size).
 pub const DEFAULT_BLOCK_SIZE: u64 = CHUNK_SIZE_V2;
-
 
 // ============================================================================
 // Error Types
@@ -144,7 +143,7 @@ impl HashCache {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     /// Insert a hash mapping.
     ///
     /// # Arguments
@@ -154,7 +153,7 @@ impl HashCache {
         let mut cache = self.folded_to_hex.write().unwrap();
         cache.insert(folded, hash_hex);
     }
-    
+
     /// Get original hash string from folded value.
     ///
     /// # Arguments
@@ -166,7 +165,7 @@ impl HashCache {
         let cache = self.folded_to_hex.read().unwrap();
         cache.get(&folded).cloned()
     }
-    
+
     /// Remove a hash mapping (for cleanup).
     ///
     /// # Arguments
@@ -178,19 +177,19 @@ impl HashCache {
         let mut cache = self.folded_to_hex.write().unwrap();
         cache.remove(&folded)
     }
-    
+
     /// Clear all cached mappings.
     pub fn clear(&self) {
         let mut cache = self.folded_to_hex.write().unwrap();
         cache.clear();
     }
-    
+
     /// Get the number of cached mappings.
     pub fn len(&self) -> usize {
         let cache = self.folded_to_hex.read().unwrap();
         cache.len()
     }
-    
+
     /// Check if the cache is empty.
     pub fn is_empty(&self) -> bool {
         let cache = self.folded_to_hex.read().unwrap();
@@ -224,7 +223,7 @@ impl ContentId {
     pub fn from_hash_hex(hash_hex: &str) -> Self {
         ContentId::Hash(rusty_attachments_common::hash::fold_hash_to_u64(hash_hex))
     }
-    
+
     /// Create a hash-based content ID from raw bytes.
     ///
     /// # Arguments
@@ -232,7 +231,7 @@ impl ContentId {
     pub fn from_bytes(data: &[u8]) -> Self {
         ContentId::Hash(rusty_attachments_common::hash::hash_bytes_folded(data))
     }
-    
+
     /// Check if this is a hash-based (read-only) content ID.
     pub fn is_hash(&self) -> bool {
         matches!(self, ContentId::Hash(_))
@@ -297,7 +296,7 @@ impl BlockKey {
             chunk_index,
         }
     }
-    
+
     /// Create a new block key from raw bytes (computes and folds hash).
     ///
     /// # Arguments
@@ -463,8 +462,7 @@ impl PoolBlock {
     ///
     /// A block can be evicted if it has no active references and doesn't need flush.
     fn can_evict_without_flush(&self) -> bool {
-        self.ref_count.load(Ordering::Acquire) == 0
-            && !self.needs_flush.load(Ordering::Acquire)
+        self.ref_count.load(Ordering::Acquire) == 0 && !self.needs_flush.load(Ordering::Acquire)
     }
 
     /// Check if this block can be evicted (possibly after flushing).
@@ -521,7 +519,6 @@ impl fmt::Debug for PoolBlock {
             .finish()
     }
 }
-
 
 // ============================================================================
 // Configuration
@@ -672,7 +669,6 @@ type FetchResult = Result<Arc<Vec<u8>>, String>;
 /// Shared future for coordinating concurrent fetches of the same key.
 type SharedFetch = Shared<BoxFuture<'static, FetchResult>>;
 
-
 // ============================================================================
 // Memory Pool Inner
 // ============================================================================
@@ -811,15 +807,12 @@ impl MemoryPoolInner {
     /// Ok(true) if a block was evicted, Ok(false) if no evictable blocks,
     /// Err if pool is exhausted (all blocks in use or need flush).
     fn evict_one_clean(&mut self) -> Result<bool, MemoryPoolError> {
-        let evict_id: Option<PoolBlockId> = self
-            .lru_order
-            .iter()
-            .find_map(|&id| {
-                self.blocks
-                    .get(&id)
-                    .filter(|b| b.can_evict_without_flush())
-                    .map(|_| id)
-            });
+        let evict_id: Option<PoolBlockId> = self.lru_order.iter().find_map(|&id| {
+            self.blocks
+                .get(&id)
+                .filter(|b| b.can_evict_without_flush())
+                .map(|_| id)
+        });
 
         match evict_id {
             Some(id) => {
@@ -943,7 +936,6 @@ impl MemoryPoolInner {
     }
 }
 
-
 // ============================================================================
 // Memory Pool Stats
 // ============================================================================
@@ -1055,7 +1047,9 @@ impl MemoryPool {
                 block.acquire();
                 self.hit_count.fetch_add(1, Ordering::Relaxed);
                 // Read-only blocks should always be immutable
-                let data: Arc<Vec<u8>> = block.data.as_immutable()
+                let data: Arc<Vec<u8>> = block
+                    .data
+                    .as_immutable()
                     .expect("Read-only block should be immutable");
                 return Ok(BlockHandle { data, block });
             }
@@ -1089,7 +1083,8 @@ impl MemoryPool {
 
         // Create a shared future that all waiters can clone and await
         let shared_future: SharedFetch = async move {
-            rx.await.unwrap_or_else(|_| Err("Fetch cancelled".to_string()))
+            rx.await
+                .unwrap_or_else(|_| Err("Fetch cancelled".to_string()))
         }
         .boxed()
         .shared();
@@ -1102,7 +1097,9 @@ impl MemoryPool {
             if let Some(block) = inner.lookup(key) {
                 block.acquire();
                 self.hit_count.fetch_add(1, Ordering::Relaxed);
-                let data: Arc<Vec<u8>> = block.data.as_immutable()
+                let data: Arc<Vec<u8>> = block
+                    .data
+                    .as_immutable()
                     .expect("Read-only block should be immutable");
                 return Ok(BlockHandle { data, block });
             }
@@ -1111,7 +1108,9 @@ impl MemoryPool {
             if let Some(existing) = inner.pending_fetches.get(key) {
                 Some(existing.clone())
             } else {
-                inner.pending_fetches.insert(key.clone(), shared_future.clone());
+                inner
+                    .pending_fetches
+                    .insert(key.clone(), shared_future.clone());
                 None
             }
         }; // Lock released here
@@ -1155,9 +1154,14 @@ impl MemoryPool {
                 if let Some(block) = inner.lookup(key) {
                     block.acquire();
                     self.hit_count.fetch_add(1, Ordering::Relaxed);
-                    let data_ref: Arc<Vec<u8>> = block.data.as_immutable()
+                    let data_ref: Arc<Vec<u8>> = block
+                        .data
+                        .as_immutable()
                         .expect("Read-only block should be immutable");
-                    return Ok(BlockHandle { data: data_ref, block });
+                    return Ok(BlockHandle {
+                        data: data_ref,
+                        block,
+                    });
                 }
 
                 // Evict if necessary
@@ -1189,9 +1193,14 @@ impl MemoryPool {
                 if let Some(block) = inner.lookup(key) {
                     block.acquire();
                     self.hit_count.fetch_add(1, Ordering::Relaxed);
-                    let data_ref: Arc<Vec<u8>> = block.data.as_immutable()
+                    let data_ref: Arc<Vec<u8>> = block
+                        .data
+                        .as_immutable()
                         .expect("Read-only block should be immutable");
-                    Ok(BlockHandle { data: data_ref, block })
+                    Ok(BlockHandle {
+                        data: data_ref,
+                        block,
+                    })
                 } else {
                     // Block was evicted before we could get it - create handle from shared data
                     // This is a rare edge case
@@ -1216,7 +1225,9 @@ impl MemoryPool {
         let block: Arc<PoolBlock> = inner.lookup(key)?;
         block.acquire();
         self.hit_count.fetch_add(1, Ordering::Relaxed);
-        let data: Arc<Vec<u8>> = block.data.as_immutable()
+        let data: Arc<Vec<u8>> = block
+            .data
+            .as_immutable()
             .expect("Read-only block should be immutable");
         Some(BlockHandle { data, block })
     }
@@ -1591,7 +1602,6 @@ impl Default for MemoryPool {
     }
 }
 
-
 // ============================================================================
 // Content Provider Trait
 // ============================================================================
@@ -1704,11 +1714,7 @@ mod tests {
 
     #[test]
     fn test_pool_block_needs_flush() {
-        let block = PoolBlock::new(
-            BlockKey::from_inode(1, 0),
-            Arc::new(vec![1, 2, 3]),
-            true,
-        );
+        let block = PoolBlock::new(BlockKey::from_inode(1, 0), Arc::new(vec![1, 2, 3]), true);
         assert!(block.needs_flush());
         assert!(!block.can_evict_without_flush());
         assert!(block.can_evict()); // can evict if we flush first
@@ -1852,9 +1858,21 @@ mod tests {
         // Insert hash-based blocks using the inner directly
         {
             let mut inner = pool.inner.lock().unwrap();
-            inner.insert(BlockKey::from_hash_hex(hash1, 0), Arc::new(vec![1, 2, 3]), false);
-            inner.insert(BlockKey::from_hash_hex(hash1, 1), Arc::new(vec![4, 5, 6]), false);
-            inner.insert(BlockKey::from_hash_hex(hash2, 0), Arc::new(vec![7, 8, 9]), false);
+            inner.insert(
+                BlockKey::from_hash_hex(hash1, 0),
+                Arc::new(vec![1, 2, 3]),
+                false,
+            );
+            inner.insert(
+                BlockKey::from_hash_hex(hash1, 1),
+                Arc::new(vec![4, 5, 6]),
+                false,
+            );
+            inner.insert(
+                BlockKey::from_hash_hex(hash2, 0),
+                Arc::new(vec![7, 8, 9]),
+                false,
+            );
         }
 
         assert_eq!(pool.stats().total_blocks, 3);
@@ -1880,7 +1898,11 @@ mod tests {
         // Insert a clean block directly
         {
             let mut inner = pool.inner.lock().unwrap();
-            inner.insert(BlockKey::from_bytes(b"clean", 0), Arc::new(vec![0; 100]), false);
+            inner.insert(
+                BlockKey::from_bytes(b"clean", 0),
+                Arc::new(vec![0; 100]),
+                false,
+            );
         }
 
         assert_eq!(pool.stats().total_blocks, 2);
@@ -1890,7 +1912,11 @@ mod tests {
         {
             let mut inner = pool.inner.lock().unwrap();
             inner.evict_for_space(100).unwrap();
-            inner.insert(BlockKey::from_bytes(b"clean2", 0), Arc::new(vec![0; 100]), false);
+            inner.insert(
+                BlockKey::from_bytes(b"clean2", 0),
+                Arc::new(vec![0; 100]),
+                false,
+            );
         }
 
         // Dirty block should still be there
@@ -2054,19 +2080,31 @@ mod tests {
         let k2: BlockKey = BlockKey::from_bytes(b"h2", 0);
         let k3: BlockKey = BlockKey::from_bytes(b"h3", 0);
 
-        let h1: BlockHandle = pool.acquire(&k1, || async move { Ok(vec![0; 100]) }).await.unwrap();
+        let h1: BlockHandle = pool
+            .acquire(&k1, || async move { Ok(vec![0; 100]) })
+            .await
+            .unwrap();
         drop(h1);
 
-        let h2: BlockHandle = pool.acquire(&k2, || async move { Ok(vec![0; 100]) }).await.unwrap();
+        let h2: BlockHandle = pool
+            .acquire(&k2, || async move { Ok(vec![0; 100]) })
+            .await
+            .unwrap();
         drop(h2);
 
-        let h3: BlockHandle = pool.acquire(&k3, || async move { Ok(vec![0; 100]) }).await.unwrap();
+        let h3: BlockHandle = pool
+            .acquire(&k3, || async move { Ok(vec![0; 100]) })
+            .await
+            .unwrap();
         drop(h3);
 
         assert_eq!(pool.stats().total_blocks, 3);
 
         let k4: BlockKey = BlockKey::from_bytes(b"h4", 0);
-        let _h4: BlockHandle = pool.acquire(&k4, || async move { Ok(vec![0; 100]) }).await.unwrap();
+        let _h4: BlockHandle = pool
+            .acquire(&k4, || async move { Ok(vec![0; 100]) })
+            .await
+            .unwrap();
 
         assert_eq!(pool.stats().total_blocks, 3);
         assert!(pool.try_get(&k1).is_none());
@@ -2085,8 +2123,14 @@ mod tests {
         let k2: BlockKey = BlockKey::from_bytes(b"h2", 0);
         let k3: BlockKey = BlockKey::from_bytes(b"h3", 0);
 
-        let _h1: BlockHandle = pool.acquire(&k1, || async move { Ok(vec![0; 100]) }).await.unwrap();
-        let _h2: BlockHandle = pool.acquire(&k2, || async move { Ok(vec![0; 100]) }).await.unwrap();
+        let _h1: BlockHandle = pool
+            .acquire(&k1, || async move { Ok(vec![0; 100]) })
+            .await
+            .unwrap();
+        let _h2: BlockHandle = pool
+            .acquire(&k2, || async move { Ok(vec![0; 100]) })
+            .await
+            .unwrap();
 
         let result: Result<BlockHandle, MemoryPoolError> =
             pool.acquire(&k3, || async move { Ok(vec![0; 100]) }).await;

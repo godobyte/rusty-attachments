@@ -19,8 +19,10 @@ pub mod symlink;
 // Re-export main types
 pub use diff::{DiffEngine, DiffMode, DiffOptions, DiffResult, DiffStats, FileEntry};
 pub use error::FileSystemError;
-pub use expand::{expand_input_paths, validate_input_paths, ExpandedInputPaths, ValidatedInputPaths};
+pub use expand::{
+    expand_input_paths, validate_input_paths, ExpandedInputPaths, ValidatedInputPaths,
+};
 pub use glob::{escape_glob, GlobFilter};
 pub use scanner::{FileSystemScanner, ScanPhase, ScanProgress, SnapshotOptions};
 pub use stat_cache::{StatCache, StatResult};
-pub use symlink::{validate_symlink, SymlinkInfo};
+pub use symlink::{validate_symlink, SymlinkInfo, SymlinkPolicy};

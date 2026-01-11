@@ -147,10 +147,7 @@ impl DirtyFileMetadata {
 
     /// Get the file name (last component of path).
     pub fn file_name(&self) -> &str {
-        self.rel_path
-            .rsplit('/')
-            .next()
-            .unwrap_or(&self.rel_path)
+        self.rel_path.rsplit('/').next().unwrap_or(&self.rel_path)
     }
 
     /// Get current state.
@@ -262,7 +259,9 @@ impl DirtyFileMetadata {
     /// # Returns
     /// Original hash if available, None for new chunks.
     pub fn original_hash(&self, chunk_index: u32) -> Option<&str> {
-        self.original_hashes.get(chunk_index as usize).map(|s| s.as_str())
+        self.original_hashes
+            .get(chunk_index as usize)
+            .map(|s| s.as_str())
     }
 
     /// Calculate chunk index for a byte offset.
@@ -282,15 +281,19 @@ impl DirtyFileMetadata {
     ///
     /// # Returns
     /// (start_in_chunk, end_in_chunk) byte offsets within the chunk.
-    pub fn chunk_byte_range(&self, chunk_index: u32, file_offset: u64, size: u64) -> (usize, usize) {
+    pub fn chunk_byte_range(
+        &self,
+        chunk_index: u32,
+        file_offset: u64,
+        size: u64,
+    ) -> (usize, usize) {
         let chunk_start: u64 = chunk_index as u64 * self.chunk_size;
         let start_in_chunk: usize = (file_offset.saturating_sub(chunk_start)) as usize;
-        let end_in_chunk: usize = ((file_offset + size).saturating_sub(chunk_start))
-            .min(self.chunk_size) as usize;
+        let end_in_chunk: usize =
+            ((file_offset + size).saturating_sub(chunk_start)).min(self.chunk_size) as usize;
         (start_in_chunk, end_in_chunk)
     }
 }
-
 
 /// Summary of a dirty file for export.
 #[derive(Debug, Clone)]
@@ -466,11 +469,13 @@ impl DirtyFileManager {
             self.pool.invalidate_hash(hash);
         }
 
-        self.dirty_metadata.write().unwrap().insert(inode_id, metadata);
+        self.dirty_metadata
+            .write()
+            .unwrap()
+            .insert(inode_id, metadata);
 
         Ok(())
     }
-
 
     /// Read from a dirty file.
     ///
@@ -506,7 +511,9 @@ impl DirtyFileManager {
 
         // Small file optimization: single chunk read
         if chunk_count <= 1 {
-            return self.read_single_chunk(inode_id, offset, actual_size as u32).await;
+            return self
+                .read_single_chunk(inode_id, offset, actual_size as u32)
+                .await;
         }
 
         // Multi-chunk read
@@ -719,7 +726,11 @@ impl DirtyFileManager {
     /// # Arguments
     /// * `inode_id` - Inode ID
     /// * `chunk_index` - Chunk index to load
-    async fn ensure_chunk_in_pool(&self, inode_id: INodeId, chunk_index: u32) -> Result<(), VfsError> {
+    async fn ensure_chunk_in_pool(
+        &self,
+        inode_id: INodeId,
+        chunk_index: u32,
+    ) -> Result<(), VfsError> {
         // Check if already in pool
         if self.pool.has_dirty(inode_id, chunk_index) {
             return Ok(());
@@ -743,7 +754,8 @@ impl DirtyFileManager {
         };
 
         // Insert into pool (not dirty yet - just loaded)
-        self.pool.insert_dirty(inode_id, chunk_index, chunk_data)
+        self.pool
+            .insert_dirty(inode_id, chunk_index, chunk_data)
             .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
 
         // Mark as not needing flush (just loaded, not modified)
@@ -767,7 +779,8 @@ impl DirtyFileManager {
         }
 
         // Fetch from S3
-        let data: Vec<u8> = self.read_store
+        let data: Vec<u8> = self
+            .read_store
             .retrieve(hash, HashAlgorithm::Xxh128)
             .await?;
 
@@ -778,7 +791,6 @@ impl DirtyFileManager {
 
         Ok(data)
     }
-
 
     /// Write to a dirty file, performing COW if needed.
     ///
@@ -965,7 +977,12 @@ impl DirtyFileManager {
 
             // Modify chunk in place with slice
             self.pool
-                .modify_dirty_in_place_with_slice(inode_id, chunk_idx, write_start_in_chunk, chunk_data)
+                .modify_dirty_in_place_with_slice(
+                    inode_id,
+                    chunk_idx,
+                    write_start_in_chunk,
+                    chunk_data,
+                )
                 .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
 
             // Mark chunk as dirty
@@ -1090,7 +1107,12 @@ impl DirtyFileManager {
 
             // Modify chunk in place with slice
             self.pool
-                .modify_dirty_in_place_with_slice(inode_id, chunk_idx, write_start_in_chunk, chunk_data)
+                .modify_dirty_in_place_with_slice(
+                    inode_id,
+                    chunk_idx,
+                    write_start_in_chunk,
+                    chunk_data,
+                )
                 .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
 
             // Mark chunk as dirty in metadata
@@ -1118,7 +1140,6 @@ impl DirtyFileManager {
         Ok(data.len())
     }
 
-
     /// Create a new file (not COW).
     ///
     /// # Arguments
@@ -1132,7 +1153,10 @@ impl DirtyFileManager {
         parent_inode: INodeId,
     ) -> Result<(), VfsError> {
         let metadata = DirtyFileMetadata::new_file(inode_id, rel_path, parent_inode);
-        self.dirty_metadata.write().unwrap().insert(inode_id, metadata);
+        self.dirty_metadata
+            .write()
+            .unwrap()
+            .insert(inode_id, metadata);
         Ok(())
     }
 
@@ -1147,7 +1171,9 @@ impl DirtyFileManager {
         let guard = self.dirty_metadata.read().unwrap();
         guard
             .values()
-            .filter(|meta| meta.state() == DirtyState::New && meta.parent_inode() == Some(parent_inode))
+            .filter(|meta| {
+                meta.state() == DirtyState::New && meta.parent_inode() == Some(parent_inode)
+            })
             .map(|meta| (meta.inode_id(), meta.file_name().to_string()))
             .collect()
     }
@@ -1237,7 +1263,10 @@ impl DirtyFileManager {
                 false,
             );
             metadata.mark_deleted();
-            self.dirty_metadata.write().unwrap().insert(inode_id, metadata);
+            self.dirty_metadata
+                .write()
+                .unwrap()
+                .insert(inode_id, metadata);
         } else {
             // Mark existing dirty entry as deleted
             let mut guard = self.dirty_metadata.write().unwrap();
@@ -1265,7 +1294,6 @@ impl DirtyFileManager {
         let guard = self.dirty_metadata.read().unwrap();
         guard.get(&inode_id).map(|meta| meta.rel_path().to_string())
     }
-
 
     /// Truncate a dirty file.
     ///
@@ -1311,7 +1339,8 @@ impl DirtyFileManager {
                     if (last_chunk_end as usize) < chunk_data.len() {
                         let mut truncated_data: Vec<u8> = chunk_data;
                         truncated_data.truncate(last_chunk_end as usize);
-                        self.pool.update_dirty(inode_id, last_chunk_idx, truncated_data)
+                        self.pool
+                            .update_dirty(inode_id, last_chunk_idx, truncated_data)
                             .map_err(|e| VfsError::MemoryPoolError(e.to_string()))?;
                     }
                 }
@@ -1338,7 +1367,13 @@ impl DirtyFileManager {
     /// # Arguments
     /// * `inode_id` - Inode ID of file to flush
     pub async fn flush_to_disk(&self, inode_id: INodeId) -> Result<(), VfsError> {
-        let (rel_path, state, size, chunk_count, dirty_chunks): (String, DirtyState, u64, u32, HashSet<u32>) = {
+        let (rel_path, state, size, chunk_count, dirty_chunks): (
+            String,
+            DirtyState,
+            u64,
+            u32,
+            HashSet<u32>,
+        ) = {
             let guard = self.dirty_metadata.read().unwrap();
             let meta: &DirtyFileMetadata = guard
                 .get(&inode_id)
@@ -1402,7 +1437,6 @@ impl DirtyFileManager {
 
         Ok(())
     }
-
 
     /// Remove all new files under a directory path.
     ///
@@ -1487,7 +1521,6 @@ impl DirtyFileManager {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1526,13 +1559,8 @@ mod tests {
     #[test]
     fn test_dirty_file_metadata_from_cow_small() {
         let file_content = FileContent::SingleHash("abc123".to_string());
-        let meta = DirtyFileMetadata::from_cow(
-            42,
-            "test/file.txt".to_string(),
-            &file_content,
-            1024,
-            true,
-        );
+        let meta =
+            DirtyFileMetadata::from_cow(42, "test/file.txt".to_string(), &file_content, 1024, true);
 
         assert_eq!(meta.inode_id(), 42);
         assert_eq!(meta.state(), DirtyState::Modified);
@@ -1653,7 +1681,6 @@ mod tests {
         assert_ne!(DirtyState::New, DirtyState::Deleted);
     }
 
-
     // ========================================================================
     // DirtyFileManager Tests
     // ========================================================================
@@ -1662,7 +1689,9 @@ mod tests {
     async fn test_manager_create_file() {
         let (manager, _inodes, _pool) = create_test_manager();
 
-        manager.create_file(100, "new_file.txt".to_string(), 1).unwrap();
+        manager
+            .create_file(100, "new_file.txt".to_string(), 1)
+            .unwrap();
 
         assert!(manager.is_dirty(100));
         assert_eq!(manager.get_state(100), Some(DirtyState::New));
@@ -1791,10 +1820,18 @@ mod tests {
 
         // Create files in different directories
         manager.create_file(100, "root.txt".to_string(), 1).unwrap();
-        manager.create_file(101, "dir/file1.txt".to_string(), 1).unwrap();
-        manager.create_file(102, "dir/file2.txt".to_string(), 1).unwrap();
-        manager.create_file(103, "dir/subdir/file3.txt".to_string(), 1).unwrap();
-        manager.create_file(104, "other/file4.txt".to_string(), 1).unwrap();
+        manager
+            .create_file(101, "dir/file1.txt".to_string(), 1)
+            .unwrap();
+        manager
+            .create_file(102, "dir/file2.txt".to_string(), 1)
+            .unwrap();
+        manager
+            .create_file(103, "dir/subdir/file3.txt".to_string(), 1)
+            .unwrap();
+        manager
+            .create_file(104, "other/file4.txt".to_string(), 1)
+            .unwrap();
 
         assert_eq!(manager.get_dirty_entries().len(), 5);
 
@@ -1817,7 +1854,9 @@ mod tests {
         let (manager, _inodes, _pool) = create_test_manager();
 
         manager.create_file(100, "file.txt".to_string(), 1).unwrap();
-        manager.create_file(101, "other/file.txt".to_string(), 1).unwrap();
+        manager
+            .create_file(101, "other/file.txt".to_string(), 1)
+            .unwrap();
 
         let removed: usize = manager.remove_new_files_under_path("nonexistent");
         assert_eq!(removed, 0);
@@ -1828,8 +1867,12 @@ mod tests {
     fn test_lookup_new_file() {
         let (manager, _inodes, _pool) = create_test_manager();
 
-        manager.create_file(100, "dir/file.txt".to_string(), 1).unwrap();
-        manager.create_file(101, "dir/other.txt".to_string(), 1).unwrap();
+        manager
+            .create_file(100, "dir/file.txt".to_string(), 1)
+            .unwrap();
+        manager
+            .create_file(101, "dir/other.txt".to_string(), 1)
+            .unwrap();
 
         assert_eq!(manager.lookup_new_file(1, "file.txt"), Some(100));
         assert_eq!(manager.lookup_new_file(1, "other.txt"), Some(101));
@@ -1841,9 +1884,15 @@ mod tests {
     fn test_get_new_files_in_dir() {
         let (manager, _inodes, _pool) = create_test_manager();
 
-        manager.create_file(100, "dir/file1.txt".to_string(), 1).unwrap();
-        manager.create_file(101, "dir/file2.txt".to_string(), 1).unwrap();
-        manager.create_file(102, "other/file3.txt".to_string(), 2).unwrap();
+        manager
+            .create_file(100, "dir/file1.txt".to_string(), 1)
+            .unwrap();
+        manager
+            .create_file(101, "dir/file2.txt".to_string(), 1)
+            .unwrap();
+        manager
+            .create_file(102, "other/file3.txt".to_string(), 2)
+            .unwrap();
 
         let files: Vec<(INodeId, String)> = manager.get_new_files_in_dir(1);
         assert_eq!(files.len(), 2);
@@ -1857,8 +1906,12 @@ mod tests {
     fn test_clear() {
         let (manager, _inodes, pool) = create_test_manager();
 
-        manager.create_file(100, "file1.txt".to_string(), 1).unwrap();
-        manager.create_file(101, "file2.txt".to_string(), 1).unwrap();
+        manager
+            .create_file(100, "file1.txt".to_string(), 1)
+            .unwrap();
+        manager
+            .create_file(101, "file2.txt".to_string(), 1)
+            .unwrap();
 
         // Insert some data into pool
         pool.insert_dirty(100, 0, vec![1, 2, 3]).unwrap();
@@ -1904,7 +1957,9 @@ mod tests {
     async fn test_read_empty_file() {
         let (manager, _inodes, _pool) = create_test_manager();
 
-        manager.create_file(100, "empty.txt".to_string(), 1).unwrap();
+        manager
+            .create_file(100, "empty.txt".to_string(), 1)
+            .unwrap();
 
         let data: Vec<u8> = manager.read(100, 0, 100).await.unwrap();
         assert!(data.is_empty());

@@ -209,33 +209,55 @@ fn print_stats(stats: &WritableVfsStats, mount_point: &str) {
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ Mode: READ-WRITE (COW) via FSKit                                  ║");
     println!("║ Mount: {:58} ║", truncate_path(mount_point, 58));
-    println!("║ Uptime: {:>5}s                                                   ║", stats.uptime_secs);
+    println!(
+        "║ Uptime: {:>5}s                                                   ║",
+        stats.uptime_secs
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ FILESYSTEM                                                        ║");
-    println!("║   Inodes: {:>10}                                              ║", stats.inode_count);
+    println!(
+        "║   Inodes: {:>10}                                              ║",
+        stats.inode_count
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ MEMORY POOL                                                       ║");
-    println!("║   Blocks: {:>6} total, {:>6} in use                            ║",
-             stats.pool_stats.total_blocks, stats.pool_stats.in_use_blocks);
-    println!("║   Memory: {:>12} / {:>12} ({:.1}%)                   ║",
-             format_bytes(stats.pool_stats.current_size),
-             format_bytes(stats.pool_stats.max_size),
-             stats.pool_stats.utilization());
-    println!("║   Pending fetches: {:>4}                                          ║", stats.pool_stats.pending_fetches);
+    println!(
+        "║   Blocks: {:>6} total, {:>6} in use                            ║",
+        stats.pool_stats.total_blocks, stats.pool_stats.in_use_blocks
+    );
+    println!(
+        "║   Memory: {:>12} / {:>12} ({:.1}%)                   ║",
+        format_bytes(stats.pool_stats.current_size),
+        format_bytes(stats.pool_stats.max_size),
+        stats.pool_stats.utilization()
+    );
+    println!(
+        "║   Pending fetches: {:>4}                                          ║",
+        stats.pool_stats.pending_fetches
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
     println!("║ CACHE                                                             ║");
-    println!("║   Hits: {:>10}  Allocations: {:>10}                       ║",
-             stats.cache_hits, stats.cache_allocations);
-    println!("║   Hit rate: {:>6.2}%                                              ║", stats.cache_hit_rate);
+    println!(
+        "║   Hits: {:>10}  Allocations: {:>10}                       ║",
+        stats.cache_hits, stats.cache_allocations
+    );
+    println!(
+        "║   Hit rate: {:>6.2}%                                              ║",
+        stats.cache_hit_rate
+    );
     println!("╠══════════════════════════════════════════════════════════════════╣");
 
     // Dirty files section
     let summary = &stats.dirty_summary;
     println!("║ COW DIRTY STATE                                                   ║");
-    println!("║   Files:   Modified: {:>3}    New: {:>3}    Deleted: {:>3}           ║",
-             summary.modified_count, summary.new_count, summary.deleted_count);
-    println!("║   Dirs:    New: {:>3}         Deleted: {:>3}                        ║",
-             summary.new_dir_count, summary.deleted_dir_count);
+    println!(
+        "║   Files:   Modified: {:>3}    New: {:>3}    Deleted: {:>3}           ║",
+        summary.modified_count, summary.new_count, summary.deleted_count
+    );
+    println!(
+        "║   Dirs:    New: {:>3}         Deleted: {:>3}                        ║",
+        summary.new_dir_count, summary.deleted_dir_count
+    );
 
     if !stats.modified_files.is_empty() || !stats.new_files.is_empty() {
         println!("║                                                                   ║");
@@ -245,21 +267,31 @@ fn print_stats(stats: &WritableVfsStats, mount_point: &str) {
         let mut display_count: usize = 0;
         for file in stats.modified_files.iter().take(5) {
             let path_display: String = truncate_path(&file.path, 42);
-            println!("║   {:>2}. {:42} {:>8}      ║",
-                     display_count + 1, path_display, format_bytes(file.size));
+            println!(
+                "║   {:>2}. {:42} {:>8}      ║",
+                display_count + 1,
+                path_display,
+                format_bytes(file.size)
+            );
             display_count += 1;
         }
         for file in stats.new_files.iter().take(5 - display_count.min(5)) {
             let path_display: String = truncate_path(&file.path, 42);
-            println!("║   {:>2}. {:42} {:>8} [NEW]║",
-                     display_count + 1, path_display, format_bytes(file.size));
+            println!(
+                "║   {:>2}. {:42} {:>8} [NEW]║",
+                display_count + 1,
+                path_display,
+                format_bytes(file.size)
+            );
             display_count += 1;
         }
 
         let total_dirty: usize = stats.modified_files.len() + stats.new_files.len();
         if total_dirty > 5 {
-            println!("║   ... and {} more                                               ║",
-                     total_dirty - 5);
+            println!(
+                "║   ... and {} more                                               ║",
+                total_dirty - 5
+            );
         }
     }
 
@@ -271,8 +303,10 @@ fn print_stats(stats: &WritableVfsStats, mount_point: &str) {
             println!("║   {:>2}. {:50}        ║", i + 1, path_display);
         }
         if stats.deleted_files.len() > 3 {
-            println!("║   ... and {} more                                               ║",
-                     stats.deleted_files.len() - 3);
+            println!(
+                "║   ... and {} more                                               ║",
+                stats.deleted_files.len() - 3
+            );
         }
     }
 
@@ -305,7 +339,6 @@ fn spawn_stats_thread(
         }
     })
 }
-
 
 #[cfg(target_os = "macos")]
 #[tokio::main]

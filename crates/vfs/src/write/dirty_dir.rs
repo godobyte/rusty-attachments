@@ -364,7 +364,6 @@ impl DirtyDirManager {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,8 +384,7 @@ mod tests {
         for path in &original_paths {
             inodes.add_directory(path);
         }
-        let original_dirs: HashSet<String> =
-            original_paths.iter().map(|s| s.to_string()).collect();
+        let original_dirs: HashSet<String> = original_paths.iter().map(|s| s.to_string()).collect();
         let manager = DirtyDirManager::new(inodes.clone(), original_dirs);
         (manager, inodes)
     }
@@ -531,13 +529,11 @@ mod tests {
         let entries: Vec<DirtyDirEntry> = manager.get_dirty_dir_entries();
         assert_eq!(entries.len(), 2);
 
-        let new_entry: Option<&DirtyDirEntry> =
-            entries.iter().find(|e| e.path == "new_dir");
+        let new_entry: Option<&DirtyDirEntry> = entries.iter().find(|e| e.path == "new_dir");
         assert!(new_entry.is_some());
         assert_eq!(new_entry.unwrap().state, DirtyDirState::New);
 
-        let deleted_entry: Option<&DirtyDirEntry> =
-            entries.iter().find(|e| e.path == "orig1");
+        let deleted_entry: Option<&DirtyDirEntry> = entries.iter().find(|e| e.path == "orig1");
         assert!(deleted_entry.is_some());
         assert_eq!(deleted_entry.unwrap().state, DirtyDirState::Deleted);
     }

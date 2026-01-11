@@ -21,9 +21,7 @@ pub fn systemtime_to_filetime(time: SystemTime) -> FILETIME {
     const FILETIME_UNIX_DIFF_SECS: u64 = 11644473600;
     const INTERVALS_PER_SEC: u64 = 10_000_000;
 
-    let duration: Duration = time
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO);
+    let duration: Duration = time.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO);
 
     let intervals: u64 = duration.as_secs() * INTERVALS_PER_SEC
         + duration.subsec_nanos() as u64 / 100
@@ -46,8 +44,7 @@ pub fn filetime_to_systemtime(filetime: FILETIME) -> SystemTime {
     const FILETIME_UNIX_DIFF_SECS: u64 = 11644473600;
     const INTERVALS_PER_SEC: u64 = 10_000_000;
 
-    let intervals: u64 =
-        (filetime.dwHighDateTime as u64) << 32 | filetime.dwLowDateTime as u64;
+    let intervals: u64 = (filetime.dwHighDateTime as u64) << 32 | filetime.dwLowDateTime as u64;
 
     if intervals < FILETIME_UNIX_DIFF_SECS * INTERVALS_PER_SEC {
         // Before Unix epoch
@@ -69,8 +66,7 @@ mod tests {
     fn test_systemtime_to_filetime_epoch() {
         let filetime: FILETIME = systemtime_to_filetime(UNIX_EPOCH);
         // Unix epoch in FILETIME: 116444736000000000
-        let intervals: u64 =
-            (filetime.dwHighDateTime as u64) << 32 | filetime.dwLowDateTime as u64;
+        let intervals: u64 = (filetime.dwHighDateTime as u64) << 32 | filetime.dwLowDateTime as u64;
         assert_eq!(intervals, 116444736000000000);
     }
 

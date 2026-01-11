@@ -41,6 +41,7 @@
 //! ```
 
 mod cas;
+mod data_cache;
 mod download;
 mod error;
 pub mod hash_cache;
@@ -54,6 +55,7 @@ pub use cas::{
     expected_chunk_count, generate_chunks, needs_chunking, upload_strategy, ChunkInfo,
     DownloadStrategy, UploadStrategy,
 };
+pub use data_cache::{FileSystemDataCache, S3DataCache};
 pub use download::{
     generate_unique_copy_path, set_file_executable, set_file_mtime, verify_file_size,
     DownloadOptions, DownloadOrchestrator, DEFAULT_DOWNLOAD_CONCURRENCY,
@@ -85,7 +87,9 @@ pub use s3_check_cache::{
     S3CheckCache, S3CheckCacheBackend, S3CheckCacheEntry, S3CheckCacheError, S3CheckCacheKey,
     SqliteS3CheckCache,
 };
-pub use traits::{ObjectInfo, ObjectMetadata, ProgressCallback, StorageClient};
+pub use traits::{
+    ContentAddressedDataCache, ObjectInfo, ObjectMetadata, ProgressCallback, StorageClient,
+};
 pub use types::{
     AwsCredentials, CasDownloadRequest, CasUploadRequest, ConflictResolution, DataDestination,
     DataSource, DownloadResult, OperationType, RetrySettings, S3Location, StorageSettings,

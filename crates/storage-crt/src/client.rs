@@ -74,7 +74,6 @@ impl CrtStorageClient {
     }
 }
 
-
 #[async_trait]
 impl StorageClient for CrtStorageClient {
     fn expected_bucket_owner(&self) -> Option<&str> {
@@ -180,14 +179,16 @@ impl StorageClient for CrtStorageClient {
             }
         }
 
-        request.send().await.map_err(|err| StorageError::NetworkError {
-            message: err.to_string(),
-            retryable: true,
-        })?;
+        request
+            .send()
+            .await
+            .map_err(|err| StorageError::NetworkError {
+                message: err.to_string(),
+                retryable: true,
+            })?;
 
         Ok(())
     }
-
 
     async fn put_object_from_file(
         &self,
@@ -226,10 +227,13 @@ impl StorageClient for CrtStorageClient {
             }
         }
 
-        request.send().await.map_err(|err| StorageError::NetworkError {
-            message: err.to_string(),
-            retryable: true,
-        })?;
+        request
+            .send()
+            .await
+            .map_err(|err| StorageError::NetworkError {
+                message: err.to_string(),
+                retryable: true,
+            })?;
 
         Ok(())
     }
@@ -244,10 +248,12 @@ impl StorageClient for CrtStorageClient {
         _progress: Option<&dyn ProgressCallback>,
     ) -> Result<(), StorageError> {
         // Read the specific range from the file
-        let mut file = File::open(file_path).await.map_err(|e| StorageError::IoError {
-            path: file_path.to_string(),
-            message: e.to_string(),
-        })?;
+        let mut file = File::open(file_path)
+            .await
+            .map_err(|e| StorageError::IoError {
+                path: file_path.to_string(),
+                message: e.to_string(),
+            })?;
 
         file.seek(SeekFrom::Start(offset))
             .await
@@ -277,10 +283,13 @@ impl StorageClient for CrtStorageClient {
             request = request.expected_bucket_owner(owner);
         }
 
-        request.send().await.map_err(|err| StorageError::NetworkError {
-            message: err.to_string(),
-            retryable: true,
-        })?;
+        request
+            .send()
+            .await
+            .map_err(|err| StorageError::NetworkError {
+                message: err.to_string(),
+                retryable: true,
+            })?;
 
         Ok(())
     }
@@ -321,7 +330,6 @@ impl StorageClient for CrtStorageClient {
         Ok(data)
     }
 
-
     async fn get_object_to_file(
         &self,
         bucket: &str,
@@ -360,16 +368,22 @@ impl StorageClient for CrtStorageClient {
                 })?;
         }
 
-        let mut file = File::create(file_path).await.map_err(|e| StorageError::IoError {
-            path: file_path.to_string(),
-            message: e.to_string(),
-        })?;
+        let mut file = File::create(file_path)
+            .await
+            .map_err(|e| StorageError::IoError {
+                path: file_path.to_string(),
+                message: e.to_string(),
+            })?;
 
         let mut body = response.body;
-        while let Some(chunk) = body.try_next().await.map_err(|e| StorageError::NetworkError {
-            message: e.to_string(),
-            retryable: true,
-        })? {
+        while let Some(chunk) = body
+            .try_next()
+            .await
+            .map_err(|e| StorageError::NetworkError {
+                message: e.to_string(),
+                retryable: true,
+            })?
+        {
             file.write_all(&chunk)
                 .await
                 .map_err(|e| StorageError::IoError {
@@ -445,10 +459,14 @@ impl StorageClient for CrtStorageClient {
             })?;
 
         let mut body = response.body;
-        while let Some(chunk) = body.try_next().await.map_err(|e| StorageError::NetworkError {
-            message: e.to_string(),
-            retryable: true,
-        })? {
+        while let Some(chunk) = body
+            .try_next()
+            .await
+            .map_err(|e| StorageError::NetworkError {
+                message: e.to_string(),
+                retryable: true,
+            })?
+        {
             file.write_all(&chunk)
                 .await
                 .map_err(|e| StorageError::IoError {
@@ -464,7 +482,6 @@ impl StorageClient for CrtStorageClient {
 
         Ok(())
     }
-
 
     async fn list_objects(
         &self,
@@ -489,10 +506,13 @@ impl StorageClient for CrtStorageClient {
                 request = request.continuation_token(token);
             }
 
-            let response = request.send().await.map_err(|err| StorageError::NetworkError {
-                message: err.to_string(),
-                retryable: true,
-            })?;
+            let response = request
+                .send()
+                .await
+                .map_err(|err| StorageError::NetworkError {
+                    message: err.to_string(),
+                    retryable: true,
+                })?;
 
             if let Some(ref contents) = response.contents {
                 for obj in contents {

@@ -48,8 +48,7 @@ pub fn pcwstr_to_string(s: PCWSTR) -> Result<String, ProjFsError> {
             }
         }
 
-        String::from_utf8(buffer.to_vec())
-            .map_err(|e| ProjFsError::PathConversion(e.to_string()))
+        String::from_utf8(buffer.to_vec()).map_err(|e| ProjFsError::PathConversion(e.to_string()))
     }
 }
 

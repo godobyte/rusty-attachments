@@ -92,7 +92,9 @@ mod truncate_extend_zeros {
         let (manager, _inodes, _store) = create_test_env();
 
         // Create empty file
-        manager.create_file(100, "empty.txt".to_string(), 1).unwrap();
+        manager
+            .create_file(100, "empty.txt".to_string(), 1)
+            .unwrap();
         assert_eq!(manager.get_size(100), Some(0));
 
         // Extend via truncate
@@ -375,7 +377,6 @@ mod multiple_truncate_operations {
     }
 }
 
-
 // =============================================================================
 // BUG FIX #5: New file in new directory
 // =============================================================================
@@ -400,12 +401,7 @@ mod new_file_in_new_directory {
         let store = Arc::new(TestFileStore::new());
         let inodes = Arc::new(INodeManager::new());
         let pool = Arc::new(MemoryPool::new(MemoryPoolConfig::default()));
-        let file_manager = Arc::new(DirtyFileManager::new(
-            cache,
-            store,
-            inodes.clone(),
-            pool,
-        ));
+        let file_manager = Arc::new(DirtyFileManager::new(cache, store, inodes.clone(), pool));
         let dir_manager = Arc::new(DirtyDirManager::new(inodes.clone(), HashSet::new()));
         (file_manager, dir_manager, inodes)
     }
@@ -425,7 +421,10 @@ mod new_file_in_new_directory {
 
         // Verify directory was created
         assert!(dir_manager.is_new_dir(dir_ino));
-        assert_eq!(dir_manager.get_new_dir_path(dir_ino), Some("newdir".to_string()));
+        assert_eq!(
+            dir_manager.get_new_dir_path(dir_ino),
+            Some("newdir".to_string())
+        );
 
         // Create file in new directory (simulating touch/create)
         let file_ino: u64 = 0x8000_0002;
@@ -438,7 +437,10 @@ mod new_file_in_new_directory {
         assert_eq!(file_manager.get_size(file_ino), Some(0));
 
         // Write to the file
-        let written: usize = file_manager.write(file_ino, 0, b"hello world").await.unwrap();
+        let written: usize = file_manager
+            .write(file_ino, 0, b"hello world")
+            .await
+            .unwrap();
         assert_eq!(written, 11);
 
         // Verify write succeeded
@@ -467,7 +469,10 @@ mod new_file_in_new_directory {
         file_manager
             .create_file(file_ino, "lookupdir/target.txt".to_string(), dir_ino)
             .unwrap();
-        file_manager.write(file_ino, 0, b"lookup test").await.unwrap();
+        file_manager
+            .write(file_ino, 0, b"lookup test")
+            .await
+            .unwrap();
 
         // Simulate lookup: find file by name in parent directory
         let found: Option<(u64, String)> = file_manager
@@ -529,7 +534,10 @@ mod new_file_in_new_directory {
             .unwrap();
 
         // Write initial content
-        file_manager.write(file_ino, 0, b"hello world").await.unwrap();
+        file_manager
+            .write(file_ino, 0, b"hello world")
+            .await
+            .unwrap();
 
         // Overwrite middle portion
         file_manager.write(file_ino, 6, b"WORLD").await.unwrap();
@@ -555,7 +563,10 @@ mod new_file_in_new_directory {
         file_manager
             .create_file(file_ino, "truncdir/file.txt".to_string(), dir_ino)
             .unwrap();
-        file_manager.write(file_ino, 0, b"hello world").await.unwrap();
+        file_manager
+            .write(file_ino, 0, b"hello world")
+            .await
+            .unwrap();
 
         // Truncate to smaller size
         file_manager.truncate(file_ino, 5).await.unwrap();
@@ -692,7 +703,10 @@ mod new_file_in_new_directory {
             .unwrap();
 
         // Write and read
-        file_manager.write(file_ino, 0, b"deep content").await.unwrap();
+        file_manager
+            .write(file_ino, 0, b"deep content")
+            .await
+            .unwrap();
         let data: Vec<u8> = file_manager.read(file_ino, 0, 100).await.unwrap();
         assert_eq!(data, b"deep content");
     }

@@ -2,16 +2,19 @@
 
 use std::path::{Path, PathBuf};
 
-use rusty_attachments_common::{hash_file, normalize_for_manifest, ProgressCallback, CHUNK_SIZE_V2};
-use rusty_attachments_model::{
-    v2023_03_03, v2025_12_04, HashAlgorithm, Manifest, ManifestVersion,
+use rusty_attachments_common::{
+    hash_file, normalize_for_manifest, ProgressCallback, CHUNK_SIZE_V2,
 };
+use rusty_attachments_model::{v2023_03_03, v2025_12, HashAlgorithm, Manifest, ManifestVersion};
 use walkdir::WalkDir;
 
 use crate::error::FileSystemError;
 use crate::glob::GlobFilter;
 use crate::stat_cache::{StatCache, StatResult};
 use crate::symlink::{validate_symlink, SymlinkInfo};
+
+/// Result type for walk_directory containing files, symlinks, and directories.
+type WalkResult = (Vec<FileEntry>, Vec<SymlinkInfo>, Vec<DirEntry>);
 
 /// Options for creating a directory snapshot.
 #[derive(Debug, Clone)]
@@ -37,7 +40,7 @@ impl Default for SnapshotOptions {
         Self {
             root: PathBuf::new(),
             input_files: None,
-            version: ManifestVersion::V2025_12_04_beta,
+            version: ManifestVersion::V2025_12,
             filter: GlobFilter::default(),
             hash_algorithm: HashAlgorithm::Xxh128,
             follow_symlinks: false,
@@ -151,8 +154,7 @@ impl FileSystemScanner {
         }
 
         // 2. Hash files and build manifest
-        let manifest: Manifest =
-            self.build_manifest(files, symlinks, dirs, options, progress)?;
+        let manifest: Manifest = self.build_manifest(files, symlinks, dirs, options, progress)?;
 
         // Report complete
         if let Some(cb) = progress {
@@ -200,7 +202,7 @@ impl FileSystemScanner {
         root: &Path,
         options: &SnapshotOptions,
         progress: Option<&dyn ProgressCallback<ScanProgress>>,
-    ) -> Result<(Vec<FileEntry>, Vec<SymlinkInfo>, Vec<DirEntry>), FileSystemError> {
+    ) -> Result<WalkResult, FileSystemError> {
         let mut files: Vec<FileEntry> = Vec::new();
         let mut symlinks: Vec<SymlinkInfo> = Vec::new();
         let mut dirs: Vec<DirEntry> = Vec::new();
@@ -233,8 +235,8 @@ impl FileSystemScanner {
             }
 
             // Get relative path for filtering
-            let relative_path: String = normalize_for_manifest(path, root)
-                .map_err(|e| FileSystemError::Path(e))?;
+            let relative_path: String =
+                normalize_for_manifest(path, root).map_err(FileSystemError::Path)?;
 
             // Apply glob filter
             if !options.filter.is_empty() && !options.filter.matches(&relative_path) {
@@ -278,7 +280,7 @@ impl FileSystemScanner {
         input_files: &[PathBuf],
         root: &Path,
         options: &SnapshotOptions,
-    ) -> Result<(Vec<FileEntry>, Vec<SymlinkInfo>, Vec<DirEntry>), FileSystemError> {
+    ) -> Result<WalkResult, FileSystemError> {
         let mut files: Vec<FileEntry> = Vec::new();
         let mut symlinks: Vec<SymlinkInfo> = Vec::new();
 
@@ -300,8 +302,8 @@ impl FileSystemScanner {
                 }
             };
 
-            let relative_path: String = normalize_for_manifest(file_path, root)
-                .map_err(|e| FileSystemError::Path(e))?;
+            let relative_path: String =
+                normalize_for_manifest(file_path, root).map_err(FileSystemError::Path)?;
 
             if stat.is_symlink && !options.follow_symlinks {
                 match validate_symlink(file_path, root) {
@@ -335,10 +337,8 @@ impl FileSystemScanner {
         progress: Option<&dyn ProgressCallback<ScanProgress>>,
     ) -> Result<Manifest, FileSystemError> {
         match options.version {
-            ManifestVersion::V2023_03_03 => {
-                self.build_v2023_manifest(files, options, progress)
-            }
-            ManifestVersion::V2025_12_04_beta => {
+            ManifestVersion::V2023_03_03 => self.build_v2023_manifest(files, options, progress),
+            ManifestVersion::V2025_12 => {
                 self.build_v2025_manifest(files, symlinks, dirs, options, progress)
             }
         }
@@ -402,7 +402,7 @@ impl FileSystemScanner {
         progress: Option<&dyn ProgressCallback<ScanProgress>>,
     ) -> Result<Manifest, FileSystemError> {
         let total_files: u64 = files.len() as u64;
-        let mut file_paths: Vec<v2025_12_04::ManifestFilePath> =
+        let mut file_paths: Vec<v2025_12::ManifestFilePath> =
             Vec::with_capacity(files.len() + symlinks.len());
         let mut bytes_processed: u64 = 0;
 
@@ -432,7 +432,7 @@ impl FileSystemScanner {
             if file.size > CHUNK_SIZE_V2 {
                 let chunkhashes: Vec<String> = self.compute_chunk_hashes(&file.path, file.size)?;
                 file_paths.push(
-                    v2025_12_04::ManifestFilePath::chunked(
+                    v2025_12::ManifestFilePath::chunked(
                         file.relative_path,
                         chunkhashes,
                         file.size,
@@ -442,7 +442,7 @@ impl FileSystemScanner {
                 );
             } else {
                 file_paths.push(
-                    v2025_12_04::ManifestFilePath::file(
+                    v2025_12::ManifestFilePath::file(
                         file.relative_path,
                         hash,
                         file.size,
@@ -458,22 +458,22 @@ impl FileSystemScanner {
         // Add symlinks
         for symlink in symlinks {
             let relative_path: String = normalize_for_manifest(&symlink.path, &options.root)
-                .map_err(|e| FileSystemError::Path(e))?;
-            file_paths.push(v2025_12_04::ManifestFilePath::symlink(
+                .map_err(FileSystemError::Path)?;
+            file_paths.push(v2025_12::ManifestFilePath::symlink(
                 relative_path,
                 symlink.target,
             ));
         }
 
         // Build directory entries
-        let dir_paths: Vec<v2025_12_04::ManifestDirectoryPath> = dirs
+        let dir_paths: Vec<v2025_12::ManifestDirectoryPath> = dirs
             .into_iter()
-            .map(|d: DirEntry| v2025_12_04::ManifestDirectoryPath::new(d.relative_path))
+            .map(|d: DirEntry| v2025_12::ManifestDirectoryPath::new(d.relative_path))
             .collect();
 
-        Ok(Manifest::V2025_12_04_beta(
-            v2025_12_04::AssetManifest::snapshot(dir_paths, file_paths),
-        ))
+        Ok(Manifest::V2025_12(v2025_12::AssetManifest::snapshot(
+            dir_paths, file_paths,
+        )))
     }
 
     /// Build manifest without hashing (structure only).
@@ -500,13 +500,13 @@ impl FileSystemScanner {
                     paths,
                 )))
             }
-            ManifestVersion::V2025_12_04_beta => {
-                let mut file_paths: Vec<v2025_12_04::ManifestFilePath> =
+            ManifestVersion::V2025_12 => {
+                let mut file_paths: Vec<v2025_12::ManifestFilePath> =
                     Vec::with_capacity(files.len() + symlinks.len());
 
                 for file in files {
                     file_paths.push(
-                        v2025_12_04::ManifestFilePath::file(
+                        v2025_12::ManifestFilePath::file(
                             file.relative_path,
                             "", // Empty hash
                             file.size,
@@ -517,33 +517,28 @@ impl FileSystemScanner {
                 }
 
                 for symlink in symlinks {
-                    let relative_path: String =
-                        normalize_for_manifest(&symlink.path, root)
-                            .map_err(|e| FileSystemError::Path(e))?;
-                    file_paths.push(v2025_12_04::ManifestFilePath::symlink(
+                    let relative_path: String = normalize_for_manifest(&symlink.path, root)
+                        .map_err(FileSystemError::Path)?;
+                    file_paths.push(v2025_12::ManifestFilePath::symlink(
                         relative_path,
                         symlink.target,
                     ));
                 }
 
-                let dir_paths: Vec<v2025_12_04::ManifestDirectoryPath> = dirs
+                let dir_paths: Vec<v2025_12::ManifestDirectoryPath> = dirs
                     .into_iter()
-                    .map(|d: DirEntry| v2025_12_04::ManifestDirectoryPath::new(d.relative_path))
+                    .map(|d: DirEntry| v2025_12::ManifestDirectoryPath::new(d.relative_path))
                     .collect();
 
-                Ok(Manifest::V2025_12_04_beta(
-                    v2025_12_04::AssetManifest::snapshot(dir_paths, file_paths),
-                ))
+                Ok(Manifest::V2025_12(v2025_12::AssetManifest::snapshot(
+                    dir_paths, file_paths,
+                )))
             }
         }
     }
 
     /// Compute chunk hashes for a large file.
-    fn compute_chunk_hashes(
-        &self,
-        path: &Path,
-        size: u64,
-    ) -> Result<Vec<String>, FileSystemError> {
+    fn compute_chunk_hashes(&self, path: &Path, size: u64) -> Result<Vec<String>, FileSystemError> {
         use rusty_attachments_common::Xxh3Hasher;
         use std::io::Read;
 
@@ -553,7 +548,7 @@ impl FileSystemScanner {
                 source: e,
             })?;
 
-        let chunk_count: usize = ((size + CHUNK_SIZE_V2 - 1) / CHUNK_SIZE_V2) as usize;
+        let chunk_count: usize = size.div_ceil(CHUNK_SIZE_V2) as usize;
         let mut hashes: Vec<String> = Vec::with_capacity(chunk_count);
         let mut buffer: Vec<u8> = vec![0u8; 64 * 1024]; // 64KB read buffer
         let mut remaining: u64 = size;
@@ -565,12 +560,12 @@ impl FileSystemScanner {
 
             while chunk_remaining > 0 {
                 let to_read: usize = std::cmp::min(buffer.len() as u64, chunk_remaining) as usize;
-                let bytes_read: usize = file
-                    .read(&mut buffer[..to_read])
-                    .map_err(|e| FileSystemError::IoError {
-                        path: path.display().to_string(),
-                        source: e,
-                    })?;
+                let bytes_read: usize =
+                    file.read(&mut buffer[..to_read])
+                        .map_err(|e| FileSystemError::IoError {
+                            path: path.display().to_string(),
+                            source: e,
+                        })?;
 
                 if bytes_read == 0 {
                     break;
@@ -654,13 +649,13 @@ mod tests {
         let scanner: FileSystemScanner = FileSystemScanner::new();
         let options: SnapshotOptions = SnapshotOptions {
             root: dir.path().to_path_buf(),
-            version: ManifestVersion::V2025_12_04_beta,
+            version: ManifestVersion::V2025_12,
             ..Default::default()
         };
 
         let manifest: Manifest = scanner.snapshot(&options, None).unwrap();
 
-        assert_eq!(manifest.version(), ManifestVersion::V2025_12_04_beta);
+        assert_eq!(manifest.version(), ManifestVersion::V2025_12);
         assert_eq!(manifest.file_count(), 3);
     }
 
@@ -808,7 +803,7 @@ mod tests {
         // Verify the paths
         let paths: Vec<String> = match manifest {
             Manifest::V2023_03_03(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
-            Manifest::V2025_12_04_beta(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
+            Manifest::V2025_12(m) => m.files.iter().map(|p| p.path.clone()).collect(),
         };
         assert!(paths.contains(&"output[v1]/file1.txt".to_string()));
         assert!(paths.contains(&"output[v1]/file2.txt".to_string()));
@@ -845,7 +840,7 @@ mod tests {
 
         let paths: Vec<String> = match manifest {
             Manifest::V2023_03_03(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
-            Manifest::V2025_12_04_beta(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
+            Manifest::V2025_12(m) => m.files.iter().map(|p| p.path.clone()).collect(),
         };
         assert!(paths.contains(&"cache*temp/data1.bin".to_string()));
     }
@@ -881,7 +876,7 @@ mod tests {
 
         let paths: Vec<String> = match manifest {
             Manifest::V2023_03_03(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
-            Manifest::V2025_12_04_beta(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
+            Manifest::V2025_12(m) => m.files.iter().map(|p| p.path.clone()).collect(),
         };
         assert!(paths.contains(&"logs?debug/output.log".to_string()));
     }
@@ -917,7 +912,7 @@ mod tests {
 
         let paths: Vec<String> = match manifest {
             Manifest::V2023_03_03(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
-            Manifest::V2025_12_04_beta(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
+            Manifest::V2025_12(m) => m.files.iter().map(|p| p.path.clone()).collect(),
         };
         assert!(paths.contains(&"config{prod}/settings.json".to_string()));
     }
@@ -962,7 +957,7 @@ mod tests {
 
         let paths: Vec<String> = match manifest {
             Manifest::V2023_03_03(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
-            Manifest::V2025_12_04_beta(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
+            Manifest::V2025_12(m) => m.files.iter().map(|p| p.path.clone()).collect(),
         };
         assert!(paths.contains(&"renders[final]/image.png".to_string()));
         assert!(paths.contains(&"cache*temp/data.bin".to_string()));
@@ -1000,7 +995,7 @@ mod tests {
         assert_eq!(manifest_unescaped.file_count(), 1);
         let paths_unescaped: Vec<String> = match manifest_unescaped {
             Manifest::V2023_03_03(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
-            Manifest::V2025_12_04_beta(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
+            Manifest::V2025_12(m) => m.files.iter().map(|p| p.path.clone()).collect(),
         };
         assert!(paths_unescaped.contains(&"file1/data.txt".to_string()));
 
@@ -1020,7 +1015,7 @@ mod tests {
         assert_eq!(manifest_escaped.file_count(), 1);
         let paths_escaped: Vec<String> = match manifest_escaped {
             Manifest::V2023_03_03(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
-            Manifest::V2025_12_04_beta(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
+            Manifest::V2025_12(m) => m.files.iter().map(|p| p.path.clone()).collect(),
         };
         assert!(paths_escaped.contains(&"file[1]/data.txt".to_string()));
     }
@@ -1056,7 +1051,7 @@ mod tests {
 
         let paths: Vec<String> = match manifest {
             Manifest::V2023_03_03(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
-            Manifest::V2025_12_04_beta(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
+            Manifest::V2025_12(m) => m.files.iter().map(|p| p.path.clone()).collect(),
         };
         assert!(paths.contains(&"important!/file.txt".to_string()));
     }
@@ -1089,7 +1084,7 @@ mod tests {
 
         let paths: Vec<String> = match manifest {
             Manifest::V2023_03_03(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
-            Manifest::V2025_12_04_beta(m) => m.paths.iter().map(|p| p.path.clone()).collect(),
+            Manifest::V2025_12(m) => m.files.iter().map(|p| p.path.clone()).collect(),
         };
         assert!(paths.contains(&"test[*?{!}]/data.txt".to_string()));
     }

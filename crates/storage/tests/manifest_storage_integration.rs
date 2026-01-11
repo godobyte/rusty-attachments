@@ -12,8 +12,8 @@ use rusty_attachments_model::{
     Manifest,
 };
 use rusty_attachments_storage::{
-    download_manifest, download_manifests_parallel, download_output_manifests_by_asset_root,
-    discover_output_manifest_keys, filter_output_manifest_objects,
+    discover_output_manifest_keys, download_manifest, download_manifests_parallel,
+    download_output_manifests_by_asset_root, filter_output_manifest_objects,
     find_manifests_by_session_action_id, match_manifests_to_roots, upload_input_manifest,
     upload_step_output_manifest, upload_task_output_manifest, JobAttachmentRoot,
     ManifestDownloadOptions, ManifestLocation, ObjectInfo, ObjectMetadata,
@@ -67,15 +67,16 @@ impl StorageClient for MockStorageClient {
         key: &str,
     ) -> Result<Option<ObjectMetadata>, StorageError> {
         let objects = self.objects.lock().unwrap();
-        Ok(objects.get(bucket).and_then(|b| b.get(key)).map(|(data, metadata)| {
-            ObjectMetadata {
+        Ok(objects
+            .get(bucket)
+            .and_then(|b| b.get(key))
+            .map(|(data, metadata)| ObjectMetadata {
                 size: data.len() as u64,
                 last_modified: Some(1000),
                 content_type: Some("application/json".to_string()),
                 etag: None,
                 user_metadata: metadata.clone(),
-            }
-        }))
+            }))
     }
 
     async fn put_object(
@@ -196,7 +197,9 @@ async fn test_upload_input_manifest() {
         .unwrap();
 
     // Verify the key format
-    assert!(result.s3_key.starts_with("DeadlineCloud/Manifests/farm-123/queue-456/Inputs/"));
+    assert!(result
+        .s3_key
+        .starts_with("DeadlineCloud/Manifests/farm-123/queue-456/Inputs/"));
     assert!(result.s3_key.ends_with("_input"));
 
     // Verify the object was stored
@@ -327,8 +330,9 @@ async fn test_download_manifest_roundtrip() {
             .unwrap();
 
     // Download it back
-    let (downloaded, metadata) =
-        download_manifest(&client, "test-bucket", &upload_result.s3_key).await.unwrap();
+    let (downloaded, metadata) = download_manifest(&client, "test-bucket", &upload_result.s3_key)
+        .await
+        .unwrap();
 
     // Verify content
     assert_eq!(downloaded.file_count(), 2);
@@ -357,16 +361,9 @@ async fn test_discover_output_manifest_keys() {
         session_action_id: "sessionaction-aaa-111".to_string(),
         timestamp: 1000.0,
     };
-    upload_task_output_manifest(
-        &client,
-        &location,
-        &output_path1,
-        &manifest,
-        "/root1",
-        None,
-    )
-    .await
-    .unwrap();
+    upload_task_output_manifest(&client, &location, &output_path1, &manifest, "/root1", None)
+        .await
+        .unwrap();
 
     // Task 1, session 2 (later)
     let output_path2 = TaskOutputManifestPath {
@@ -376,16 +373,9 @@ async fn test_discover_output_manifest_keys() {
         session_action_id: "sessionaction-bbb-222".to_string(),
         timestamp: 2000.0,
     };
-    upload_task_output_manifest(
-        &client,
-        &location,
-        &output_path2,
-        &manifest,
-        "/root1",
-        None,
-    )
-    .await
-    .unwrap();
+    upload_task_output_manifest(&client, &location, &output_path2, &manifest, "/root1", None)
+        .await
+        .unwrap();
 
     // Discover with select_latest_per_task = false (get all)
     let options = OutputManifestDiscoveryOptions {
@@ -457,16 +447,10 @@ async fn test_match_manifests_to_roots() {
         session_action_id: "sessionaction-aaa-111".to_string(),
         timestamp: 1000.0,
     };
-    let result1 = upload_task_output_manifest(
-        &client,
-        &location,
-        &output_path1,
-        &manifest,
-        "/root1",
-        None,
-    )
-    .await
-    .unwrap();
+    let result1 =
+        upload_task_output_manifest(&client, &location, &output_path1, &manifest, "/root1", None)
+            .await
+            .unwrap();
 
     let output_path2 = TaskOutputManifestPath {
         job_id: "job-789".to_string(),
@@ -475,16 +459,10 @@ async fn test_match_manifests_to_roots() {
         session_action_id: "sessionaction-aaa-111".to_string(),
         timestamp: 1000.0,
     };
-    let result2 = upload_task_output_manifest(
-        &client,
-        &location,
-        &output_path2,
-        &manifest,
-        "/root2",
-        None,
-    )
-    .await
-    .unwrap();
+    let result2 =
+        upload_task_output_manifest(&client, &location, &output_path2, &manifest, "/root2", None)
+            .await
+            .unwrap();
 
     // Define job attachment roots
     let roots = vec![
@@ -651,7 +629,6 @@ async fn test_download_output_manifests_by_asset_root() {
     assert!(by_root.contains_key("/root/textures"));
 }
 
-
 // ============================================================================
 // Custom Download Options Tests
 // ============================================================================
@@ -672,9 +649,16 @@ async fn test_download_with_custom_concurrency() {
         session_action_id: "sessionaction-aaa-111".to_string(),
         timestamp: 1000.0,
     };
-    upload_task_output_manifest(&client, &location, &output_path, &manifest, "/root/assets", None)
-        .await
-        .unwrap();
+    upload_task_output_manifest(
+        &client,
+        &location,
+        &output_path,
+        &manifest,
+        "/root/assets",
+        None,
+    )
+    .await
+    .unwrap();
 
     // Download with custom concurrency options
     let discovery_options = OutputManifestDiscoveryOptions {
@@ -733,8 +717,9 @@ async fn test_download_manifests_parallel_with_options() {
 
     // Download with custom options
     let options = ManifestDownloadOptions::new().with_max_concurrency(2);
-    let downloaded =
-        download_manifests_parallel(&client, "test-bucket", &keys, &options).await.unwrap();
+    let downloaded = download_manifests_parallel(&client, "test-bucket", &keys, &options)
+        .await
+        .unwrap();
 
     assert_eq!(downloaded.len(), 3);
     for dm in &downloaded {

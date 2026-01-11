@@ -56,7 +56,7 @@ pub fn expand_input_paths(
     let mut result: ExpandedInputPaths = ExpandedInputPaths::default();
 
     for path in input_paths {
-        let abs_path: PathBuf = to_absolute(path).map_err(|e| FileSystemError::Path(e))?;
+        let abs_path: PathBuf = to_absolute(path).map_err(FileSystemError::Path)?;
 
         if !abs_path.exists() {
             if allow_missing {

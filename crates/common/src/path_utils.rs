@@ -87,12 +87,13 @@ pub fn normalize_for_manifest(path: &Path, root: &Path) -> Result<String, PathEr
     let abs_root: PathBuf = to_absolute(root)?;
     let normalized_root: PathBuf = lexical_normalize(&abs_root);
 
-    let relative: &Path = normalized
-        .strip_prefix(&normalized_root)
-        .map_err(|_| PathError::PathOutsideRoot {
-            path: normalized.display().to_string(),
-            root: normalized_root.display().to_string(),
-        })?;
+    let relative: &Path =
+        normalized
+            .strip_prefix(&normalized_root)
+            .map_err(|_| PathError::PathOutsideRoot {
+                path: normalized.display().to_string(),
+                root: normalized_root.display().to_string(),
+            })?;
 
     Ok(to_posix_path(relative))
 }

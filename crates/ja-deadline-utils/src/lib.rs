@@ -52,6 +52,4 @@ pub use bundle_submit::{
 };
 pub use conversion::{build_attachments, build_manifest_properties};
 pub use error::BundleSubmitError;
-pub use types::{
-    AssetReferences, AssetRootManifest, Attachments, ManifestProperties, PathFormat,
-};
+pub use types::{AssetReferences, AssetRootManifest, Attachments, ManifestProperties, PathFormat};

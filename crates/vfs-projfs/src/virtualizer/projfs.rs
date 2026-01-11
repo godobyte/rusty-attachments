@@ -16,12 +16,11 @@ use rusty_attachments_vfs::write::DirtyDirManager;
 use rusty_attachments_vfs::{AsyncExecutor, DirtyFileManager, FileStore, INodeManager, MemoryPool};
 use windows::core::PCWSTR;
 use windows::Win32::Storage::ProjectedFileSystem::{
-    PrjMarkDirectoryAsPlaceholder, PrjStartVirtualizing, PrjStopVirtualizing,
-    PRJ_CALLBACKS, PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT, PRJ_NOTIFICATION_MAPPING,
-    PRJ_STARTVIRTUALIZING_OPTIONS,
+    PrjMarkDirectoryAsPlaceholder, PrjStartVirtualizing, PrjStopVirtualizing, PRJ_CALLBACKS,
+    PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT, PRJ_NOTIFICATION_MAPPING,
     PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_DELETED, PRJ_NOTIFY_FILE_HANDLE_CLOSED_FILE_MODIFIED,
-    PRJ_NOTIFY_FILE_RENAMED, PRJ_NOTIFY_NEW_FILE_CREATED,
-    PRJ_NOTIFY_PRE_DELETE, PRJ_NOTIFY_PRE_RENAME,
+    PRJ_NOTIFY_FILE_RENAMED, PRJ_NOTIFY_NEW_FILE_CREATED, PRJ_NOTIFY_PRE_DELETE,
+    PRJ_NOTIFY_PRE_RENAME, PRJ_STARTVIRTUALIZING_OPTIONS,
 };
 
 use crate::callbacks::{ModifiedPathsDatabase, ProjFsStatsCollector, VfsCallbacks};
@@ -86,14 +85,15 @@ impl WritableProjFs {
         let memory_pool: Arc<MemoryPool> = Arc::new(MemoryPool::new(options.memory_pool.clone()));
         let inodes: Arc<INodeManager> = Arc::new(INodeManager::new());
 
-        let write_cache: Arc<dyn rusty_attachments_vfs::WriteCache> = if write_options.use_disk_cache
-        {
-            let cache = rusty_attachments_vfs::MaterializedCache::new(write_options.cache_dir.clone())
-                .map_err(ProjFsError::Io)?;
-            Arc::new(cache)
-        } else {
-            Arc::new(rusty_attachments_vfs::MemoryWriteCache::new())
-        };
+        let write_cache: Arc<dyn rusty_attachments_vfs::WriteCache> =
+            if write_options.use_disk_cache {
+                let cache =
+                    rusty_attachments_vfs::MaterializedCache::new(write_options.cache_dir.clone())
+                        .map_err(ProjFsError::Io)?;
+                Arc::new(cache)
+            } else {
+                Arc::new(rusty_attachments_vfs::MemoryWriteCache::new())
+            };
 
         let dirty_files: Arc<DirtyFileManager> = Arc::new(DirtyFileManager::new(
             write_cache,
@@ -124,9 +124,12 @@ impl WritableProjFs {
                 cache_dir: options.read_cache.cache_dir.clone(),
                 write_through: options.read_cache.write_through,
             };
-            let cache = ReadCache::new(cache_options).map_err(|e| ProjFsError::Io(
-                std::io::Error::other(format!("Failed to create read cache: {}", e))
-            ))?;
+            let cache = ReadCache::new(cache_options).map_err(|e| {
+                ProjFsError::Io(std::io::Error::other(format!(
+                    "Failed to create read cache: {}",
+                    e
+                )))
+            })?;
             let cache_arc = Arc::new(cache);
             // Wire read cache to callbacks
             callbacks.set_read_cache(cache_arc.clone());
@@ -191,22 +194,24 @@ impl WritableProjFs {
         println!("Building notification mappings...");
         let mut notification_mappings: Vec<PRJ_NOTIFICATION_MAPPING> =
             build_notification_mappings(&self.options.notifications);
-        println!("Notification mappings built: {} mappings", notification_mappings.len());
+        println!(
+            "Notification mappings built: {} mappings",
+            notification_mappings.len()
+        );
 
         // Step 5: Start virtualization
         println!("Calling PrjStartVirtualizing...");
-        let namespace_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT =
-            start_virtualizing(
-                &self.options.root_path,
-                &callbacks,
-                ctx_ptr as *const c_void,
-                &self.options,
-                &mut notification_mappings,
-            )?;
+        let namespace_context: PRJ_NAMESPACE_VIRTUALIZATION_CONTEXT = start_virtualizing(
+            &self.options.root_path,
+            &callbacks,
+            ctx_ptr as *const c_void,
+            &self.options,
+            &mut notification_mappings,
+        )?;
         println!("PrjStartVirtualizing succeeded");
 
         // Store context for stop()
-        *self.namespace_context.write() = Some(namespace_context);
+        *self.pathspace_context.write() = Some(namespace_context);
         *self.callback_context_ptr.write() = Some(ctx_ptr);
         *started = true;
 
@@ -234,7 +239,7 @@ impl WritableProjFs {
         self.executor.cancel_all();
 
         // Stop ProjFS virtualization
-        if let Some(ctx) = self.namespace_context.write().take() {
+        if let Some(ctx) = self.pathspace_context.write().take() {
             unsafe {
                 PrjStopVirtualizing(ctx);
             }
@@ -324,7 +329,7 @@ fn extract_directories_from_manifest(manifest: &Manifest) -> HashSet<String> {
     let file_paths: Vec<&str> = match manifest {
         Manifest::V2023_03_03(m) => m.paths.iter().map(|p| p.path.as_str()).collect(),
         // V2 uses 'name' field instead of 'path'
-        Manifest::V2025_12_04_beta(m) => m.files.iter().map(|f| f.name.as_str()).collect(),
+        Manifest::V2025_12(m) => m.files.iter().map(|f| f.path.as_str()).collect(),
     };
 
     for path in file_paths {
@@ -441,12 +446,24 @@ fn start_virtualizing(
         .to_string();
 
     let root_path_wide: Vec<u16> = string_to_wide(&root_path_str);
-    
+
     println!("start_virtualizing: root_path = {}", root_path_str);
-    println!("start_virtualizing: root_path_wide len = {}", root_path_wide.len());
-    println!("start_virtualizing: instance_context = {:p}", instance_context);
-    println!("start_virtualizing: pool_thread_count = {}", options.pool_thread_count);
-    println!("start_virtualizing: concurrent_thread_count = {}", options.concurrent_thread_count);
+    println!(
+        "start_virtualizing: root_path_wide len = {}",
+        root_path_wide.len()
+    );
+    println!(
+        "start_virtualizing: instance_context = {:p}",
+        instance_context
+    );
+    println!(
+        "start_virtualizing: pool_thread_count = {}",
+        options.pool_thread_count
+    );
+    println!(
+        "start_virtualizing: concurrent_thread_count = {}",
+        options.concurrent_thread_count
+    );
 
     // Try without notification mappings first to isolate the issue
     let start_options = PRJ_STARTVIRTUALIZING_OPTIONS {
@@ -456,7 +473,7 @@ fn start_virtualizing(
         NotificationMappings: std::ptr::null_mut(),
         NotificationMappingsCount: 0,
     };
-    
+
     println!("start_virtualizing: calling PrjStartVirtualizing...");
 
     unsafe {

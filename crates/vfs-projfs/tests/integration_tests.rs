@@ -76,8 +76,8 @@ fn test_create_virtualizer() {
     let cache_dir = TempDir::new().unwrap();
 
     let options = ProjFsOptions::new(temp_dir.path().to_path_buf());
-    let write_options = ProjFsWriteOptions::default()
-        .with_cache_dir(cache_dir.path().to_path_buf());
+    let write_options =
+        ProjFsWriteOptions::default().with_cache_dir(cache_dir.path().to_path_buf());
 
     let result = WritableProjFs::new(&manifest, storage, options, write_options);
     assert!(result.is_ok());
@@ -91,8 +91,8 @@ fn test_virtualizer_not_started() {
     let cache_dir = TempDir::new().unwrap();
 
     let options = ProjFsOptions::new(temp_dir.path().to_path_buf());
-    let write_options = ProjFsWriteOptions::default()
-        .with_cache_dir(cache_dir.path().to_path_buf());
+    let write_options =
+        ProjFsWriteOptions::default().with_cache_dir(cache_dir.path().to_path_buf());
 
     let vfs = WritableProjFs::new(&manifest, storage, options, write_options).unwrap();
     assert!(!vfs.is_started());
@@ -106,8 +106,8 @@ fn test_virtualizer_root_path() {
     let cache_dir = TempDir::new().unwrap();
 
     let options = ProjFsOptions::new(temp_dir.path().to_path_buf());
-    let write_options = ProjFsWriteOptions::default()
-        .with_cache_dir(cache_dir.path().to_path_buf());
+    let write_options =
+        ProjFsWriteOptions::default().with_cache_dir(cache_dir.path().to_path_buf());
 
     let vfs = WritableProjFs::new(&manifest, storage, options, write_options).unwrap();
     assert_eq!(vfs.root_path(), temp_dir.path());
@@ -147,8 +147,8 @@ fn test_extract_directories_from_manifest() {
     let cache_dir = TempDir::new().unwrap();
 
     let options = ProjFsOptions::new(temp_dir.path().to_path_buf());
-    let write_options = ProjFsWriteOptions::default()
-        .with_cache_dir(cache_dir.path().to_path_buf());
+    let write_options =
+        ProjFsWriteOptions::default().with_cache_dir(cache_dir.path().to_path_buf());
 
     // Just verify it creates successfully - directory extraction is internal
     let result = WritableProjFs::new(&manifest, storage, options, write_options);
@@ -175,8 +175,8 @@ fn test_deeply_nested_paths() {
     let cache_dir = TempDir::new().unwrap();
 
     let options = ProjFsOptions::new(temp_dir.path().to_path_buf());
-    let write_options = ProjFsWriteOptions::default()
-        .with_cache_dir(cache_dir.path().to_path_buf());
+    let write_options =
+        ProjFsWriteOptions::default().with_cache_dir(cache_dir.path().to_path_buf());
 
     let result = WritableProjFs::new(&manifest, storage, options, write_options);
     assert!(result.is_ok());

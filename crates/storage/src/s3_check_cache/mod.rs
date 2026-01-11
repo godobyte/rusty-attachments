@@ -239,7 +239,8 @@ mod tests {
         let cache: S3CheckCache = S3CheckCache::new(backend);
 
         cache.mark_uploaded("my-bucket", "Data/abc123.xxh128").await;
-        let last_seen: Option<String> = cache.get_last_seen("my-bucket", "Data/abc123.xxh128").await;
+        let last_seen: Option<String> =
+            cache.get_last_seen("my-bucket", "Data/abc123.xxh128").await;
         assert!(last_seen.is_some());
 
         // Should be a valid epoch timestamp
@@ -252,7 +253,11 @@ mod tests {
         let backend: InMemoryBackend = InMemoryBackend::new();
         let cache: S3CheckCache = S3CheckCache::new(backend);
 
-        let keys: Vec<&str> = vec!["Data/hash1.xxh128", "Data/hash2.xxh128", "Data/hash3.xxh128"];
+        let keys: Vec<&str> = vec![
+            "Data/hash1.xxh128",
+            "Data/hash2.xxh128",
+            "Data/hash3.xxh128",
+        ];
         cache.mark_uploaded_batch("my-bucket", &keys).await;
 
         // Check individual keys

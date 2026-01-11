@@ -19,7 +19,11 @@ pub enum StorageError {
 
     /// Size mismatch (corruption or incomplete upload).
     #[error("Size mismatch for {key}: expected {expected} bytes, got {actual}")]
-    SizeMismatch { key: String, expected: u64, actual: u64 },
+    SizeMismatch {
+        key: String,
+        expected: u64,
+        actual: u64,
+    },
 
     /// Network error.
     #[error("Network error: {message}")]

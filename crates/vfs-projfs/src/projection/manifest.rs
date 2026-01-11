@@ -55,7 +55,7 @@ impl ManifestProjection {
             Manifest::V2023_03_03(m) => {
                 Self::build_from_v1(&mut root, m)?;
             }
-            Manifest::V2025_12_04_beta(m) => {
+            Manifest::V2025_12(m) => {
                 Self::build_from_v2(&mut root, m)?;
             }
         }
@@ -117,15 +117,15 @@ impl ManifestProjection {
     /// * `manifest` - V2 manifest
     fn build_from_v2(
         root: &mut FolderData,
-        manifest: &rusty_attachments_model::v2025_12_04::AssetManifest,
+        manifest: &rusty_attachments_model::v2025_12::AssetManifest,
     ) -> Result<(), ProjFsError> {
         // Create explicit directories first
         for dir in &manifest.dirs {
-            if dir.delete {
+            if dir.deleted {
                 continue;
             }
 
-            let path: &str = &dir.name;
+            let path: &str = &dir.path;
             let components: Vec<&str> = path.split('/').filter(|s: &&str| !s.is_empty()).collect();
 
             if components.is_empty() {
@@ -141,7 +141,7 @@ impl ManifestProjection {
 
         // Add files and symlinks
         for entry in &manifest.files {
-            if entry.delete {
+            if entry.deleted {
                 continue;
             }
 
@@ -299,7 +299,7 @@ impl ManifestProjection {
 
         match entry {
             crate::projection::types::FolderEntry::File(f) => Some(ProjectedFileInfo::file(
-                f.name.clone(),
+                f.path.clone(),
                 f.size,
                 f.content_hash.primary_hash().to_string(),
                 f.mtime,
@@ -367,9 +367,7 @@ impl ManifestProjection {
     /// # Returns
     /// Normalized path.
     fn normalize_path(path: &str) -> String {
-        path.trim_matches('/')
-            .trim_matches('\\')
-            .replace('\\', "/")
+        path.trim_matches('/').trim_matches('\\').replace('\\', "/")
     }
 
     /// Navigate to a folder by path.
@@ -397,7 +395,6 @@ impl ManifestProjection {
         Some(current)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -493,9 +490,18 @@ mod tests {
         assert_eq!(ManifestProjection::normalize_path(""), "");
         assert_eq!(ManifestProjection::normalize_path("/"), "");
         assert_eq!(ManifestProjection::normalize_path("\\"), "");
-        assert_eq!(ManifestProjection::normalize_path("/path/to/file"), "path/to/file");
-        assert_eq!(ManifestProjection::normalize_path("path\\to\\file"), "path/to/file");
-        assert_eq!(ManifestProjection::normalize_path("/path/to/file/"), "path/to/file");
+        assert_eq!(
+            ManifestProjection::normalize_path("/path/to/file"),
+            "path/to/file"
+        );
+        assert_eq!(
+            ManifestProjection::normalize_path("path\\to\\file"),
+            "path/to/file"
+        );
+        assert_eq!(
+            ManifestProjection::normalize_path("/path/to/file/"),
+            "path/to/file"
+        );
     }
 
     #[test]
@@ -568,7 +574,7 @@ mod tests {
 
     #[test]
     fn test_get_content_hash_chunked_v2() {
-        use rusty_attachments_model::v2025_12_04::{AssetManifest as ManifestV2, ManifestFilePath};
+        use rusty_attachments_model::v2025_12::{AssetManifest as ManifestV2, ManifestFilePath};
 
         let chunked_file = ManifestFilePath::chunked(
             "large_file.bin",
@@ -582,7 +588,7 @@ mod tests {
         );
 
         let manifest = ManifestV2::snapshot(vec![], vec![chunked_file]);
-        let manifest = Manifest::V2025_12_04_beta(manifest);
+        let manifest = Manifest::V2025_12(manifest);
         let projection = ManifestProjection::from_manifest(&manifest).unwrap();
 
         let hash = projection.get_content_hash("large_file.bin").unwrap();

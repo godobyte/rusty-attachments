@@ -58,6 +58,6 @@ impl Manifest {
     /// Check if this is a v2025-12-04-beta manifest.
     #[wasm_bindgen(js_name = "isV2025")]
     pub fn is_v2025(&self) -> bool {
-        self.inner.version() == ManifestVersion::V2025_12_04_beta
+        self.inner.version() == ManifestVersion::V2025_12
     }
 }

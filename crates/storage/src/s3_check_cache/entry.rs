@@ -130,14 +130,16 @@ mod tests {
 
     #[test]
     fn test_s3_check_cache_entry_new() {
-        let entry: S3CheckCacheEntry = S3CheckCacheEntry::new("my-bucket", "Data/abc.xxh128", "1234567890");
+        let entry: S3CheckCacheEntry =
+            S3CheckCacheEntry::new("my-bucket", "Data/abc.xxh128", "1234567890");
         assert_eq!(entry.s3_key, "my-bucket/Data/abc.xxh128");
         assert_eq!(entry.last_seen_time, "1234567890");
     }
 
     #[test]
     fn test_s3_check_cache_entry_from_s3_key() {
-        let entry: S3CheckCacheEntry = S3CheckCacheEntry::from_s3_key("my-bucket/Data/abc.xxh128", "1234567890");
+        let entry: S3CheckCacheEntry =
+            S3CheckCacheEntry::from_s3_key("my-bucket/Data/abc.xxh128", "1234567890");
         assert_eq!(entry.s3_key, "my-bucket/Data/abc.xxh128");
         assert_eq!(entry.last_seen_time, "1234567890");
     }
@@ -147,7 +149,8 @@ mod tests {
         let entry: S3CheckCacheEntry = S3CheckCacheEntry::new("bucket", "key", "1234567890");
         assert_eq!(entry.last_seen_timestamp(), Some(1234567890));
 
-        let invalid_entry: S3CheckCacheEntry = S3CheckCacheEntry::new("bucket", "key", "not-a-number");
+        let invalid_entry: S3CheckCacheEntry =
+            S3CheckCacheEntry::new("bucket", "key", "not-a-number");
         assert_eq!(invalid_entry.last_seen_timestamp(), None);
     }
 }

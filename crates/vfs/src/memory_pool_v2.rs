@@ -53,7 +53,6 @@ pub const DEFAULT_MAX_POOL_SIZE: u64 = 8 * 1024 * 1024 * 1024;
 /// Default block size (256MB, matching V2 chunk size).
 pub const DEFAULT_BLOCK_SIZE: u64 = CHUNK_SIZE_V2;
 
-
 // ============================================================================
 // Error Types
 // ============================================================================
@@ -122,37 +121,37 @@ impl HashCache {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     /// Insert a hash mapping.
     pub fn insert(&self, hash_hex: String, folded: u64) {
         let mut cache = self.folded_to_hex.write();
         cache.insert(folded, hash_hex);
     }
-    
+
     /// Get original hash string from folded value.
     pub fn get(&self, folded: u64) -> Option<String> {
         let cache = self.folded_to_hex.read();
         cache.get(&folded).cloned()
     }
-    
+
     /// Remove a hash mapping.
     pub fn remove(&self, folded: u64) -> Option<String> {
         let mut cache = self.folded_to_hex.write();
         cache.remove(&folded)
     }
-    
+
     /// Clear all cached mappings.
     pub fn clear(&self) {
         let mut cache = self.folded_to_hex.write();
         cache.clear();
     }
-    
+
     /// Get the number of cached mappings.
     pub fn len(&self) -> usize {
         let cache = self.folded_to_hex.read();
         cache.len()
     }
-    
+
     /// Check if the cache is empty.
     pub fn is_empty(&self) -> bool {
         let cache = self.folded_to_hex.read();
@@ -178,12 +177,12 @@ impl ContentId {
     pub fn from_hash_hex(hash_hex: &str) -> Self {
         ContentId::Hash(rusty_attachments_common::hash::fold_hash_to_u64(hash_hex))
     }
-    
+
     /// Create a hash-based content ID from raw bytes.
     pub fn from_bytes(data: &[u8]) -> Self {
         ContentId::Hash(rusty_attachments_common::hash::hash_bytes_folded(data))
     }
-    
+
     /// Check if this is a hash-based (read-only) content ID.
     pub fn is_hash(&self) -> bool {
         matches!(self, ContentId::Hash(_))
@@ -241,7 +240,7 @@ impl BlockKey {
             chunk_index,
         }
     }
-    
+
     /// Create a new block key from raw bytes.
     pub fn from_bytes(data: &[u8], chunk_index: u32) -> Self {
         Self {
@@ -368,8 +367,7 @@ impl PoolBlock {
 
     /// Check if this block can be evicted without flushing.
     fn can_evict_without_flush(&self) -> bool {
-        self.ref_count.load(Ordering::Acquire) == 0
-            && !self.needs_flush.load(Ordering::Acquire)
+        self.ref_count.load(Ordering::Acquire) == 0 && !self.needs_flush.load(Ordering::Acquire)
     }
 
     /// Check if this block can be evicted (possibly after flushing).
@@ -424,7 +422,6 @@ impl fmt::Debug for PoolBlock {
             .finish()
     }
 }
-
 
 // ============================================================================
 // Configuration
@@ -659,7 +656,6 @@ impl MemoryPoolStats {
     }
 }
 
-
 // ============================================================================
 // Memory Pool (Public API) - DashMap based
 // ============================================================================
@@ -740,17 +736,19 @@ impl MemoryPool {
         F: FnOnce(&mut Vec<u8>),
     {
         let key = BlockKey::from_inode(inode_id, chunk_index);
-        
+
         // Lock-free lookup via DashMap
-        let block_id: PoolBlockId = *self.key_index
+        let block_id: PoolBlockId = *self
+            .key_index
             .get(&key)
             .ok_or(MemoryPoolError::BlockNotFound(0))?;
-        
-        let block: Arc<PoolBlock> = self.blocks
+
+        let block: Arc<PoolBlock> = self
+            .blocks
             .get(&block_id)
             .ok_or(MemoryPoolError::BlockNotFound(block_id))?
             .clone();
-        
+
         // Modify data using parking_lot RwLock (no futex for uncontended case)
         let (old_size, new_size): (u64, u64) = match &block.data {
             BlockData::Mutable(data) => {
@@ -764,16 +762,16 @@ impl MemoryPool {
                 return Err(MemoryPoolError::BlockNotMutable(block_id));
             }
         };
-        
+
         // Update size tracking (cold path - only if size changed)
         if new_size != old_size {
             let mut lru: parking_lot::MutexGuard<'_, LruState> = self.lru_state.lock();
             lru.update_size(old_size, new_size);
         }
-        
+
         // Mark needs flush (atomic operation)
         block.mark_needs_flush();
-        
+
         Ok(new_size as usize)
     }
 
@@ -855,20 +853,20 @@ impl MemoryPool {
     /// Handle to the mutable block if found, None otherwise.
     pub fn get_dirty(&self, inode_id: u64, chunk_index: u32) -> Option<MutableBlockHandle> {
         let key = BlockKey::from_inode(inode_id, chunk_index);
-        
+
         // Lock-free lookup
         let block_id: PoolBlockId = *self.key_index.get(&key)?;
         let block: Arc<PoolBlock> = self.blocks.get(&block_id)?.clone();
-        
+
         block.acquire();
         self.hit_count.fetch_add(1, Ordering::Relaxed);
-        
+
         // Touch LRU (cold path)
         {
             let mut lru: parking_lot::MutexGuard<'_, LruState> = self.lru_state.lock();
             lru.touch(block_id);
         }
-        
+
         // Extract mutable data reference
         let data_ref: Arc<RwLock<Vec<u8>>> = match &block.data {
             BlockData::Mutable(d) => d.clone(),
@@ -877,7 +875,7 @@ impl MemoryPool {
                 return None;
             }
         };
-        
+
         Some(MutableBlockHandle {
             data: data_ref,
             block,
@@ -894,7 +892,7 @@ impl MemoryPool {
     /// true if block was found and marked, false if not found.
     pub fn mark_flushed(&self, inode_id: u64, chunk_index: u32) -> bool {
         let key = BlockKey::from_inode(inode_id, chunk_index);
-        
+
         if let Some(block_id) = self.key_index.get(&key) {
             if let Some(block) = self.blocks.get(&*block_id) {
                 block.mark_flushed();
@@ -914,7 +912,7 @@ impl MemoryPool {
     /// true if block was found and marked, false if not found.
     pub fn mark_needs_flush(&self, inode_id: u64, chunk_index: u32) -> bool {
         let key = BlockKey::from_inode(inode_id, chunk_index);
-        
+
         if let Some(block_id) = self.key_index.get(&key) {
             if let Some(block) = self.blocks.get(&*block_id) {
                 block.mark_needs_flush();
@@ -966,7 +964,7 @@ impl MemoryPool {
     ) -> Result<MutableBlockHandle, MemoryPoolError> {
         let key = BlockKey::from_inode(inode_id, chunk_index);
         let data_size: u64 = data.len() as u64;
-        
+
         // Remove existing block if present
         if let Some((_, old_block_id)) = self.key_index.remove(&key) {
             if let Some((_, old_block)) = self.blocks.remove(&old_block_id) {
@@ -974,30 +972,30 @@ impl MemoryPool {
                 lru.remove(old_block_id, old_block.size());
             }
         }
-        
+
         // Evict if necessary
         self.evict_for_space(data_size)?;
-        
+
         // Allocate block ID and update LRU
         let block_id: PoolBlockId = {
             let mut lru: parking_lot::MutexGuard<'_, LruState> = self.lru_state.lock();
             lru.allocate_block(data_size)
         };
-        
+
         // Create and insert block
         let block = Arc::new(PoolBlock::new_mutable(key.clone(), data, capacity));
         block.acquire();
-        
+
         self.blocks.insert(block_id, block.clone());
         self.key_index.insert(key, block_id);
         self.allocation_count.fetch_add(1, Ordering::Relaxed);
-        
+
         // Extract mutable data reference
         let data_ref: Arc<RwLock<Vec<u8>>> = match &block.data {
             BlockData::Mutable(d) => d.clone(),
             BlockData::Immutable(_) => unreachable!("new_mutable always creates Mutable blocks"),
         };
-        
+
         Ok(MutableBlockHandle {
             data: data_ref,
             block,
@@ -1014,7 +1012,6 @@ impl MemoryPool {
         self.insert_dirty(inode_id, chunk_index, data)
     }
 
-
     // ========================================================================
     // Eviction Methods (Cold Path)
     // ========================================================================
@@ -1026,11 +1023,11 @@ impl MemoryPool {
                 let lru: parking_lot::MutexGuard<'_, LruState> = self.lru_state.lock();
                 lru.needs_eviction(needed_size)
             };
-            
+
             if !should_evict {
                 break;
             }
-            
+
             let evicted: bool = self.evict_one_clean()?;
             if !evicted {
                 break;
@@ -1054,7 +1051,7 @@ impl MemoryPool {
                 })
             })
         };
-        
+
         match evict_id {
             Some(id) => {
                 self.remove_block(id);
@@ -1064,7 +1061,9 @@ impl MemoryPool {
                 if self.blocks.is_empty() {
                     Ok(false)
                 } else {
-                    let in_use: usize = self.blocks.iter()
+                    let in_use: usize = self
+                        .blocks
+                        .iter()
                         .filter(|entry| !entry.value().can_evict())
                         .count();
                     Err(MemoryPoolError::PoolExhausted {
@@ -1093,7 +1092,8 @@ impl MemoryPool {
     /// # Returns
     /// Number of blocks removed.
     pub fn remove_inode_blocks(&self, inode_id: u64) -> usize {
-        let to_remove: Vec<PoolBlockId> = self.key_index
+        let to_remove: Vec<PoolBlockId> = self
+            .key_index
             .iter()
             .filter_map(|entry| {
                 if entry.key().id.as_inode() == Some(inode_id) {
@@ -1103,7 +1103,7 @@ impl MemoryPool {
                 }
             })
             .collect();
-        
+
         let count: usize = to_remove.len();
         for block_id in to_remove {
             self.remove_block(block_id);
@@ -1120,7 +1120,8 @@ impl MemoryPool {
     /// Number of blocks invalidated.
     pub fn invalidate_hash(&self, hash_hex: &str) -> usize {
         let folded: u64 = rusty_attachments_common::hash::fold_hash_to_u64(hash_hex);
-        let to_remove: Vec<PoolBlockId> = self.key_index
+        let to_remove: Vec<PoolBlockId> = self
+            .key_index
             .iter()
             .filter_map(|entry| {
                 if entry.key().id.as_hash_folded() == Some(folded) {
@@ -1135,7 +1136,7 @@ impl MemoryPool {
                 None
             })
             .collect();
-        
+
         let count: usize = to_remove.len();
         for block_id in to_remove {
             self.remove_block(block_id);
@@ -1170,19 +1171,21 @@ impl MemoryPool {
                 let block: Arc<PoolBlock> = block.clone();
                 block.acquire();
                 self.hit_count.fetch_add(1, Ordering::Relaxed);
-                
+
                 // Touch LRU
                 {
                     let mut lru: parking_lot::MutexGuard<'_, LruState> = self.lru_state.lock();
                     lru.touch(*block_id);
                 }
-                
-                let data: Arc<Vec<u8>> = block.data.as_immutable()
+
+                let data: Arc<Vec<u8>> = block
+                    .data
+                    .as_immutable()
                     .expect("Read-only block should be immutable");
                 return Ok(BlockHandle { data, block });
             }
         }
-        
+
         // Check for pending fetch
         if let Some(pending) = self.pending_fetches.get(key) {
             let shared: SharedFetch = pending.clone();
@@ -1190,7 +1193,7 @@ impl MemoryPool {
             let result: FetchResult = shared.await;
             return self.handle_fetch_result(key, result);
         }
-        
+
         // Start new fetch
         self.start_fetch(key, fetch).await
     }
@@ -1206,13 +1209,14 @@ impl MemoryPool {
         Fut: std::future::Future<Output = Result<Vec<u8>, MemoryPoolError>> + Send + 'static,
     {
         let (tx, rx) = oneshot::channel::<FetchResult>();
-        
+
         let shared_future: SharedFetch = async move {
-            rx.await.unwrap_or_else(|_| Err("Fetch cancelled".to_string()))
+            rx.await
+                .unwrap_or_else(|_| Err("Fetch cancelled".to_string()))
         }
         .boxed()
         .shared();
-        
+
         // Double-check and register pending fetch
         {
             // Check cache again
@@ -1221,12 +1225,14 @@ impl MemoryPool {
                     let block: Arc<PoolBlock> = block.clone();
                     block.acquire();
                     self.hit_count.fetch_add(1, Ordering::Relaxed);
-                    let data: Arc<Vec<u8>> = block.data.as_immutable()
+                    let data: Arc<Vec<u8>> = block
+                        .data
+                        .as_immutable()
                         .expect("Read-only block should be immutable");
                     return Ok(BlockHandle { data, block });
                 }
             }
-            
+
             // Check for existing pending fetch
             if let Some(existing) = self.pending_fetches.get(key) {
                 let shared: SharedFetch = existing.clone();
@@ -1234,22 +1240,23 @@ impl MemoryPool {
                 let result: FetchResult = shared.await;
                 return self.handle_fetch_result(key, result);
             }
-            
+
             // Register our fetch
-            self.pending_fetches.insert(key.clone(), shared_future.clone());
+            self.pending_fetches
+                .insert(key.clone(), shared_future.clone());
         }
-        
+
         // Perform fetch outside any lock
         let fetch_result: Result<Vec<u8>, MemoryPoolError> = fetch().await;
-        
+
         let result: FetchResult = match fetch_result {
             Ok(data) => Ok(Arc::new(data)),
             Err(e) => Err(e.to_string()),
         };
-        
+
         // Send result to waiters
         let _ = tx.send(result.clone());
-        
+
         // Complete fetch
         self.complete_fetch(key, result)
     }
@@ -1262,7 +1269,7 @@ impl MemoryPool {
     ) -> Result<BlockHandle, MemoryPoolError> {
         // Remove pending fetch
         self.pending_fetches.remove(key);
-        
+
         match result {
             Ok(data) => {
                 // Check if block was inserted by another path
@@ -1271,29 +1278,34 @@ impl MemoryPool {
                         let block: Arc<PoolBlock> = block.clone();
                         block.acquire();
                         self.hit_count.fetch_add(1, Ordering::Relaxed);
-                        let data_ref: Arc<Vec<u8>> = block.data.as_immutable()
+                        let data_ref: Arc<Vec<u8>> = block
+                            .data
+                            .as_immutable()
                             .expect("Read-only block should be immutable");
-                        return Ok(BlockHandle { data: data_ref, block });
+                        return Ok(BlockHandle {
+                            data: data_ref,
+                            block,
+                        });
                     }
                 }
-                
+
                 // Evict if necessary
                 let data_size: u64 = data.len() as u64;
                 self.evict_for_space(data_size)?;
-                
+
                 // Allocate and insert
                 let block_id: PoolBlockId = {
                     let mut lru: parking_lot::MutexGuard<'_, LruState> = self.lru_state.lock();
                     lru.allocate_block(data_size)
                 };
-                
+
                 let block = Arc::new(PoolBlock::new(key.clone(), data.clone(), false));
                 block.acquire();
-                
+
                 self.blocks.insert(block_id, block.clone());
                 self.key_index.insert(key.clone(), block_id);
                 self.allocation_count.fetch_add(1, Ordering::Relaxed);
-                
+
                 Ok(BlockHandle { data, block })
             }
             Err(msg) => Err(MemoryPoolError::RetrievalFailed(msg)),
@@ -1314,12 +1326,17 @@ impl MemoryPool {
                         let block: Arc<PoolBlock> = block.clone();
                         block.acquire();
                         self.hit_count.fetch_add(1, Ordering::Relaxed);
-                        let data_ref: Arc<Vec<u8>> = block.data.as_immutable()
+                        let data_ref: Arc<Vec<u8>> = block
+                            .data
+                            .as_immutable()
                             .expect("Read-only block should be immutable");
-                        return Ok(BlockHandle { data: data_ref, block });
+                        return Ok(BlockHandle {
+                            data: data_ref,
+                            block,
+                        });
                     }
                 }
-                
+
                 // Block was evicted - create handle from shared data
                 let block = Arc::new(PoolBlock::new(key.clone(), data.clone(), false));
                 block.acquire();
@@ -1333,20 +1350,19 @@ impl MemoryPool {
     pub fn try_get(&self, key: &BlockKey) -> Option<BlockHandle> {
         let block_id: PoolBlockId = *self.key_index.get(key)?;
         let block: Arc<PoolBlock> = self.blocks.get(&block_id)?.clone();
-        
+
         block.acquire();
         self.hit_count.fetch_add(1, Ordering::Relaxed);
-        
+
         // Touch LRU
         {
             let mut lru: parking_lot::MutexGuard<'_, LruState> = self.lru_state.lock();
             lru.touch(block_id);
         }
-        
+
         let data: Arc<Vec<u8>> = block.data.as_immutable()?;
         Some(BlockHandle { data, block })
     }
-
 
     // ========================================================================
     // Stats and Utility Methods
@@ -1355,13 +1371,17 @@ impl MemoryPool {
     /// Get current pool statistics.
     pub fn stats(&self) -> MemoryPoolStats {
         let lru: parking_lot::MutexGuard<'_, LruState> = self.lru_state.lock();
-        let in_use_blocks: usize = self.blocks.iter()
+        let in_use_blocks: usize = self
+            .blocks
+            .iter()
             .filter(|entry| !entry.value().can_evict())
             .count();
-        let dirty_blocks: usize = self.blocks.iter()
+        let dirty_blocks: usize = self
+            .blocks
+            .iter()
             .filter(|entry| entry.value().needs_flush())
             .count();
-        
+
         MemoryPoolStats {
             total_blocks: self.blocks.len(),
             in_use_blocks,
@@ -1396,31 +1416,33 @@ impl MemoryPool {
 
     /// Clear all blocks from the pool.
     pub fn clear(&self) -> Result<(), MemoryPoolError> {
-        let in_use: usize = self.blocks.iter()
+        let in_use: usize = self
+            .blocks
+            .iter()
             .filter(|entry| !entry.value().can_evict())
             .count();
-        
+
         if in_use > 0 {
             return Err(MemoryPoolError::PoolExhausted {
                 current_blocks: self.blocks.len(),
                 in_use_blocks: in_use,
             });
         }
-        
+
         self.blocks.clear();
         self.key_index.clear();
-        
+
         let mut lru: parking_lot::MutexGuard<'_, LruState> = self.lru_state.lock();
         lru.lru_order.clear();
         lru.current_size = 0;
-        
+
         Ok(())
     }
 
     /// Shrink a dirty block's allocation after flush to save memory.
     pub fn shrink_dirty_block(&self, inode_id: u64, chunk_index: u32) -> bool {
         let key = BlockKey::from_inode(inode_id, chunk_index);
-        
+
         if let Some(block_id) = self.key_index.get(&key) {
             if let Some(block) = self.blocks.get(&*block_id) {
                 if let BlockData::Mutable(data) = &block.data {
@@ -1511,9 +1533,9 @@ mod tests {
     fn test_insert_and_has_dirty() {
         let pool = MemoryPool::new(small_config());
         let data: Vec<u8> = vec![1, 2, 3, 4];
-        
+
         pool.insert_dirty(42, 0, data).unwrap();
-        
+
         assert!(pool.has_dirty(42, 0));
         assert!(!pool.has_dirty(42, 1));
         assert!(!pool.has_dirty(43, 0));
@@ -1523,16 +1545,18 @@ mod tests {
     fn test_modify_dirty_in_place() {
         let pool = MemoryPool::new(small_config());
         let data: Vec<u8> = vec![1, 2, 3, 4];
-        
+
         pool.insert_dirty(42, 0, data).unwrap();
-        
-        let new_size: usize = pool.modify_dirty_in_place(42, 0, |d| {
-            d.push(5);
-            d.push(6);
-        }).unwrap();
-        
+
+        let new_size: usize = pool
+            .modify_dirty_in_place(42, 0, |d| {
+                d.push(5);
+                d.push(6);
+            })
+            .unwrap();
+
         assert_eq!(new_size, 6);
-        
+
         // Verify data was modified
         let handle = pool.get_dirty(42, 0).unwrap();
         assert_eq!(handle.len(), 6);
@@ -1542,9 +1566,9 @@ mod tests {
     fn test_mark_flushed() {
         let pool = MemoryPool::new(small_config());
         let data: Vec<u8> = vec![1, 2, 3, 4];
-        
+
         pool.insert_dirty(42, 0, data).unwrap();
-        
+
         assert!(pool.mark_flushed(42, 0));
         assert!(!pool.mark_flushed(42, 1)); // Non-existent
     }
@@ -1552,13 +1576,13 @@ mod tests {
     #[test]
     fn test_remove_inode_blocks() {
         let pool = MemoryPool::new(small_config());
-        
+
         pool.insert_dirty(42, 0, vec![1, 2]).unwrap();
         pool.insert_dirty(42, 1, vec![3, 4]).unwrap();
         pool.insert_dirty(43, 0, vec![5, 6]).unwrap();
-        
+
         let removed: usize = pool.remove_inode_blocks(42);
-        
+
         assert_eq!(removed, 2);
         assert!(!pool.has_dirty(42, 0));
         assert!(!pool.has_dirty(42, 1));
@@ -1568,26 +1592,28 @@ mod tests {
     #[test]
     fn test_concurrent_has_dirty() {
         use std::thread;
-        
+
         let pool = Arc::new(MemoryPool::new(small_config()));
-        
+
         // Insert some blocks
         for i in 0..10 {
             pool.insert_dirty(i, 0, vec![i as u8]).unwrap();
         }
-        
+
         // Concurrent reads
-        let handles: Vec<_> = (0..4).map(|_| {
-            let pool: Arc<MemoryPool> = pool.clone();
-            thread::spawn(move || {
-                for _ in 0..1000 {
-                    for i in 0..10 {
-                        assert!(pool.has_dirty(i, 0));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let pool: Arc<MemoryPool> = pool.clone();
+                thread::spawn(move || {
+                    for _ in 0..1000 {
+                        for i in 0..10 {
+                            assert!(pool.has_dirty(i, 0));
+                        }
                     }
-                }
+                })
             })
-        }).collect();
-        
+            .collect();
+
         for h in handles {
             h.join().unwrap();
         }

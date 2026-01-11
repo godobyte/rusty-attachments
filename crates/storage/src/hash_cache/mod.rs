@@ -203,7 +203,9 @@ mod tests {
         async fn get(&self, key: &HashCacheKey) -> Option<HashCacheEntry> {
             let data = self.data.lock().unwrap();
             let entry: Option<&HashCacheEntry> = data.get(key);
-            entry.cloned().filter(|e| e.expires_at > current_epoch_seconds())
+            entry
+                .cloned()
+                .filter(|e| e.expires_at > current_epoch_seconds())
         }
 
         async fn put(&self, key: &HashCacheKey, entry: &HashCacheEntry) {

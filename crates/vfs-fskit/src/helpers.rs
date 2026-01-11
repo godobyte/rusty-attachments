@@ -1,6 +1,6 @@
 //! Helper functions for FSKit operations.
 
-use fskit_rs::{Item, ItemAttributes, ItemType, directory_entries};
+use fskit_rs::{directory_entries, Item, ItemAttributes, ItemType};
 
 /// Create a directory entry for enumeration.
 ///

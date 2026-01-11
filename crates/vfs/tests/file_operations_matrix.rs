@@ -20,10 +20,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rusty_attachments_model::HashAlgorithm;
 use rusty_attachments_vfs::inode::{FileContent, INodeManager};
-use rusty_attachments_vfs::write::{
-    DirtyFileManager, DirtyState, MemoryWriteCache,
-};
 use rusty_attachments_vfs::memory_pool_v2::{MemoryPool, MemoryPoolConfig};
+use rusty_attachments_vfs::write::{DirtyFileManager, DirtyState, MemoryWriteCache};
 use rusty_attachments_vfs::{FileStore, VfsError};
 
 /// Generate a valid 32-character hex hash for testing.
@@ -115,7 +113,9 @@ mod create {
         let (manager, _inodes, _store) = create_test_env();
 
         // Create a new file
-        manager.create_file(100, "new_file.txt".to_string(), 1).unwrap();
+        manager
+            .create_file(100, "new_file.txt".to_string(), 1)
+            .unwrap();
 
         // Verify state
         assert!(manager.is_dirty(100));
@@ -127,9 +127,15 @@ mod create {
     async fn test_create_multiple_files() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "file1.txt".to_string(), 1).unwrap();
-        manager.create_file(101, "file2.txt".to_string(), 1).unwrap();
-        manager.create_file(102, "dir/file3.txt".to_string(), 1).unwrap();
+        manager
+            .create_file(100, "file1.txt".to_string(), 1)
+            .unwrap();
+        manager
+            .create_file(101, "file2.txt".to_string(), 1)
+            .unwrap();
+        manager
+            .create_file(102, "dir/file3.txt".to_string(), 1)
+            .unwrap();
 
         assert!(manager.is_dirty(100));
         assert!(manager.is_dirty(101));
@@ -184,7 +190,10 @@ mod read_clean {
             "large.bin",
             2048,
             0,
-            FileContent::Chunked(vec!["00000000000000000000000000000c10".to_string(), "00000000000000000000000000000c20".to_string()]),
+            FileContent::Chunked(vec![
+                "00000000000000000000000000000c10".to_string(),
+                "00000000000000000000000000000c20".to_string(),
+            ]),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -617,9 +626,18 @@ mod dirty_entries {
         let entries = manager.get_dirty_entries();
         assert_eq!(entries.len(), 3);
 
-        let new_count: usize = entries.iter().filter(|e| e.state == DirtyState::New).count();
-        let mod_count: usize = entries.iter().filter(|e| e.state == DirtyState::Modified).count();
-        let del_count: usize = entries.iter().filter(|e| e.state == DirtyState::Deleted).count();
+        let new_count: usize = entries
+            .iter()
+            .filter(|e| e.state == DirtyState::New)
+            .count();
+        let mod_count: usize = entries
+            .iter()
+            .filter(|e| e.state == DirtyState::Modified)
+            .count();
+        let del_count: usize = entries
+            .iter()
+            .filter(|e| e.state == DirtyState::Deleted)
+            .count();
 
         assert_eq!(new_count, 1);
         assert_eq!(mod_count, 1);
@@ -630,8 +648,12 @@ mod dirty_entries {
     async fn test_clear_dirty_entries() {
         let (manager, _inodes, _store) = create_test_env();
 
-        manager.create_file(100, "file1.txt".to_string(), 1).unwrap();
-        manager.create_file(101, "file2.txt".to_string(), 1).unwrap();
+        manager
+            .create_file(100, "file1.txt".to_string(), 1)
+            .unwrap();
+        manager
+            .create_file(101, "file2.txt".to_string(), 1)
+            .unwrap();
 
         assert_eq!(manager.get_dirty_entries().len(), 2);
 
@@ -683,7 +705,6 @@ mod mtime_tracking {
         assert!(mtime2 > mtime1);
     }
 }
-
 
 // =============================================================================
 // CHUNKED FILE TESTS
@@ -753,12 +774,7 @@ mod chunked_files {
         // Create a single chunk file for simplicity
         let chunk0: Vec<u8> = b"chunk zero content".to_vec();
 
-        let ino: u64 = setup_chunked_file(
-            &inodes,
-            &store,
-            "multi_chunk.bin",
-            vec![chunk0.clone()],
-        );
+        let ino: u64 = setup_chunked_file(&inodes, &store, "multi_chunk.bin", vec![chunk0.clone()]);
 
         manager.cow_copy(ino).await.unwrap();
 
@@ -970,7 +986,6 @@ mod cache_integration {
     }
 }
 
-
 // =============================================================================
 // REALISTIC CHUNKED FILE TEST (256MB BOUNDARIES)
 // =============================================================================
@@ -1010,21 +1025,28 @@ mod realistic_chunked {
         /// * `data` - Actual test data (small)
         /// * `padded_size` - Size to pad to on retrieval
         fn insert_chunk(&self, hash: impl Into<String>, data: Vec<u8>, padded_size: u64) {
-            self.chunks.write().unwrap().insert(
-                hash.into(),
-                ChunkTestData { data, padded_size },
-            );
+            self.chunks
+                .write()
+                .unwrap()
+                .insert(hash.into(), ChunkTestData { data, padded_size });
         }
     }
 
     #[async_trait]
     impl FileStore for PaddedChunkStore {
-        async fn retrieve(&self, hash: &str, _algorithm: HashAlgorithm) -> Result<Vec<u8>, VfsError> {
+        async fn retrieve(
+            &self,
+            hash: &str,
+            _algorithm: HashAlgorithm,
+        ) -> Result<Vec<u8>, VfsError> {
             let guard = self.chunks.read().unwrap();
-            let chunk: &ChunkTestData = guard.get(hash).ok_or_else(|| VfsError::ContentRetrievalFailed {
-                hash: hash.to_string(),
-                source: "Hash not found in padded store".into(),
-            })?;
+            let chunk: &ChunkTestData =
+                guard
+                    .get(hash)
+                    .ok_or_else(|| VfsError::ContentRetrievalFailed {
+                        hash: hash.to_string(),
+                        source: "Hash not found in padded store".into(),
+                    })?;
 
             // Return data padded to expected size
             let mut result: Vec<u8> = chunk.data.clone();
@@ -1049,7 +1071,11 @@ mod realistic_chunked {
     }
 
     /// Create test environment with padded chunk store.
-    fn create_padded_env() -> (Arc<DirtyFileManager>, Arc<INodeManager>, Arc<PaddedChunkStore>) {
+    fn create_padded_env() -> (
+        Arc<DirtyFileManager>,
+        Arc<INodeManager>,
+        Arc<PaddedChunkStore>,
+    ) {
         let cache = Arc::new(MemoryWriteCache::new());
         let store = Arc::new(PaddedChunkStore::new());
         let inodes = Arc::new(INodeManager::new());
@@ -1089,14 +1115,25 @@ mod realistic_chunked {
         let chunk1_data: Vec<u8> = b"CHUNK1_START".to_vec();
 
         // Insert chunks with their expected padded sizes
-        store.insert_chunk("0000000000000000000000000000e010", chunk0_data.clone(), chunk_size);
-        store.insert_chunk("0000000000000000000000000000e020", chunk1_data.clone(), chunk1_size);
+        store.insert_chunk(
+            "0000000000000000000000000000e010",
+            chunk0_data.clone(),
+            chunk_size,
+        );
+        store.insert_chunk(
+            "0000000000000000000000000000e020",
+            chunk1_data.clone(),
+            chunk1_size,
+        );
 
         let ino: u64 = inodes.add_file(
             "large_260mb.bin",
             total_size,
             0,
-            FileContent::Chunked(vec!["0000000000000000000000000000e010".to_string(), "0000000000000000000000000000e020".to_string()]),
+            FileContent::Chunked(vec![
+                "0000000000000000000000000000e010".to_string(),
+                "0000000000000000000000000000e020".to_string(),
+            ]),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -1115,7 +1152,10 @@ mod realistic_chunked {
 
         // Test 2: Read from middle of chunk 0 (should be zeros from padding)
         let middle: Vec<u8> = manager.read(ino, 1000, 10).await.unwrap();
-        assert!(middle.iter().all(|&b| b == 0), "Middle of chunk 0 should be zeros");
+        assert!(
+            middle.iter().all(|&b| b == 0),
+            "Middle of chunk 0 should be zeros"
+        );
 
         // Test 3: Read from start of chunk 1 (at offset 256MB)
         let chunk1_read: Vec<u8> = manager.read(ino, chunk_size, 12).await.unwrap();
@@ -1129,7 +1169,10 @@ mod realistic_chunked {
         // Test 5: Write spanning chunk boundary (last 10 bytes of chunk 0 + first 10 bytes of chunk 1)
         let boundary_offset: u64 = chunk_size - 10;
         let boundary_data: &[u8] = b"BOUNDARY_SPANNING_DATA"; // 22 bytes
-        manager.write(ino, boundary_offset, boundary_data).await.unwrap();
+        manager
+            .write(ino, boundary_offset, boundary_data)
+            .await
+            .unwrap();
 
         // Verify the boundary write
         let boundary_read: Vec<u8> = manager.read(ino, boundary_offset, 22).await.unwrap();
@@ -1161,14 +1204,25 @@ mod realistic_chunked {
         let chunk1_size: u64 = 4 * 1024 * 1024;
         let total_size: u64 = chunk_size + chunk1_size;
 
-        store.insert_chunk("0000000000000000000000000000f010", b"CHUNK0".to_vec(), chunk_size);
-        store.insert_chunk("0000000000000000000000000000f020", b"CHUNK1".to_vec(), chunk1_size);
+        store.insert_chunk(
+            "0000000000000000000000000000f010",
+            b"CHUNK0".to_vec(),
+            chunk_size,
+        );
+        store.insert_chunk(
+            "0000000000000000000000000000f020",
+            b"CHUNK1".to_vec(),
+            chunk1_size,
+        );
 
         let ino: u64 = inodes.add_file(
             "truncate_test.bin",
             total_size,
             0,
-            FileContent::Chunked(vec!["0000000000000000000000000000f010".to_string(), "0000000000000000000000000000f020".to_string()]),
+            FileContent::Chunked(vec![
+                "0000000000000000000000000000f010".to_string(),
+                "0000000000000000000000000000f020".to_string(),
+            ]),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -1199,14 +1253,25 @@ mod realistic_chunked {
         let chunk1_size: u64 = 4 * 1024 * 1024;
         let total_size: u64 = chunk_size + chunk1_size;
 
-        store.insert_chunk("00000000000000000000000000010010", b"CHUNK0".to_vec(), chunk_size);
-        store.insert_chunk("00000000000000000000000000010020", b"CHUNK1".to_vec(), chunk1_size);
+        store.insert_chunk(
+            "00000000000000000000000000010010",
+            b"CHUNK0".to_vec(),
+            chunk_size,
+        );
+        store.insert_chunk(
+            "00000000000000000000000000010020",
+            b"CHUNK1".to_vec(),
+            chunk1_size,
+        );
 
         let ino: u64 = inodes.add_file(
             "extend_test.bin",
             total_size,
             0,
-            FileContent::Chunked(vec!["00000000000000000000000000010010".to_string(), "00000000000000000000000000010020".to_string()]),
+            FileContent::Chunked(vec![
+                "00000000000000000000000000010010".to_string(),
+                "00000000000000000000000000010020".to_string(),
+            ]),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -1237,14 +1302,25 @@ mod realistic_chunked {
         let chunk1_size: u64 = 4 * 1024 * 1024;
         let total_size: u64 = chunk_size + chunk1_size;
 
-        store.insert_chunk("00000000000000000000000000011010", b"CHUNK0".to_vec(), chunk_size);
-        store.insert_chunk("00000000000000000000000000011020", b"CHUNK1".to_vec(), chunk1_size);
+        store.insert_chunk(
+            "00000000000000000000000000011010",
+            b"CHUNK0".to_vec(),
+            chunk_size,
+        );
+        store.insert_chunk(
+            "00000000000000000000000000011020",
+            b"CHUNK1".to_vec(),
+            chunk1_size,
+        );
 
         let ino: u64 = inodes.add_file(
             "delete_test.bin",
             total_size,
             0,
-            FileContent::Chunked(vec!["00000000000000000000000000011010".to_string(), "00000000000000000000000000011020".to_string()]),
+            FileContent::Chunked(vec![
+                "00000000000000000000000000011010".to_string(),
+                "00000000000000000000000000011020".to_string(),
+            ]),
             HashAlgorithm::Xxh128,
             false,
         );
@@ -1271,21 +1347,35 @@ mod realistic_chunked {
         let chunk1_size: u64 = 4 * 1024 * 1024;
         let total_size: u64 = chunk_size + chunk1_size;
 
-        store.insert_chunk("00000000000000000000000000012010", vec![0xAA; 100], chunk_size);
-        store.insert_chunk("00000000000000000000000000012020", vec![0xBB; 100], chunk1_size);
+        store.insert_chunk(
+            "00000000000000000000000000012010",
+            vec![0xAA; 100],
+            chunk_size,
+        );
+        store.insert_chunk(
+            "00000000000000000000000000012020",
+            vec![0xBB; 100],
+            chunk1_size,
+        );
 
         let ino: u64 = inodes.add_file(
             "multi_boundary.bin",
             total_size,
             0,
-            FileContent::Chunked(vec!["00000000000000000000000000012010".to_string(), "00000000000000000000000000012020".to_string()]),
+            FileContent::Chunked(vec![
+                "00000000000000000000000000012010".to_string(),
+                "00000000000000000000000000012020".to_string(),
+            ]),
             HashAlgorithm::Xxh128,
             false,
         );
 
         // First boundary write
         let offset1: u64 = chunk_size - 20;
-        manager.write(ino, offset1, b"FIRST_BOUNDARY_WRITE_").await.unwrap();
+        manager
+            .write(ino, offset1, b"FIRST_BOUNDARY_WRITE_")
+            .await
+            .unwrap();
 
         // Second boundary write (overlapping)
         let offset2: u64 = chunk_size - 10;
@@ -1304,7 +1394,6 @@ mod realistic_chunked {
         assert_eq!(&full_read[10..22], b"SECOND_WRITE");
     }
 }
-
 
 // =============================================================================
 // DIRECTORY DELETION WITH FILE CLEANUP TESTS
@@ -1325,16 +1414,8 @@ mod directory_file_cleanup {
         let store = Arc::new(TestFileStore::new());
         let inodes = Arc::new(INodeManager::new());
         let pool = Arc::new(MemoryPool::new(MemoryPoolConfig::default()));
-        let file_manager = Arc::new(DirtyFileManager::new(
-            cache,
-            store,
-            inodes.clone(),
-            pool,
-        ));
-        let dir_manager = Arc::new(DirtyDirManager::new(
-            inodes.clone(),
-            HashSet::new(),
-        ));
+        let file_manager = Arc::new(DirtyFileManager::new(cache, store, inodes.clone(), pool));
+        let dir_manager = Arc::new(DirtyDirManager::new(inodes.clone(), HashSet::new()));
         (file_manager, dir_manager, inodes)
     }
 

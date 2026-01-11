@@ -42,7 +42,11 @@ impl fmt::Display for ProjFsError {
         match self {
             ProjFsError::Vfs(e) => write!(f, "VFS error: {}", e),
             ProjFsError::ProjFsApi { operation, hresult } => {
-                write!(f, "ProjFS API error in {}: HRESULT 0x{:08X}", operation, hresult)
+                write!(
+                    f,
+                    "ProjFS API error in {}: HRESULT 0x{:08X}",
+                    operation, hresult
+                )
             }
             ProjFsError::InvalidRootPath(path) => {
                 write!(f, "Invalid virtualization root path: {}", path)
