@@ -239,7 +239,7 @@ fn convert_manifest_to_parsed(manifest: &Manifest, asset_root: Option<String>) -
             dir_count = m.dirs.len();
 
             for file in &m.files {
-                let entry_type: String = if file.delete {
+                let entry_type: String = if file.deleted {
                     "deleted".to_string()
                 } else if file.symlink_target.is_some() {
                     "symlink".to_string()
