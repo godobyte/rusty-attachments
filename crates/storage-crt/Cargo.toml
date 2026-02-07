@@ -5,12 +5,17 @@ edition.workspace = true
 license.workspace = true
 description = "AWS SDK S3 backend for rusty-attachments storage"
 
+[features]
+default = ["transfer-manager"]
+transfer-manager = ["dep:aws-sdk-s3-transfer-manager"]
+
 [dependencies]
 rusty-attachments-storage = { path = "../storage" }
 async-trait.workspace = true
 thiserror.workspace = true
 aws-config = { version = "1.5", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1.65"
+aws-sdk-s3-transfer-manager = { version = "0.1", optional = true }
 aws-credential-types = "1.2"
 tokio = { version = "1.0", features = ["fs", "io-util"] }
 tokio-util = { version = "0.7", features = ["io"] }

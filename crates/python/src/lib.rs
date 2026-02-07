@@ -15,7 +15,7 @@ use rusty_attachments_filesystem::{GlobFilter, ScanProgress};
 use rusty_attachments_model::{self as model, ManifestVersion};
 use rusty_attachments_profiles::{FileSystemLocation, FileSystemLocationType, StorageProfile};
 use rusty_attachments_storage::{ManifestLocation, S3Location, StorageSettings};
-use rusty_attachments_storage_crt::CrtStorageClient;
+use rusty_attachments_storage_crt::DefaultClient;
 
 // ============================================================================
 // Exceptions
@@ -649,7 +649,7 @@ fn submit_bundle_attachments_py<'py>(
             ..Default::default()
         };
 
-        let client: CrtStorageClient = CrtStorageClient::new(settings).await.map_err(|e| {
+        let client: DefaultClient = DefaultClient::new(settings).await.map_err(|e| {
             PyRuntimeError::new_err(format!("Failed to create storage client: {}", e))
         })?;
 

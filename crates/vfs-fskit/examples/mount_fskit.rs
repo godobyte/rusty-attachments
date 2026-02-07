@@ -23,7 +23,7 @@ use std::sync::Arc;
 use rusty_attachments_model::Manifest;
 #[cfg(target_os = "macos")]
 use rusty_attachments_vfs::{
-    CrtStorageClient, FileStore, S3Location, StorageClientAdapter, StorageSettings,
+    DefaultClient, FileStore, S3Location, StorageClientAdapter, StorageSettings,
     WritableVfsStats, WritableVfsStatsCollector,
 };
 #[cfg(target_os = "macos")]
@@ -370,7 +370,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Connecting to S3 bucket: {}", args.bucket);
     }
     let settings = StorageSettings::default();
-    let client = CrtStorageClient::new(settings).await?;
+    let client = DefaultClient::new(settings).await?;
     let location = S3Location::new(&args.bucket, &args.root_prefix, "Data", "Manifests");
     let store: Arc<dyn FileStore> = Arc::new(StorageClientAdapter::new(client, location));
 

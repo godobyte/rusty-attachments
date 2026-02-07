@@ -57,7 +57,7 @@ pub use content::{FileStore, StorageClientAdapter};
 pub use inode::{FileContent, INode, INodeFile, INodeId, INodeManager, INodeType, ROOT_INODE};
 
 // Re-export CRT storage client for convenience
-pub use rusty_attachments_storage_crt::{CrtError, CrtStorageClient};
+pub use rusty_attachments_storage_crt::{CrtError, CrtStorageClient, DefaultClient};
 // Re-export commonly used storage types
 pub use rusty_attachments_storage::{S3Location, StorageSettings};
 

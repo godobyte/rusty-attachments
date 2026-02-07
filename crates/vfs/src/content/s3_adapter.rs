@@ -7,11 +7,11 @@
 //!
 //! ```ignore
 //! use rusty_attachments_storage::{S3Location, StorageSettings};
-//! use rusty_attachments_storage_crt::CrtStorageClient;
+//! use rusty_attachments_storage_crt::DefaultClient;
 //! use rusty_attachments_vfs::content::StorageClientAdapter;
 //!
 //! let settings = StorageSettings::default();
-//! let client = CrtStorageClient::new(settings).await?;
+//! let client = DefaultClient::new(settings).await?;
 //! let location = S3Location::new("bucket", "root", "Data", "Manifests");
 //!
 //! let store = StorageClientAdapter::new(client, location);

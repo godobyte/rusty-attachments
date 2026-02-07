@@ -8,7 +8,7 @@ use ja_deadline_utils::{submit_bundle_attachments, AssetReferences, BundleSubmit
 use rusty_attachments_filesystem::{FileSystemScanner, GlobFilter, SnapshotOptions};
 use rusty_attachments_model::{Manifest, ManifestVersion};
 use rusty_attachments_storage::{StorageClient, StorageSettings};
-use rusty_attachments_storage_crt::CrtStorageClient;
+use rusty_attachments_storage_crt::DefaultClient;
 
 use crate::error::CommandError;
 use crate::progress::TauriProgressCallback;
@@ -116,7 +116,7 @@ pub async fn browse_s3_prefix(
         ..Default::default()
     };
 
-    let client: CrtStorageClient = CrtStorageClient::new(settings)
+    let client: DefaultClient = DefaultClient::new(settings)
         .await
         .map_err(|e| CommandError::storage_error(format!("Failed to create client: {}", e)))?;
 
@@ -190,7 +190,7 @@ pub async fn fetch_manifest(
         ..Default::default()
     };
 
-    let client: CrtStorageClient = CrtStorageClient::new(settings)
+    let client: DefaultClient = DefaultClient::new(settings)
         .await
         .map_err(|e| CommandError::storage_error(format!("Failed to create client: {}", e)))?;
 
@@ -364,7 +364,7 @@ pub async fn submit_bundle(
         ..Default::default()
     };
 
-    let client: CrtStorageClient = CrtStorageClient::new(settings)
+    let client: DefaultClient = DefaultClient::new(settings)
         .await
         .map_err(|e| CommandError::storage_error(format!("Failed to create storage client: {}", e)))?;
 

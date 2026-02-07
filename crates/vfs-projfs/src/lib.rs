@@ -70,7 +70,7 @@ pub use rusty_attachments_vfs::{
 
 // Re-export storage types
 pub use rusty_attachments_storage::{S3Location, StorageSettings};
-pub use rusty_attachments_storage_crt::CrtStorageClient;
+pub use rusty_attachments_storage_crt::{CrtStorageClient, DefaultClient};
 
 /// Check if ProjFS is available on this system.
 ///

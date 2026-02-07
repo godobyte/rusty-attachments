@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use rusty_attachments_model::Manifest;
 use rusty_attachments_storage::{S3Location, StorageSettings};
-use rusty_attachments_storage_crt::CrtStorageClient;
+use rusty_attachments_storage_crt::DefaultClient;
 use rusty_attachments_vfs::StorageClientAdapter;
 use rusty_attachments_vfs_projfs::{ProjFsOptions, ProjFsWriteOptions, WritableProjFs};
 
@@ -163,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Connecting to S3: {}/{}",
         s3_location.bucket, args.root_prefix
     );
-    let crt_client: CrtStorageClient = CrtStorageClient::new(storage_settings).await?;
+    let crt_client: DefaultClient = DefaultClient::new(storage_settings).await?;
     let storage = Arc::new(StorageClientAdapter::new(crt_client, s3_location));
 
     // Create ProjFS options

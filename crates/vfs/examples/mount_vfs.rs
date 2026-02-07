@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use rusty_attachments_model::Manifest;
 use rusty_attachments_storage::{S3Location, StorageSettings};
-use rusty_attachments_storage_crt::CrtStorageClient;
+use rusty_attachments_storage_crt::DefaultClient;
 use rusty_attachments_vfs::{
     DeadlineVfs, FileStore, StorageClientAdapter, VfsError, VfsOptions, VfsStats,
     VfsStatsCollector, WritableVfs, WritableVfsStats, WritableVfsStatsCollector, WriteOptions,
@@ -493,7 +493,7 @@ fn create_file_store(
             ..Default::default()
         };
 
-        let client: CrtStorageClient = runtime.block_on(CrtStorageClient::new(settings))?;
+        let client: DefaultClient = runtime.block_on(DefaultClient::new(settings))?;
         let location = S3Location::new(
             args.bucket.clone(),
             args.root_prefix.clone(),
