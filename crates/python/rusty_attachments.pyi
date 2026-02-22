@@ -690,3 +690,256 @@ def decode_manifest(json: str) -> Manifest:
         42
     """
     ...
+
+
+# ============================================================================
+# New types for CLI integration bindings
+# ============================================================================
+
+
+class PathMappingRule:
+    """A path mapping rule for translating source paths to destination paths."""
+
+    def __init__(
+        self,
+        source_path_format: str,
+        source_path: str,
+        destination_path: str,
+    ) -> None: ...
+
+    @property
+    def source_path_format(self) -> str: ...
+    @property
+    def source_path(self) -> str: ...
+    @property
+    def destination_path(self) -> str: ...
+
+
+class DownloadSummaryStatistics:
+    """Download statistics with per-root file counts."""
+
+    @property
+    def total_files(self) -> int: ...
+    @property
+    def total_bytes(self) -> int: ...
+    @property
+    def downloaded_files(self) -> int: ...
+    @property
+    def downloaded_bytes(self) -> int: ...
+    @property
+    def skipped_files(self) -> int: ...
+    @property
+    def skipped_bytes(self) -> int: ...
+    @property
+    def file_counts_by_root_directory(self) -> dict[str, int]: ...
+
+
+class ManifestDiffResult:
+    """Result of a manifest diff operation."""
+
+    @property
+    def new_files(self) -> list[str]: ...
+    @property
+    def modified(self) -> list[str]: ...
+    @property
+    def deleted(self) -> list[str]: ...
+
+
+class ManifestSnapshotResult:
+    """Result of a manifest snapshot operation."""
+
+    @property
+    def root(self) -> str: ...
+    @property
+    def manifest_path(self) -> str: ...
+
+
+class UploadManifestInfo:
+    """Information about an uploaded manifest."""
+
+    @property
+    def output_manifest_path(self) -> str: ...
+    @property
+    def output_manifest_hash(self) -> str: ...
+    @property
+    def source_path(self) -> str: ...
+
+
+class ManifestDownloadEntry:
+    """A single downloaded manifest entry."""
+
+    @property
+    def manifest_root(self) -> str: ...
+    @property
+    def local_manifest_path(self) -> str: ...
+
+
+class OutputManifestScope:
+    """Scope for output manifest discovery."""
+
+    def __init__(
+        self,
+        farm_id: str,
+        queue_id: str,
+        job_id: str,
+        step_id: Optional[str] = None,
+    ) -> None: ...
+
+    @property
+    def farm_id(self) -> str: ...
+    @property
+    def queue_id(self) -> str: ...
+    @property
+    def job_id(self) -> str: ...
+    @property
+    def step_id(self) -> Optional[str]: ...
+
+
+class ManifestDownloadSpec:
+    """Specification for downloading a manifest from S3."""
+
+    def __init__(
+        self,
+        s3_key: str,
+        asset_root: str,
+        last_modified: float,
+    ) -> None: ...
+
+    @property
+    def s3_key(self) -> str: ...
+    @property
+    def asset_root(self) -> str: ...
+    @property
+    def last_modified(self) -> float: ...
+
+
+class OutputManifestDiscovery:
+    """Result of output manifest discovery (phase 1)."""
+
+    @property
+    def outputs_by_root(self) -> dict[str, list[str]]: ...
+    @property
+    def manifests_handle(self) -> int: ...
+
+
+# ============================================================================
+# New binding functions
+# ============================================================================
+
+
+async def manifest_snapshot_py(
+    root: str,
+    destination: str,
+    name: Optional[str] = None,
+    include: Optional[list[str]] = None,
+    exclude: Optional[list[str]] = None,
+    include_exclude_config: Optional[str] = None,
+    diff_manifest: Optional[str] = None,
+    force_rehash: bool = False,
+    hash_cache_dir: Optional[str] = None,
+    progress_callback: Optional[Callable[[dict], bool]] = None,
+) -> Optional[ManifestSnapshotResult]:
+    """Create a manifest snapshot of a directory."""
+    ...
+
+
+async def manifest_diff_py(
+    root: str,
+    manifest_path: str,
+    include: Optional[list[str]] = None,
+    exclude: Optional[list[str]] = None,
+    include_exclude_config: Optional[str] = None,
+    force_rehash: bool = False,
+    hash_cache_dir: Optional[str] = None,
+    progress_callback: Optional[Callable[[dict], bool]] = None,
+) -> ManifestDiffResult:
+    """Diff a directory against an existing manifest."""
+    ...
+
+
+async def manifest_download_py(
+    region: str,
+    s3_location: S3Location,
+    input_manifest_keys: list[tuple[str, str]],
+    output_scope: Optional[OutputManifestScope] = None,
+    download_dir: Optional[str] = None,
+    progress_callback: Optional[Callable[[dict], bool]] = None,
+) -> list[ManifestDownloadEntry]:
+    """Download and merge manifests from S3."""
+    ...
+
+
+async def manifest_upload_py(
+    region: str,
+    s3_location: S3Location,
+    manifest_bytes: bytes,
+    s3_key: str,
+    metadata: dict[str, str],
+) -> None:
+    """Upload a manifest file to S3."""
+    ...
+
+
+async def attachment_download_py(
+    region: str,
+    s3_location: S3Location,
+    manifest_paths: list[str],
+    path_mapping_rules: Optional[list[PathMappingRule]] = None,
+    conflict_resolution: Optional[str] = None,
+    progress_callback: Optional[Callable[[dict], bool]] = None,
+) -> DownloadSummaryStatistics:
+    """Download attachment files from S3 CAS using local manifest files."""
+    ...
+
+
+async def attachment_upload_py(
+    region: str,
+    s3_location: S3Location,
+    manifest_location: ManifestLocation,
+    manifest_paths: list[str],
+    root_dirs: list[str],
+    path_mapping_rules: Optional[list[PathMappingRule]] = None,
+    upload_manifest_path: Optional[str] = None,
+    s3_check_cache_dir: Optional[str] = None,
+    progress_callback: Optional[Callable[[dict], bool]] = None,
+) -> list[UploadManifestInfo]:
+    """Upload attachment files to S3 CAS using local manifest files."""
+    ...
+
+
+async def discover_output_manifests_py(
+    region: str,
+    s3_location: S3Location,
+    farm_id: str,
+    queue_id: str,
+    job_id: str,
+    step_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+    session_action_id: Optional[str] = None,
+) -> OutputManifestDiscovery:
+    """Discover and pre-fetch output manifests for a job (phase 1)."""
+    ...
+
+
+async def download_output_files_py(
+    region: str,
+    s3_location: S3Location,
+    manifests_handle: int,
+    root_overrides: dict[str, str],
+    conflict_resolution: Optional[str] = None,
+    progress_callback: Optional[Callable[[dict], bool]] = None,
+) -> DownloadSummaryStatistics:
+    """Download output files using a pre-fetched manifest handle (phase 2)."""
+    ...
+
+
+async def incremental_download_py(
+    region: str,
+    s3_location: S3Location,
+    manifest_specs: list[ManifestDownloadSpec],
+    path_mapping_rules: list[PathMappingRule],
+    conflict_resolution: Optional[str] = None,
+    progress_callback: Optional[Callable[[dict], bool]] = None,
+) -> DownloadSummaryStatistics:
+    """Download manifests and files incrementally for queue sync-output."""
+    ...
