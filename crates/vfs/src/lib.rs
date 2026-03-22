@@ -76,9 +76,10 @@ pub use write::{
 // Relaxed consistency exports
 pub use relaxed::{
     FileUploadRequest, MarkerEnvelope, MemoryRelaxedStore, PendingFileTracker, RelaxedFileKey,
-    RelaxedFileStore, RelaxedResolution, RelaxedRootConfig, RequestPriority,
+    RelaxedFileStore, RelaxedLaunchConfig, RelaxedResolution, RelaxedRootConfig, RequestPriority,
     UploadCompletionMarker, UploadFailureMarker,
 };
+pub use relaxed::config::{load_relaxed_config, sqs_queue_name, to_relaxed_options};
 
 #[cfg(feature = "fuse")]
 pub use fuse::{mount, spawn_mount, DeadlineVfs, OpenFileInfo, VfsStats, VfsStatsCollector};

@@ -33,6 +33,7 @@ use rusty_attachments_vfs::{
     DeadlineVfs, FileStore, StorageClientAdapter, VfsError, VfsOptions, VfsStats,
     VfsStatsCollector, WritableVfs, WritableVfsStats, WritableVfsStatsCollector, WriteOptions,
 };
+use rusty_attachments_vfs::relaxed::config::{load_relaxed_config, to_relaxed_options, RelaxedLaunchConfig};
 
 use async_trait::async_trait;
 use rusty_attachments_model::HashAlgorithm;
@@ -73,6 +74,8 @@ struct CliArgs {
     bucket: String,
     root_prefix: String,
     region: String,
+    /// Path to relaxed consistency config JSON (None = strong consistency only).
+    relaxed_roots_config: Option<PathBuf>,
 }
 
 impl CliArgs {
@@ -97,6 +100,7 @@ impl CliArgs {
         let mut bucket: String = "adeadlineja".to_string();
         let mut root_prefix: String = "DeadlineCloud".to_string();
         let mut region: String = "us-west-2".to_string();
+        let mut relaxed_roots_config: Option<PathBuf> = None;
 
         let mut i: usize = 1;
         while i < args.len() {
@@ -119,6 +123,10 @@ impl CliArgs {
                 "--region" => {
                     i += 1;
                     region = args.get(i)?.clone();
+                }
+                "--relaxed-roots" => {
+                    i += 1;
+                    relaxed_roots_config = Some(PathBuf::from(args.get(i)?));
                 }
                 arg if !arg.starts_with('-') => {
                     if manifest_path.is_none() {
@@ -146,6 +154,7 @@ impl CliArgs {
             bucket,
             root_prefix,
             region,
+            relaxed_roots_config,
         })
     }
 
@@ -155,6 +164,10 @@ impl CliArgs {
     /// * `program` - Program name for usage message
     fn print_usage(program: &str) {
         eprintln!("Usage: {} <manifest.json> <mountpoint> [options]", program);
+        eprintln!();
+        eprintln!("Consistency modes:");
+        eprintln!("  (default)                     Strong consistency — all files pre-uploaded to S3 CAS");
+        eprintln!("  --relaxed-roots <path>        Mixed mode — load relaxed root config for on-demand upload");
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --stats              Show live statistics dashboard (updates every 2s)");
@@ -166,9 +179,12 @@ impl CliArgs {
         eprintln!("  --region <region>    AWS region (default: us-west-2)");
         eprintln!();
         eprintln!("Examples:");
+        eprintln!("  # Strong consistency (default):");
         eprintln!("  {} /tmp/manifest.json ~/vfs --stats", program);
+        eprintln!();
+        eprintln!("  # Mixed mode with relaxed roots:");
         eprintln!(
-            "  {} /tmp/manifest.json ~/vfs --stats --writable --cache-dir /tmp/cow",
+            "  {} /tmp/manifest.json ~/vfs --relaxed-roots /tmp/relaxed.json --stats",
             program
         );
     }
@@ -533,6 +549,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let store: Arc<dyn FileStore> = create_file_store(&args, &runtime)?;
 
+    // Build VFS options — strong consistency by default, relaxed if configured
+    let vfs_options: VfsOptions = match &args.relaxed_roots_config {
+        Some(config_path) => {
+            let relaxed_config: RelaxedLaunchConfig = load_relaxed_config(config_path)
+                .map_err(|e| format!("Failed to load relaxed roots config: {}", e))?;
+            let relaxed_opts = to_relaxed_options(&relaxed_config);
+            println!(
+                "Relaxed consistency enabled: {} root(s), poll every {}s",
+                relaxed_config.roots.len(),
+                relaxed_config.poll_interval_secs,
+            );
+            for root in &relaxed_config.roots {
+                println!(
+                    "  Root: {} -> {} (source: {})",
+                    root.root_id, root.mount_path, root.source_path
+                );
+            }
+            VfsOptions::default().with_relaxed(relaxed_opts)
+        }
+        None => {
+            println!("Consistency mode: strong (default)");
+            VfsOptions::default()
+        }
+    };
+
     let running: Arc<AtomicBool> = Arc::new(AtomicBool::new(true));
     let r: Arc<AtomicBool> = running.clone();
     ctrlc::set_handler(move || {
@@ -550,7 +591,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Mounting writable VFS at: {}", mountpoint.display());
         println!("COW cache directory: {}", args.cache_dir.display());
 
-        let vfs = WritableVfs::new(&manifest, store, VfsOptions::default(), write_options)?;
+        let vfs = WritableVfs::new(&manifest, store, vfs_options.clone(), write_options)?;
         let stats_collector: WritableVfsStatsCollector = vfs.stats_collector();
         let session = rusty_attachments_vfs::spawn_mount_writable(vfs, &mountpoint)?;
 
@@ -578,7 +619,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Read-only mode
         println!("Mounting read-only VFS at: {}", mountpoint.display());
 
-        let vfs: DeadlineVfs = DeadlineVfs::new(&manifest, store, VfsOptions::default())?;
+        let vfs: DeadlineVfs = DeadlineVfs::new(&manifest, store, vfs_options.clone())?;
         let stats_collector: VfsStatsCollector = vfs.stats_collector();
         let session = rusty_attachments_vfs::spawn_mount(vfs, &mountpoint)?;
 

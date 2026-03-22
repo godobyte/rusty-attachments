@@ -629,6 +629,13 @@ mod impl_fuse {
                         }
                         Ok(data)
                     }
+                    // COMPAT: Relaxed files must be promoted before read
+                    crate::inode::FileContent::Relaxed(key) => {
+                        Err(crate::VfsError::ContentRetrievalFailed {
+                            hash: key.path_key.clone(),
+                            source: "Relaxed file not yet resolved".into(),
+                        })
+                    }
                 }
             });
 

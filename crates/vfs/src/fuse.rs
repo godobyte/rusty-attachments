@@ -256,6 +256,13 @@ mod impl_fuse {
             match content {
                 FileContent::SingleHash(hash) => self.read_single_hash(hash, off, actual),
                 FileContent::Chunked(hashes) => self.read_chunked(hashes, off, actual),
+                // COMPAT: Relaxed files must be promoted before read.
+                // This path should not be reached — the FUSE read handler
+                // should resolve relaxed files before calling read_content.
+                FileContent::Relaxed(key) => Err(VfsError::ContentRetrievalFailed {
+                    hash: key.path_key.clone(),
+                    source: "Relaxed file not yet resolved — promote before reading".into(),
+                }),
             }
         }
 
