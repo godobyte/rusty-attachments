@@ -91,6 +91,8 @@ impl DirtyFileMetadata {
                 let count: u32 = hashes.len() as u32;
                 (hashes.clone(), count)
             }
+            // COMPAT: Relaxed files have no original hashes — they are new/unresolved
+            FileContent::Relaxed(_) => (Vec::new(), 1),
         };
 
         Self {

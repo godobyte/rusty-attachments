@@ -6,6 +6,7 @@ use std::time::SystemTime;
 use rusty_attachments_model::HashAlgorithm;
 
 use super::types::{INode, INodeId, INodeType};
+use crate::relaxed::RelaxedFileKey;
 
 /// Default file permissions (rw-r--r--).
 pub const DEFAULT_FILE_PERMS: u16 = 0o644;
@@ -13,35 +14,37 @@ pub const DEFAULT_FILE_PERMS: u16 = 0o644;
 /// Executable file permissions (rwxr-xr-x).
 pub const EXECUTABLE_FILE_PERMS: u16 = 0o755;
 
-/// File content source - handles both V1 (single hash) and V2 (chunked) files.
+/// File content source - handles V1 (single hash), V2 (chunked), and relaxed files.
 #[derive(Debug, Clone)]
 pub enum FileContent {
     /// Single hash for entire file (V1 and small V2 files).
     SingleHash(String),
     /// Chunk hashes for large V2 files (>256MB).
     Chunked(Vec<String>),
+    /// Relaxed consistency: no hash known, resolved on-demand.
+    Relaxed(RelaxedFileKey),
 }
 
 impl FileContent {
     /// Get the hash for a single-hash file.
     ///
     /// # Returns
-    /// The hash if this is a single-hash file, None for chunked files.
+    /// The hash if this is a single-hash file, None for chunked or relaxed files.
     pub fn single_hash(&self) -> Option<&str> {
         match self {
             FileContent::SingleHash(h) => Some(h),
-            FileContent::Chunked(_) => None,
+            FileContent::Chunked(_) | FileContent::Relaxed(_) => None,
         }
     }
 
     /// Get the chunk hashes for a chunked file.
     ///
     /// # Returns
-    /// The chunk hashes if this is a chunked file, None for single-hash files.
+    /// The chunk hashes if this is a chunked file, None for single-hash or relaxed files.
     pub fn chunk_hashes(&self) -> Option<&[String]> {
         match self {
-            FileContent::SingleHash(_) => None,
             FileContent::Chunked(h) => Some(h),
+            FileContent::SingleHash(_) | FileContent::Relaxed(_) => None,
         }
     }
 
@@ -50,11 +53,28 @@ impl FileContent {
         matches!(self, FileContent::Chunked(_))
     }
 
+    /// Check if this is a relaxed consistency file (no hash known yet).
+    pub fn is_relaxed(&self) -> bool {
+        matches!(self, FileContent::Relaxed(_))
+    }
+
+    /// Get the relaxed file key, if this is a relaxed file.
+    ///
+    /// # Returns
+    /// The relaxed file key, or None if this is a strongly consistent file.
+    pub fn relaxed_key(&self) -> Option<&RelaxedFileKey> {
+        match self {
+            FileContent::Relaxed(key) => Some(key),
+            _ => None,
+        }
+    }
+
     /// Get the number of chunks.
     pub fn chunk_count(&self) -> usize {
         match self {
             FileContent::SingleHash(_) => 1,
             FileContent::Chunked(h) => h.len(),
+            FileContent::Relaxed(_) => 0,
         }
     }
 }
@@ -247,5 +267,28 @@ mod tests {
 
         assert!(file.is_executable());
         assert_eq!(file.permissions(), EXECUTABLE_FILE_PERMS);
+    }
+
+    #[test]
+    fn test_file_content_relaxed() {
+        let key = RelaxedFileKey {
+            root_id: "root1".to_string(),
+            relative_path: "project/file.png".to_string(),
+            path_key: "abc123def456".to_string(),
+        };
+        let content: FileContent = FileContent::Relaxed(key.clone());
+        assert!(content.single_hash().is_none());
+        assert!(content.chunk_hashes().is_none());
+        assert!(!content.is_chunked());
+        assert!(content.is_relaxed());
+        assert_eq!(content.chunk_count(), 0);
+        assert_eq!(content.relaxed_key(), Some(&key));
+    }
+
+    #[test]
+    fn test_file_content_single_hash_not_relaxed() {
+        let content: FileContent = FileContent::SingleHash("abc123".to_string());
+        assert!(!content.is_relaxed());
+        assert!(content.relaxed_key().is_none());
     }
 }

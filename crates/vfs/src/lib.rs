@@ -33,6 +33,7 @@ pub mod inode;
 pub mod memory_pool;
 pub mod memory_pool_v2;
 pub mod options;
+pub mod relaxed;
 pub mod write;
 
 #[cfg(feature = "fuse")]
@@ -48,8 +49,8 @@ pub use memory_pool_v2::{
     MemoryPoolStats, MutableBlockHandle,
 };
 pub use options::{
-    KernelCacheOptions, PrefetchStrategy, ReadAheadOptions, ReadCacheConfig, TimeoutOptions,
-    VfsOptions,
+    KernelCacheOptions, PrefetchStrategy, ReadAheadOptions, ReadCacheConfig,
+    RelaxedConsistencyOptions, TimeoutOptions, VfsOptions,
 };
 
 pub use builder::build_from_manifest;
@@ -70,6 +71,13 @@ pub use diskcache::{
 pub use write::{
     DiffManifestExporter, DirtyEntry, DirtyFileInfo, DirtyFileManager, DirtyFileMetadata,
     DirtyState, DirtySummary, WritableVfsStats, WritableVfsStatsCollector,
+};
+
+// Relaxed consistency exports
+pub use relaxed::{
+    FileUploadRequest, MarkerEnvelope, MemoryRelaxedStore, PendingFileTracker, RelaxedFileKey,
+    RelaxedFileStore, RelaxedResolution, RelaxedRootConfig, RequestPriority,
+    UploadCompletionMarker, UploadFailureMarker,
 };
 
 #[cfg(feature = "fuse")]

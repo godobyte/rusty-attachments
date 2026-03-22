@@ -1104,7 +1104,7 @@ Submitter                  Deadline API              Worker VFS              SQS
 | Chunked upload (partial blocks) | Upload agent chunks >256MB files, writes chunk_hashes in marker |
 | Streaming upload | Start serving partial content while upload is in progress |
 | SNS fan-out | Notify multiple VFS instances when a file is uploaded (push vs poll) |
-| Directory enumeration | Upload agent sends directory listings for relaxed roots |
+| Directory index manifests | Upload agent publishes lightweight directory listings (see TODO below) |
 | File change detection | Detect on-prem file changes and invalidate CAS entries |
 | Bandwidth throttling | Rate-limit upload agent to avoid saturating on-prem network |
 
@@ -1197,24 +1197,95 @@ Use managed AWS services for on-prem → S3 transfer.
 
 ---
 
+## TODO: Directory Enumeration via Index Manifests
+
+### The Problem
+
+With V1's auto-vivification, `readdir` on a relaxed root returns only previously accessed children. An app that does `ls /mnt/vfs/shared/project/` or iterates a directory to discover files will see nothing. This breaks workflows where the render app scans for textures, plugins, or config files by listing a directory rather than opening files by exact path.
+
+### Proposed Solution: Lightweight Directory Index Manifests
+
+The upload agent periodically scans relaxed roots on the local filesystem and publishes a "directory index manifest" to S3. This is not a full content manifest (no hashes, no content upload) — just a listing of paths, sizes, and mtimes. It's cheap to produce and small to store.
+
+```rust
+/// A lightweight directory listing for a relaxed root.
+/// Contains only metadata (no content hashes) — just enough for the VFS
+/// to populate INodes and respond to stat()/readdir().
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryIndexManifest {
+    /// Version of this format.
+    pub version: String,  // "2026-03-21"
+    /// The relaxed root ID this index belongs to.
+    pub root_id: String,
+    /// Timestamp when the scan was performed (epoch seconds).
+    pub scanned_at: f64,
+    /// Directory entries (relative paths from root).
+    pub dirs: Vec<String>,
+    /// File entries with metadata but no content hash.
+    pub files: Vec<DirectoryIndexEntry>,
+}
+
+/// A file entry in the directory index — metadata only, no content hash.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryIndexEntry {
+    /// Relative path from the relaxed root (posix-normalized).
+    pub path: String,
+    /// File size in bytes.
+    pub size: u64,
+    /// Modification time (microseconds since epoch).
+    pub mtime: i64,
+}
+```
+
+**S3 key:**
+```
+{root_prefix}/DirectoryIndex/{root_id}/latest.json
+```
+
+### How It Works
+
+1. **Upload agent** runs a background scan of each relaxed root's local directory tree. This is a metadata-only `readdir` + `stat` walk — no file reads, no hashing. For a directory with 100K files, this takes seconds.
+
+2. **Agent publishes** the `DirectoryIndexManifest` to S3 at a well-known key. It overwrites the previous version (latest-wins semantics, consistent with relaxed consistency).
+
+3. **VFS at mount time** (or lazily on first `readdir`) fetches the directory index for each relaxed root. It populates the INode tree with directory and file INodes, all with `FileContent::Relaxed` and the correct `size`/`mtime` from the index.
+
+4. **`readdir` now works** — it returns the full listing from the index. `stat()` returns correct sizes. The auto-vivification path still works as a fallback for files not in the index (e.g., created after the last scan).
+
+### Why This Solves the Size Problem Too
+
+The directory index includes `size` and `mtime` for every file. When the VFS creates INodes from the index, it sets these fields immediately. Apps that call `stat()` before `read()` get correct metadata without waiting for the file to be uploaded. Only the content is lazy — the metadata is eager.
+
+### Scan Frequency
+
+The upload agent rescans on a configurable interval (default: 5 minutes). The VFS can re-fetch the index periodically or on-demand when a `readdir` returns stale results. Since this is relaxed consistency, a slightly stale directory listing is acceptable.
+
+### Scope
+
+This is deferred to V1.1 or V2. The auto-vivification approach in V1 handles the common case where render apps open files by exact path (which is how most DCC apps work — the scene file contains absolute paths to textures/assets). Directory scanning workflows are less common but important for some pipelines.
+
+### Impact on V1 Data Structures
+
+No changes needed. The `DirectoryIndexManifest` is a new, independent data structure. The VFS already supports creating INodes from external metadata (the manifest builder does this). The index manifest is just another source of INode metadata, with `FileContent::Relaxed` instead of `FileContent::SingleHash`.
+
+---
+
 ## Open Questions for Discussion
 
-1. **Directory enumeration**: Should the upload agent periodically send directory listings for relaxed roots? This would allow `readdir` to return actual file names instead of empty directories. Trade-off: more SQS traffic and S3 storage for directory metadata.
+1. **Authentication**: The upload agent needs AWS credentials to access SQS and S3. Should it use IAM roles (if on EC2), Deadline Cloud credentials, or a separate credential mechanism for on-prem?
 
-2. **File size reporting**: The VFS reports `size=0` for unresolved relaxed files. Some applications (e.g., memory-mapped I/O) may fail. Should we require the submitter to provide a size hint in the relaxed root declaration? Or should the upload agent pre-scan and upload a lightweight "directory manifest" with sizes?
-
-3. **Authentication**: The upload agent needs AWS credentials to access SQS and S3. Should it use IAM roles (if on EC2), Deadline Cloud credentials, or a separate credential mechanism for on-prem?
-
-4. **Queue lifecycle**: Who creates/deletes the SQS queues? Options:
+2. **Queue lifecycle**: Who creates/deletes the SQS queues? Options:
    - Deadline service creates them when a queue is configured for relaxed consistency
    - The upload agent creates them on first run
    - CloudFormation/CDK as part of farm setup
 
-5. **Cancellation**: If a job is cancelled, should pending SQS messages be purged? Or let them expire naturally? Purging saves upload bandwidth but requires additional API calls.
+3. **Cancellation**: If a job is cancelled, should pending SQS messages be purged? Or let them expire naturally? Purging saves upload bandwidth but requires additional API calls.
 
-6. **Multi-region**: If the on-prem storage is closer to a different AWS region than the Deadline farm, should the upload agent upload to a regional S3 bucket with cross-region replication?
+4. **Multi-region**: If the on-prem storage is closer to a different AWS region than the Deadline farm, should the upload agent upload to a regional S3 bucket with cross-region replication?
 
-7. **Monitoring**: What CloudWatch metrics should the upload agent publish? Suggestions:
+5. **Monitoring**: What CloudWatch metrics should the upload agent publish? Suggestions:
    - Queue depth (high and async)
    - Upload latency (time from SQS receive to completion marker written)
    - Files uploaded per minute

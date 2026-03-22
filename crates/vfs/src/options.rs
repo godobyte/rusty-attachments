@@ -4,9 +4,11 @@
 //! prefetching, and performance tuning.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::executor::ExecutorConfig;
 use crate::memory_pool_v2::MemoryPoolConfig;
+use crate::relaxed::RelaxedRootConfig;
 
 /// Configuration options for the VFS.
 ///
@@ -37,6 +39,8 @@ pub struct VfsOptions {
     pub read_cache: ReadCacheConfig,
     /// Async executor configuration.
     pub executor: ExecutorConfig,
+    /// Relaxed consistency options (None if no relaxed roots).
+    pub relaxed: Option<RelaxedConsistencyOptions>,
 }
 
 impl VfsOptions {
@@ -100,6 +104,15 @@ impl VfsOptions {
     /// * `executor` - Async executor configuration
     pub fn with_executor(mut self, executor: ExecutorConfig) -> Self {
         self.executor = executor;
+        self
+    }
+
+    /// Set relaxed consistency options.
+    ///
+    /// # Arguments
+    /// * `relaxed` - Relaxed consistency configuration with root declarations
+    pub fn with_relaxed(mut self, relaxed: RelaxedConsistencyOptions) -> Self {
+        self.relaxed = Some(relaxed);
         self
     }
 }
@@ -370,6 +383,66 @@ impl Default for TimeoutOptions {
             fetch_timeout_secs: 300, // 5 minutes (large chunks)
             open_timeout_secs: 60,   // 1 minute
         }
+    }
+}
+
+// ============================================================================
+// Relaxed Consistency Options
+// ============================================================================
+
+/// Configuration for relaxed consistency behavior.
+///
+/// Controls polling intervals, timeouts, and the set of relaxed roots
+/// that the VFS should support.
+#[derive(Debug, Clone)]
+pub struct RelaxedConsistencyOptions {
+    /// Interval between polls for pending files.
+    pub poll_interval: Duration,
+    /// Maximum time to wait for a file before returning EIO.
+    pub max_wait_timeout: Duration,
+    /// Number of S3 keys to check per batch poll.
+    pub batch_poll_size: usize,
+    /// Relaxed root declarations (root_id, source_path, mount_path).
+    pub roots: Vec<RelaxedRootConfig>,
+}
+
+impl Default for RelaxedConsistencyOptions {
+    fn default() -> Self {
+        Self {
+            poll_interval: Duration::from_secs(30),
+            max_wait_timeout: Duration::from_secs(1800), // 30 minutes
+            batch_poll_size: 1000,
+            roots: Vec::new(),
+        }
+    }
+}
+
+impl RelaxedConsistencyOptions {
+    /// Create options with the given relaxed roots.
+    ///
+    /// # Arguments
+    /// * `roots` - The relaxed root configurations.
+    pub fn with_roots(mut self, roots: Vec<RelaxedRootConfig>) -> Self {
+        self.roots = roots;
+        self
+    }
+
+    /// Set the poll interval.
+    ///
+    /// # Arguments
+    /// * `interval` - Duration between polls for pending files.
+    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval;
+        self
+    }
+
+    /// Set the maximum wait timeout.
+    ///
+    /// # Arguments
+    /// * `timeout` - Maximum time to wait before returning EIO.
+    pub fn with_max_wait_timeout(mut self, timeout: Duration) -> Self {
+        self.max_wait_timeout = timeout;
+        self
     }
 }
 
