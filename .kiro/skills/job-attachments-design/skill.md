@@ -1,5 +1,26 @@
 ---
-inclusion: manual
+name: job-attachments-design
+description: Domain-specific design guidelines for rusty-attachments — S3 patterns, path mapping, storage profiles, VFS, manifest versions, and relaxed consistency.
+triggers:
+  - s3
+  - storage
+  - upload
+  - download
+  - manifest
+  - path mapping
+  - storage profile
+  - vfs
+  - fuse
+  - relaxed
+  - cas
+  - deadline
+  - job attachments
+  - file system location
+  - head_object
+  - list_objects
+  - pending uploads
+  - completion marker
+  - upload agent
 ---
 
 # Job Attachments Design Checklist
