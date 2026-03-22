@@ -100,7 +100,14 @@ pub struct RelaxedRootConfig {
     /// Source path on the submitter's machine.
     pub source_path: String,
     /// Mount path within the VFS (after path mapping).
+    /// - With storage profile: worker-side path from the profile (e.g., "/mnt/worker/assets")
+    /// - Without storage profile: dynamic name (e.g., "assetroot-a1b2c3d4e5")
     pub mount_path: String,
+    /// File system location name from storage profile (None if no profile).
+    /// When set, the Deadline service uses this to resolve the worker-side mount path
+    /// via storage profile path mapping rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_system_location_name: Option<String>,
 }
 
 #[cfg(test)]
@@ -197,11 +204,58 @@ mod tests {
             root_id: "a1b2c3d4e5".to_string(),
             source_path: "/mnt/shared".to_string(),
             mount_path: "shared".to_string(),
+            file_system_location_name: None,
         };
 
         let json: String = serde_json::to_string(&config).unwrap();
         let parsed: RelaxedRootConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.root_id, "a1b2c3d4e5");
         assert_eq!(parsed.mount_path, "shared");
+        assert!(parsed.file_system_location_name.is_none());
+    }
+
+    #[test]
+    fn test_relaxed_root_config_with_storage_profile() {
+        let config = RelaxedRootConfig {
+            root_id: "a1b2c3d4e5".to_string(),
+            source_path: "/mnt/shared/assets".to_string(),
+            mount_path: "/mnt/worker/assets".to_string(),
+            file_system_location_name: Some("StudioAssets".to_string()),
+        };
+
+        let json: String = serde_json::to_string(&config).unwrap();
+        let parsed: RelaxedRootConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.mount_path, "/mnt/worker/assets");
+        assert_eq!(
+            parsed.file_system_location_name.as_deref(),
+            Some("StudioAssets")
+        );
+    }
+
+    #[test]
+    fn test_relaxed_root_config_without_profile_omits_field() {
+        // When file_system_location_name is None, it should be omitted from JSON
+        let config = RelaxedRootConfig {
+            root_id: "abc".to_string(),
+            source_path: "/mnt/scratch".to_string(),
+            mount_path: "assetroot-abc123".to_string(),
+            file_system_location_name: None,
+        };
+
+        let json: String = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("fileSystemLocationName"));
+    }
+
+    #[test]
+    fn test_relaxed_root_config_deserialize_missing_location_name() {
+        // JSON without fileSystemLocationName should deserialize with None
+        let json: &str = r#"{
+            "rootId": "abc",
+            "sourcePath": "/mnt/scratch",
+            "mountPath": "assetroot-abc"
+        }"#;
+
+        let parsed: RelaxedRootConfig = serde_json::from_str(json).unwrap();
+        assert!(parsed.file_system_location_name.is_none());
     }
 }

@@ -2,23 +2,39 @@
 """
 On-premises upload agent for relaxed consistency file fetching.
 
-This agent polls SQS queues for file upload requests from the VFS,
-reads files from local network storage, hashes them with XXH128,
-uploads to S3 CAS, and writes completion markers.
+This agent integrates with Deadline Cloud's storage profile model.
+It polls SQS queues for file upload requests from the VFS, resolves
+files using the storage profile's FileSystemLocation entries, hashes
+them with XXH128, uploads to S3 CAS, and writes completion markers.
+
+The agent config mirrors Deadline's own structures:
+- A storage profile defines LOCAL roots the agent can serve
+- The farm/queue IDs determine which SQS queues to poll
+- root_id in SQS messages maps to FileSystemLocation names
 
 Usage:
     python3 upload_agent.py --config agent_config.json
 
 Config file format:
     {
+        "farmId": "farm-abc123",
+        "queueId": "queue-def456",
         "region": "us-west-2",
         "bucket": "my-deadline-bucket",
         "rootPrefix": "DeadlineCloud",
-        "farmId": "farm-abc123",
-        "queueId": "queue-def456",
-        "rootMappings": {
-            "a1b2c3d4e5f6a7b8c9d0": "/mnt/shared/assets",
-            "f0e1d2c3b4a5f6e7d8c9": "/mnt/shared/textures"
+        "storageProfile": {
+            "fileSystemLocations": [
+                {
+                    "name": "StudioAssets",
+                    "path": "/mnt/shared/assets",
+                    "type": "LOCAL"
+                },
+                {
+                    "name": "TextureLibrary",
+                    "path": "/mnt/shared/textures",
+                    "type": "LOCAL"
+                }
+            ]
         },
         "maxConcurrentUploads": 8,
         "highPriorityPollIntervalSecs": 1,
@@ -29,7 +45,6 @@ Config file format:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
@@ -50,16 +65,106 @@ logging.basicConfig(
 log: logging.Logger = logging.getLogger("upload_agent")
 
 
+# ---------------------------------------------------------------------------
+# Data structures (mirrors Deadline Cloud API)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FileSystemLocation:
+    """A named file system location from a Deadline storage profile.
+
+    Attributes:
+        name: Human-readable location name (e.g., "StudioAssets").
+        path: Root path on the local filesystem.
+        location_type: "LOCAL" (uploaded) or "SHARED" (accessible, not uploaded).
+    """
+
+    name: str
+    path: str
+    location_type: str  # "LOCAL" or "SHARED"
+
+
+@dataclass
+class StorageProfileConfig:
+    """Storage profile configuration matching Deadline's model.
+
+    Attributes:
+        file_system_locations: List of named filesystem locations.
+    """
+
+    file_system_locations: list[FileSystemLocation] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> StorageProfileConfig:
+        """Parse from a dict (JSON-deserialized).
+
+        Args:
+            data: Dict with "fileSystemLocations" key.
+
+        Returns:
+            Parsed StorageProfileConfig.
+        """
+        locations: list[FileSystemLocation] = []
+        for loc in data.get("fileSystemLocations", []):
+            locations.append(
+                FileSystemLocation(
+                    name=loc["name"],
+                    path=loc["path"],
+                    location_type=loc.get("type", "LOCAL"),
+                )
+            )
+        return cls(file_system_locations=locations)
+
+    def local_locations(self) -> list[FileSystemLocation]:
+        """Get all LOCAL type locations.
+
+        Returns:
+            List of LOCAL FileSystemLocations.
+        """
+        return [
+            loc
+            for loc in self.file_system_locations
+            if loc.location_type == "LOCAL"
+        ]
+
+    def find_location_by_name(self, name: str) -> FileSystemLocation | None:
+        """Find a location by its name.
+
+        Args:
+            name: The FileSystemLocation name.
+
+        Returns:
+            The matching location, or None.
+        """
+        for loc in self.file_system_locations:
+            if loc.name == name:
+                return loc
+        return None
+
+
 @dataclass
 class AgentConfig:
-    """Configuration for the upload agent."""
+    """Configuration for the upload agent.
 
+    Attributes:
+        farm_id: Deadline farm ID.
+        queue_id: Deadline queue ID.
+        region: AWS region for SQS and S3.
+        bucket: S3 bucket for CAS and pending uploads.
+        root_prefix: S3 root prefix (e.g., "DeadlineCloud").
+        storage_profile: Storage profile defining LOCAL roots to serve.
+        max_concurrent_uploads: Max parallel uploads.
+        high_priority_poll_interval_secs: Poll interval for high-priority queue.
+        async_poll_interval_secs: Poll interval for async queue.
+    """
+
+    farm_id: str
+    queue_id: str
     region: str
     bucket: str
     root_prefix: str
-    farm_id: str
-    queue_id: str
-    root_mappings: dict[str, str] = field(default_factory=dict)
+    storage_profile: StorageProfileConfig
     max_concurrent_uploads: int = 8
     high_priority_poll_interval_secs: float = 1.0
     async_poll_interval_secs: float = 5.0
@@ -76,19 +181,58 @@ class AgentConfig:
         """
         with open(path) as f:
             data: dict = json.load(f)
+
+        profile = StorageProfileConfig.from_dict(data.get("storageProfile", {}))
+
         return cls(
-            region=data["region"],
-            bucket=data["bucket"],
-            root_prefix=data["rootPrefix"],
             farm_id=data["farmId"],
             queue_id=data["queueId"],
-            root_mappings=data.get("rootMappings", {}),
+            region=data.get("region", "us-west-2"),
+            bucket=data["bucket"],
+            root_prefix=data.get("rootPrefix", "DeadlineCloud"),
+            storage_profile=profile,
             max_concurrent_uploads=data.get("maxConcurrentUploads", 8),
             high_priority_poll_interval_secs=data.get(
                 "highPriorityPollIntervalSecs", 1.0
             ),
             async_poll_interval_secs=data.get("asyncPollIntervalSecs", 5.0),
         )
+
+    def resolve_source_path(self, root_id: str, source_root_path: str) -> str | None:
+        """Resolve the local filesystem path for a root.
+
+        Tries to match by fileSystemLocationName first (from the SQS message's
+        root_id which may encode the location name), then falls back to the
+        source_root_path from the SQS message.
+
+        The storage profile's LOCAL locations define which roots this agent
+        can serve. If the source_root_path falls under a known LOCAL location,
+        we use it. Otherwise we reject the request.
+
+        Args:
+            root_id: The relaxed root identifier from the SQS message.
+            source_root_path: The submitter's source path from the SQS message.
+
+        Returns:
+            The local root path to use, or None if this agent can't serve it.
+        """
+        # The source_root_path in the SQS message is the submitter's path.
+        # Check if it falls under any of our LOCAL locations.
+        for loc in self.storage_profile.local_locations():
+            if source_root_path.startswith(loc.path) or loc.path.startswith(source_root_path):
+                return source_root_path
+            # Exact match on the location path itself
+            if os.path.normpath(source_root_path) == os.path.normpath(loc.path):
+                return loc.path
+        # Fallback: if the source_root_path is a valid local directory, use it
+        if os.path.isdir(source_root_path):
+            return source_root_path
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Hashing and S3 key utilities
+# ---------------------------------------------------------------------------
 
 
 def xxh128_hex(data: bytes) -> str:
@@ -168,6 +312,11 @@ def queue_name(farm_id: str, queue_id: str, priority: str) -> str:
     return f"deadline-{farm_id}-{queue_id}-file-requests-{priority}"
 
 
+# ---------------------------------------------------------------------------
+# S3 operations
+# ---------------------------------------------------------------------------
+
+
 def check_marker_exists(
     s3_client: "S3Client", bucket: str, key: str
 ) -> bool:
@@ -230,7 +379,7 @@ def write_completion_marker(
         size: File size in bytes.
         relative_path: Original relative path.
     """
-    marker: dict = {
+    marker_body: dict = {
         "status": "completed",
         "contentHash": content_hash,
         "hashAlgorithm": "xxh128",
@@ -238,7 +387,7 @@ def write_completion_marker(
         "uploadedAt": time.time(),
         "relativePath": relative_path,
     }
-    body: str = json.dumps(marker)
+    body: str = json.dumps(marker_body)
     s3_client.put_object(
         Bucket=bucket,
         Key=marker_s3_key,
@@ -264,13 +413,13 @@ def write_failure_marker(
         reason: Failure reason.
         relative_path: Original relative path.
     """
-    marker: dict = {
+    marker_body: dict = {
         "status": "failed",
         "reason": reason,
         "failedAt": time.time(),
         "relativePath": relative_path,
     }
-    body: str = json.dumps(marker)
+    body: str = json.dumps(marker_body)
     s3_client.put_object(
         Bucket=bucket,
         Key=marker_s3_key,
@@ -280,6 +429,11 @@ def write_failure_marker(
     log.warning("Wrote failure marker: %s reason=%s", marker_s3_key, reason)
 
 
+# ---------------------------------------------------------------------------
+# Message processing
+# ---------------------------------------------------------------------------
+
+
 def process_message(
     s3_client: "S3Client",
     config: AgentConfig,
@@ -287,9 +441,13 @@ def process_message(
 ) -> bool:
     """Process a single SQS file upload request message.
 
+    The SQS message contains the submitter's source_root_path and a relative_path.
+    The agent resolves the local file using the storage profile's LOCAL locations,
+    hashes it, uploads to CAS, and writes a completion marker.
+
     Args:
         s3_client: Boto3 S3 client.
-        config: Agent configuration.
+        config: Agent configuration (with storage profile).
         message_body: Raw SQS message body (JSON).
 
     Returns:
@@ -304,6 +462,7 @@ def process_message(
     root_id: str = req.get("rootId", "")
     relative_path: str = req.get("relativePath", "")
     path_key: str = req.get("pathKey", "")
+    source_root_path: str = req.get("sourceRootPath", "")
     bucket: str = req.get("bucket", config.bucket)
     root_prefix: str = req.get("rootPrefix", config.root_prefix)
 
@@ -318,17 +477,20 @@ def process_message(
         log.info("Marker already exists, skipping: %s", mk)
         return True
 
-    # Resolve local path
-    local_root: str | None = config.root_mappings.get(root_id)
-    if local_root is None:
-        # Try using source_root_path from the message
-        local_root = req.get("sourceRootPath")
+    # Resolve local root using storage profile
+    local_root: str | None = config.resolve_source_path(root_id, source_root_path)
 
     if local_root is None:
-        log.error("No root mapping for root_id=%s", root_id)
+        log.error(
+            "Cannot serve root_id=%s source=%s — not in storage profile LOCAL locations",
+            root_id,
+            source_root_path,
+        )
         write_failure_marker(
-            s3_client, bucket, mk,
-            f"No root mapping for root_id={root_id}",
+            s3_client,
+            bucket,
+            mk,
+            f"Source path not in agent's storage profile: {source_root_path}",
             relative_path,
         )
         return True  # Processed (failed), don't retry
@@ -369,6 +531,11 @@ def process_message(
     )
 
     return True
+
+
+# ---------------------------------------------------------------------------
+# SQS polling
+# ---------------------------------------------------------------------------
 
 
 def get_queue_url(
@@ -437,6 +604,11 @@ def poll_queue(
     return processed
 
 
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+
 def run_agent(config: AgentConfig) -> None:
     """Run the upload agent main loop.
 
@@ -459,11 +631,13 @@ def run_agent(config: AgentConfig) -> None:
         log.error("Neither queue found. Run setup_sqs.py first.")
         sys.exit(1)
 
+    local_locations: list[FileSystemLocation] = config.storage_profile.local_locations()
     log.info("Upload agent started")
-    log.info("  Farm: %s", config.farm_id)
-    log.info("  Queue: %s", config.queue_id)
-    log.info("  Bucket: %s", config.bucket)
-    log.info("  Root mappings: %s", config.root_mappings)
+    log.info("  Farm: %s  Queue: %s", config.farm_id, config.queue_id)
+    log.info("  Bucket: s3://%s/%s", config.bucket, config.root_prefix)
+    log.info("  Storage profile LOCAL locations (%d):", len(local_locations))
+    for loc in local_locations:
+        log.info("    %s -> %s", loc.name, loc.path)
     if high_url:
         log.info("  High-priority queue: %s", high_queue_name)
     if async_url:

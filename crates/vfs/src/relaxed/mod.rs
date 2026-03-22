@@ -16,18 +16,20 @@
 pub mod config;
 pub mod markers;
 pub mod memory_store;
+pub mod path_resolver;
 pub mod pending_tracker;
 pub mod store;
 pub mod types;
 pub mod utils;
 
-pub use config::{load_relaxed_config, sqs_queue_name, to_relaxed_options, RelaxedLaunchConfig};
+pub use config::{load_relaxed_config, sqs_queue_name, to_relaxed_options, validate_relaxed_requires_vfs, RelaxedLaunchConfig};
 pub use markers::{
     FileUploadRequest, MarkerEnvelope, RelaxedRootConfig, UploadCompletionMarker,
     UploadFailureMarker,
 };
 pub use memory_store::MemoryRelaxedStore;
-pub use pending_tracker::PendingFileTracker;
+pub use path_resolver::RootPathResolver;
+pub use pending_tracker::{composite_key, split_composite_key, PendingFileTracker};
 pub use store::RelaxedFileStore;
 pub use types::{RelaxedFileKey, RelaxedResolution, RequestPriority};
 pub use utils::{relaxed_file_key, relaxed_relative_path, s3_marker_key};

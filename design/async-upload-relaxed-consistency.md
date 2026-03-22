@@ -30,6 +30,15 @@ Support a mixed upload ecosystem where job attachments can contain both:
 
 Not all files need content-hash guarantees. For many studio workflows, "give me the latest version of this texture file" is perfectly acceptable. The file may change between job submission and job execution, and that's fine.
 
+### Constraint: VFS Mode Required
+
+Relaxed consistency only works when the job attachment file system mode is `VIRTUAL` (VFS). In `COPIED` mode, all files are downloaded to local disk before the job runs — there is no interception point for on-demand fetching. The VFS intercepts FUSE/FSKit/ProjFS `read()` calls, which is the mechanism that triggers the resolve → poll → promote flow.
+
+If a job is submitted with `relaxedRoots` and `fileSystem: "COPIED"`, the submission must be rejected with a clear error. This validation happens at two levels:
+
+1. **Job submission time**: The `build_attachments()` function validates that `relaxedRoots` is empty when `fileSystem == "COPIED"`.
+2. **VFS mount time**: The `load_relaxed_config()` function is only called when the VFS launcher is used (not the COPIED downloader).
+
 ---
 
 ## Architecture Overview
@@ -150,6 +159,92 @@ pub struct Attachments {
   "fileSystem": "VIRTUAL"
 }
 ```
+
+**Validation**: `fileSystem` MUST be `"VIRTUAL"` when `relaxedRoots` is non-empty. The combination of `relaxedRoots` + `"COPIED"` is invalid and must be rejected at submission time. Only VFS can intercept file reads to trigger on-demand fetching.
+
+### Storage Profile Mapping for Relaxed Roots
+
+Relaxed roots interact with storage profiles in two distinct ways, depending on whether the submitter and worker have matching storage profiles configured.
+
+#### Case 1: With Storage Profile (Mapped Root)
+
+The submitter's relaxed root has a `fileSystemLocationName` that matches a `FileSystemLocation` in both the submitter's and worker's storage profiles. The Deadline service generates a `PathMappingRule` that translates the submitter's source path to the worker's local path.
+
+```
+Submitter profile:  StudioAssets → /mnt/shared/assets     (LOCAL)
+Worker profile:     StudioAssets → /mnt/worker/assets      (LOCAL)
+
+PathMappingRule:
+  source: /mnt/shared/assets
+  dest:   /mnt/worker/assets
+
+VFS mount_path: "mnt/worker/assets"
+```
+
+In this case, the `mount_path` in `RelaxedRootConfig` is the worker-side path from the storage profile. The VFS mounts the relaxed root at this path. When a file is requested, the SQS message includes the original `source_path` so the upload agent can find the file on the submitter's network storage.
+
+The `fileSystemLocationName` field on `RelaxedConsistencyRoot` enables this: the Deadline service uses it to look up the worker's storage profile and generate the correct `mount_path`.
+
+#### Case 2: Without Storage Profile (Dynamic Root)
+
+No storage profiles are configured, or the relaxed root doesn't match any `FileSystemLocation`. The mount path is generated dynamically using the same `get_unique_dest_dir_name()` pattern as strongly consistent manifests:
+
+```
+Submitter source:  /mnt/shared/assets
+Dynamic mount:     assetroot-a1b2c3d4e5f6a7b8c9d0
+
+VFS mount_path: "assetroot-a1b2c3d4e5f6a7b8c9d0"
+```
+
+The session directory on the worker contains this auto-generated directory name. The VFS mounts the relaxed root there. Path mapping is implicit — the `root_id` (which is the SHAKE-256 of the source path) matches the `assetroot-` suffix.
+
+#### RelaxedRootConfig: Both Cases
+
+The `RelaxedRootConfig` struct handles both cases via the `mount_path` field. The Deadline service (or the job submission layer) is responsible for computing the correct `mount_path` based on whether storage profiles are in play:
+
+```rust
+/// Configuration for a relaxed consistency root, passed to the VFS at mount time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelaxedRootConfig {
+    /// Stable identifier for this root (SHAKE-256 of source_path).
+    pub root_id: String,
+    /// Source path on the submitter's machine.
+    pub source_path: String,
+    /// Mount path within the VFS (after path mapping).
+    /// - With storage profile: worker-side path from the profile (e.g., "/mnt/worker/assets")
+    /// - Without storage profile: dynamic name (e.g., "assetroot-a1b2c3d4e5")
+    pub mount_path: String,
+    /// File system location name from storage profile (None if no profile).
+    /// Used by the Deadline service to resolve the worker-side mount path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_system_location_name: Option<String>,
+}
+```
+
+#### Example Config: Mixed Mapped and Unmapped Roots
+
+```json
+{
+  "roots": [
+    {
+      "rootId": "a1b2c3d4e5f6a7b8c9d0",
+      "sourcePath": "/mnt/shared/assets",
+      "mountPath": "/mnt/worker/assets",
+      "fileSystemLocationName": "StudioAssets"
+    },
+    {
+      "rootId": "f0e1d2c3b4a5f6e7d8c9",
+      "sourcePath": "/mnt/shared/scratch",
+      "mountPath": "assetroot-f0e1d2c3b4a5f6e7d8c9"
+    }
+  ],
+  "farmId": "farm-abc123",
+  "queueId": "queue-def456"
+}
+```
+
+In this example, `StudioAssets` is mapped via storage profiles (the worker knows where to mount it), while `scratch` has no profile and gets a dynamic mount path.
 
 ### Root ID Generation
 
@@ -467,6 +562,27 @@ pub struct FileUploadRequest {
 }
 ```
 
+### Path Translation: Worker Path → Submitter Path in SQS Messages
+
+When storage profiles are in use, the VFS sees files at the worker-side path (e.g., `/mnt/worker/assets/textures/diffuse.png`), but the upload agent needs the submitter-side path (e.g., `/mnt/shared/assets/textures/diffuse.png`) to locate the file on the on-prem network storage.
+
+The translation works as follows:
+
+1. The VFS computes `relative_path` by stripping the relaxed root's `mount_path` from the VFS path. This relative path is the same on both sides — only the root differs.
+2. The `RelaxedFileStore` implementation holds the `RelaxedRootConfig` list (from the launch config). It looks up `root_id` → `source_path` to populate `source_root_path` in the SQS message.
+3. The upload agent resolves the local file as `source_root_path / relative_path`.
+
+```
+Worker VFS path:     /mnt/worker/assets/textures/diffuse.png
+mount_path:          /mnt/worker/assets
+relative_path:       textures/diffuse.png          ← same on both sides
+source_path:         /mnt/shared/assets             ← from RelaxedRootConfig
+SQS source_root_path: /mnt/shared/assets
+Upload agent reads:  /mnt/shared/assets/textures/diffuse.png  ✓
+```
+
+The `relative_path` is the invariant — it's identical regardless of storage profile mapping. Only the root prefix changes between submitter and worker. The `RelaxedRootConfig` carries both `source_path` (submitter) and `mount_path` (worker), so the VFS can always translate back.
+
 ### Message Deduplication
 
 Multiple VFS instances (multiple workers running the same job) may request the same file simultaneously. We use SQS content-based deduplication (FIFO queues) or application-level dedup:
@@ -704,10 +820,16 @@ impl VfsOptions {
 
 ### Background Poller
 
-A dedicated background task periodically checks S3 for completion markers of all pending files:
+A dedicated background task periodically checks S3 for completion markers of all pending files. Uses concurrent `head_object` calls (one per pending key) rather than `list_objects`, since we know the exact S3 key for each file and HEAD is ~50ms vs LIST at 200ms+ with pagination overhead.
 
 ```rust
 /// Background task that polls S3 for completed uploads.
+///
+/// Uses concurrent head_object calls to check each pending key individually.
+/// This is faster than list_objects because:
+/// - We know the exact key (deterministic from root_id + path_key)
+/// - HEAD is ~50ms per call, LIST is 200ms+ and returns unneeded metadata
+/// - Concurrent HEAD calls scale better than sequential LIST pagination
 ///
 /// # Arguments
 /// * `tracker` - The pending file tracker to check and resolve.
@@ -724,38 +846,49 @@ async fn poll_pending_uploads(
 ) {
     loop {
         let pending_keys: Vec<String> = tracker.pending_keys();
-        
+
         if !pending_keys.is_empty() {
-            // Batch check: list_objects with prefix for each root_id
-            // Group keys by root_id for efficient S3 listing
-            for (root_id, keys) in group_by_root(&pending_keys) {
-                let prefix: String = format!(
-                    "{}/PendingUploads/{}/",
-                    root_prefix, root_id
-                );
-                let objects: Vec<ObjectInfo> = storage_client
-                    .list_objects(&bucket, &prefix)
-                    .await
-                    .unwrap_or_default();
-                
-                let existing_keys: HashSet<&str> = objects
-                    .iter()
-                    .map(|o| o.key.as_str())
-                    .collect();
-                
-                for key in keys {
+            // Fan out concurrent HEAD requests, capped at batch_poll_size
+            let batch: &[String] = if pending_keys.len() > options.batch_poll_size {
+                &pending_keys[..options.batch_poll_size]
+            } else {
+                &pending_keys
+            };
+
+            let futures: Vec<_> = batch
+                .iter()
+                .map(|composite_key| {
+                    // composite_key is "root_id:path_key"
+                    let (root_id, path_key) = split_composite_key(composite_key);
                     let s3_key: String = format!(
                         "{}/PendingUploads/{}/{}.xxh128",
-                        root_prefix, root_id, key
+                        root_prefix, root_id, path_key
                     );
-                    if existing_keys.contains(s3_key.as_str()) {
-                        // File uploaded! Resolve and wake waiters.
-                        tracker.resolve(&key);
+                    let client = storage_client.clone();
+                    let bucket = bucket.clone();
+                    let key_owned: String = composite_key.clone();
+                    async move {
+                        let exists: bool = client
+                            .head_object(&bucket, &s3_key)
+                            .await
+                            .map(|opt| opt.is_some())
+                            .unwrap_or(false);
+                        (key_owned, exists)
                     }
+                })
+                .collect();
+
+            let results: Vec<(String, bool)> = futures::future::join_all(futures).await;
+
+            for (key, exists) in results {
+                if exists {
+                    tracker.resolve(&key);
+                } else {
+                    tracker.increment_poll_count(&key);
                 }
             }
         }
-        
+
         tokio::time::sleep(options.poll_interval).await;
     }
 }

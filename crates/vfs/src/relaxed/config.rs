@@ -108,6 +108,32 @@ pub fn load_relaxed_config(path: &Path) -> Result<RelaxedLaunchConfig, VfsError>
     Ok(config)
 }
 
+/// Validate that relaxed consistency is only used with VFS (VIRTUAL) file system mode.
+///
+/// Relaxed consistency requires VFS to intercept file reads — in COPIED mode,
+/// files are downloaded to disk before the job runs, so there is no interception
+/// point for on-demand fetching.
+///
+/// # Arguments
+/// * `file_system_mode` - The job attachment file system mode ("COPIED" or "VIRTUAL").
+/// * `has_relaxed_roots` - Whether relaxed roots are configured.
+///
+/// # Returns
+/// Ok(()) if the combination is valid, or a VfsError describing the conflict.
+pub fn validate_relaxed_requires_vfs(
+    file_system_mode: &str,
+    has_relaxed_roots: bool,
+) -> Result<(), VfsError> {
+    if has_relaxed_roots && file_system_mode != "VIRTUAL" {
+        return Err(VfsError::MountFailed(format!(
+            "Relaxed consistency roots require fileSystem mode \"VIRTUAL\" (VFS), \
+             but got \"{}\". Only VFS can intercept file reads for on-demand fetching.",
+            file_system_mode
+        )));
+    }
+    Ok(())
+}
+
 /// Convert a RelaxedLaunchConfig into VfsOptions-compatible RelaxedConsistencyOptions.
 ///
 /// # Arguments
@@ -241,6 +267,7 @@ mod tests {
                 root_id: "abc".to_string(),
                 source_path: "/mnt/shared".to_string(),
                 mount_path: "shared".to_string(),
+                file_system_location_name: None,
             }],
             sqs_region: "us-west-2".to_string(),
             farm_id: "farm-1".to_string(),
@@ -297,6 +324,7 @@ mod tests {
                 root_id: "abc".to_string(),
                 source_path: "/mnt/shared".to_string(),
                 mount_path: "shared".to_string(),
+                file_system_location_name: None,
             }],
             sqs_region: "us-east-1".to_string(),
             farm_id: "farm-1".to_string(),
@@ -310,5 +338,74 @@ mod tests {
         let parsed: RelaxedLaunchConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.farm_id, "farm-1");
         assert_eq!(parsed.roots[0].root_id, "abc");
+    }
+
+    #[test]
+    fn test_validate_relaxed_requires_vfs_virtual_ok() {
+        let result = validate_relaxed_requires_vfs("VIRTUAL", true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_relaxed_requires_vfs_copied_with_relaxed_fails() {
+        let result = validate_relaxed_requires_vfs("COPIED", true);
+        assert!(result.is_err());
+        let err_msg: String = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("VIRTUAL"));
+        assert!(err_msg.contains("COPIED"));
+    }
+
+    #[test]
+    fn test_validate_relaxed_requires_vfs_copied_without_relaxed_ok() {
+        // COPIED mode is fine when there are no relaxed roots
+        let result = validate_relaxed_requires_vfs("COPIED", false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_relaxed_requires_vfs_virtual_without_relaxed_ok() {
+        // VIRTUAL mode without relaxed roots is also fine (pure strong consistency VFS)
+        let result = validate_relaxed_requires_vfs("VIRTUAL", false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mixed_mapped_and_unmapped_roots() {
+        // Case 1: mapped root (with storage profile) + Case 2: unmapped root (dynamic)
+        let json: &str = r#"{
+            "roots": [
+                {
+                    "rootId": "a1b2c3d4e5",
+                    "sourcePath": "/mnt/shared/assets",
+                    "mountPath": "/mnt/worker/assets",
+                    "fileSystemLocationName": "StudioAssets"
+                },
+                {
+                    "rootId": "f0e1d2c3b4",
+                    "sourcePath": "/mnt/shared/scratch",
+                    "mountPath": "assetroot-f0e1d2c3b4"
+                }
+            ],
+            "farmId": "farm-1",
+            "queueId": "queue-1"
+        }"#;
+
+        let f = write_config(json);
+        let config: RelaxedLaunchConfig = load_relaxed_config(f.path()).unwrap();
+
+        // Mapped root (with storage profile)
+        assert_eq!(config.roots[0].mount_path, "/mnt/worker/assets");
+        assert_eq!(
+            config.roots[0].file_system_location_name.as_deref(),
+            Some("StudioAssets")
+        );
+
+        // Unmapped root (dynamic, no storage profile)
+        assert_eq!(config.roots[1].mount_path, "assetroot-f0e1d2c3b4");
+        assert!(config.roots[1].file_system_location_name.is_none());
+
+        // Both should produce valid options
+        let opts: RelaxedConsistencyOptions = to_relaxed_options(&config);
+        assert_eq!(opts.roots.len(), 2);
     }
 }

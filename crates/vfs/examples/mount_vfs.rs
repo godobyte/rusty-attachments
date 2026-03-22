@@ -550,8 +550,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store: Arc<dyn FileStore> = create_file_store(&args, &runtime)?;
 
     // Build VFS options — strong consistency by default, relaxed if configured
+    // Note: This launcher is always VFS mode (FUSE mount). The validate call
+    // is defense-in-depth — relaxed consistency requires VIRTUAL mode.
     let vfs_options: VfsOptions = match &args.relaxed_roots_config {
         Some(config_path) => {
+            rusty_attachments_vfs::validate_relaxed_requires_vfs("VIRTUAL", true)
+                .map_err(|e| format!("{}", e))?;
+
             let relaxed_config: RelaxedLaunchConfig = load_relaxed_config(config_path)
                 .map_err(|e| format!("Failed to load relaxed roots config: {}", e))?;
             let relaxed_opts = to_relaxed_options(&relaxed_config);
