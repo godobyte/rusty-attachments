@@ -563,16 +563,22 @@ def poll_queue(
     s3_client: "S3Client",
     queue_url: str,
     config: AgentConfig,
-    max_messages: int = 10,
+    max_messages: int = 1,
 ) -> int:
     """Poll an SQS queue and process messages.
+
+    Receives one message at a time to avoid visibility timeout issues
+    with large file uploads. A single 300MB file can take minutes to
+    hash and upload — receiving a batch of 10 would cause the later
+    messages to exceed their visibility timeout and become visible
+    again, creating duplicate processing and stalls.
 
     Args:
         sqs_client: Boto3 SQS client.
         s3_client: Boto3 S3 client.
         queue_url: SQS queue URL.
         config: Agent configuration.
-        max_messages: Maximum messages to receive per poll.
+        max_messages: Maximum messages to receive per poll (default: 1).
 
     Returns:
         Number of messages processed.
@@ -589,6 +595,31 @@ def poll_queue(
     for msg in messages:
         receipt_handle: str = msg["ReceiptHandle"]
         body: str = msg["Body"]
+
+        # For large files, extend visibility timeout before processing
+        # to prevent the message from becoming visible again mid-upload.
+        try:
+            req_data: dict = json.loads(body)
+            rel_path: str = req_data.get("relativePath", "")
+            source_root: str = req_data.get("sourceRootPath", "")
+            if source_root and rel_path:
+                local_file = Path(source_root) / rel_path
+                if local_file.exists():
+                    file_size: int = local_file.stat().st_size
+                    if file_size > 50 * 1024 * 1024:  # >50MB
+                        # Estimate: ~10 seconds per 100MB (hash + upload)
+                        extra_secs: int = max(600, int(file_size / (10 * 1024 * 1024)))
+                        sqs_client.change_message_visibility(
+                            QueueUrl=queue_url,
+                            ReceiptHandle=receipt_handle,
+                            VisibilityTimeout=extra_secs,
+                        )
+                        log.info(
+                            "Extended visibility to %ds for %s (%d MB)",
+                            extra_secs, rel_path, file_size // (1024 * 1024),
+                        )
+        except Exception:
+            pass  # Best-effort; processing will still work
 
         success: bool = process_message(s3_client, config, body)
 
