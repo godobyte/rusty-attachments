@@ -12,6 +12,7 @@ fuse = ["dep:fuser", "dep:libc"]
 
 [dependencies]
 async-trait = "0.1"
+crossbeam-queue = "0.3"
 dashmap = "6"
 fuser = { version = "0.14", optional = true }
 futures = "0.3"
